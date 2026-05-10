@@ -1,6 +1,7 @@
 import { runAgent } from "@/lib/claude"
 
 export interface BrandVoice {
+  [key: string]: unknown
   tone: string
   personality: string[]
   targetAudience: string
