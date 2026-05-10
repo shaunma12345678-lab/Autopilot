@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id         String     @id @default(cuid())
+  email      String     @unique
+  name       String?
+  stripeId   String?
+  plan       Plan       @default(FREE)
+  createdAt  DateTime   @default(now())
+  businesses Business[]
+}
+
+model Business {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  type           String
+  description    String    @default("")
+  location       String
+  phone          String?
+  website        String?
+  brandVoice     Json      @default("{}")
+  socialProfiles Json      @default("{}")
+  activeAgents   String[]  @default([])
+  createdAt      DateTime  @default(now())
+  content        Content[]
+  reviews        Review[]
+  leads          Lead[]
+  reports        Report[]
+
+  @@index([userId])
+}
+
+model Content {
+  id          String      @id @default(cuid())
+  businessId  String
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  type        ContentType
+  platform    String
+  body        String
+  hashtags    String[]    @default([])
+  status      Status      @default(PENDING)
+  scheduledAt DateTime?
+  postedAt    DateTime?
+  createdAt   DateTime    @default(now())
+
+  @@index([businessId])
+  @@index([status])
+}
+
+model Review {
+  id           String   @id @default(cuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  platform     String
+  rating       Int
+  reviewText   String
+  reviewerName String
+  response     String?
+  status       Status   @default(PENDING)
+  createdAt    DateTime @default(now())
+
+  @@index([businessId])
+  @@index([status])
+}
+
+model Lead {
+  id         String     @id @default(cuid())
+  businessId String
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name       String
+  email      String?
+  phone      String?
+  source     String
+  status     LeadStatus @default(NEW)
+  score      Int        @default(0)
+  notes      String?
+  createdAt  DateTime   @default(now())
+
+  @@index([businessId])
+  @@index([status])
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  type       String
+  data       Json
+  summary    String
+  createdAt  DateTime @default(now())
+
+  @@index([businessId])
+}
+
+enum Plan {
+  FREE
+  STARTER
+  GROWTH
+  PRO
+  AGENCY_STARTER
+  AGENCY_GROWTH
+  AGENCY_PREMIUM
+  ENTERPRISE
+}
+
+enum ContentType {
+  SOCIAL_POST
+  EMAIL
+  SMS
+  BLOG_POST
+  AD_COPY
+  PROMO
+  REVIEW_RESPONSE
+}
+
+enum Status {
+  PENDING
+  APPROVED
+  REJECTED
+  POSTED
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+}
