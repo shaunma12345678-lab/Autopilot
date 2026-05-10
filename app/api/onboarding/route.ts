@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
         location: businessInfo.location,
         phone: businessInfo.phone,
         website: businessInfo.website,
-        brandVoice,
+        brandVoice: JSON.parse(JSON.stringify(brandVoice)),
         socialProfiles: {},
         activeAgents: ["content", "reputation"],
       },
