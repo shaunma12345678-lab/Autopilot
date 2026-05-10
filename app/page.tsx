@@ -33,6 +33,124 @@ const AGENTS = [
   },
 ]
 
+const AGENCY_AGENTS = [
+  {
+    id: "content",
+    name: "Content Agent",
+    tagline: "Never write a social post again.",
+    color: "indigo",
+    deliverable: "Social posts, email newsletters, SMS campaigns",
+    output: '"Best kept secret in Austin — our new Tuesday hours mean you can finally get in after work. No more waiting. Just results. Book via link in bio."',
+    outputLabel: "Sample Instagram post — auto-generated, on-brand",
+    sellAs: "Social Media Management",
+    clientRate: "$500–800/mo",
+    platforms: ["Instagram", "Facebook", "LinkedIn", "Google", "Twitter"],
+    metric: "47 posts/month, zero client effort",
+  },
+  {
+    id: "reputation",
+    name: "Reputation Agent",
+    tagline: "Every review answered in minutes, not days.",
+    color: "emerald",
+    deliverable: "Review responses, sentiment analysis, trend reports",
+    output: '"Hi Sarah — thank you so much for the kind words! We\'re thrilled the new color treatment came out exactly how you envisioned. Can\'t wait to see you at your next appointment!"',
+    outputLabel: "5-star review response — generated in 8 seconds",
+    sellAs: "Reputation Management",
+    clientRate: "$300–600/mo",
+    platforms: ["Google", "Yelp", "Facebook", "TripAdvisor"],
+    metric: "3.8x more reviews in 90 days",
+  },
+  {
+    id: "leads",
+    name: "Lead Gen Agent",
+    tagline: "Personalized outreach at scale. Without the SDR.",
+    color: "violet",
+    deliverable: "Cold emails, follow-up sequences, LinkedIn messages, lead scores",
+    output: '"Subject: Quick question about Maple Street Dental\n\nHi Dr. Chen — noticed you\'re in the same building as three other dental offices. Curious whether patient acquisition is a challenge or if referrals keep you full. We help practices in your area add 15–20 new patients/month. Worth a 10-min call?"',
+    outputLabel: "Cold email — personalized per lead, scored 84/100",
+    sellAs: "Lead Generation",
+    clientRate: "$600–1,200/mo",
+    platforms: ["Email", "LinkedIn", "SMS"],
+    metric: "50 personalized outreach sequences/month",
+  },
+  {
+    id: "sales",
+    name: "Sales Agent",
+    tagline: "Close more deals with scripts that actually work.",
+    color: "orange",
+    deliverable: "Phone scripts, email openers, objection handlers, proposals",
+    output: '"When they say \'I need to think about it\': \'Totally understand — what\'s the main thing you\'re weighing? [pause] A lot of our clients had that same hesitation and what they found was... [insert relevant case].\'"',
+    outputLabel: "Objection handler — generated for your specific service",
+    sellAs: "Sales Enablement",
+    clientRate: "$400–800/mo",
+    platforms: ["Phone", "Email", "In-Person"],
+    metric: "Full sales toolkit in 60 seconds",
+  },
+  {
+    id: "seo",
+    name: "SEO Agent",
+    tagline: "Rank on Google without writing a word.",
+    color: "cyan",
+    deliverable: "Blog posts, meta descriptions, keyword strategies, content calendars",
+    output: '"Best HVAC Repair in Phoenix, AZ — What to Know Before You Call\n\nIf your AC stopped working at 3pm on a Tuesday in July, you already know how fast Phoenix becomes unbearable..."',
+    outputLabel: "Blog post opening — keyword-first, local signals built in",
+    sellAs: "SEO & Content Marketing",
+    clientRate: "$500–1,000/mo",
+    platforms: ["Google", "Bing", "Website"],
+    metric: "4 SEO blog posts/month, ranked locally",
+  },
+  {
+    id: "support",
+    name: "Support Agent",
+    tagline: "Answer every customer question, day or night.",
+    color: "pink",
+    deliverable: "Customer responses, FAQ generation, escalation triage",
+    output: '"Hi Marcus — our hours are Mon–Sat 8am–6pm. For after-hours emergencies we do have an on-call line at (512) 555-0100. Would you like me to book you a slot for tomorrow morning?"',
+    outputLabel: "Customer support reply — answered from business FAQ",
+    sellAs: "Customer Support Automation",
+    clientRate: "$300–600/mo",
+    platforms: ["Website Chat", "Email", "SMS"],
+    metric: "Escalates to human only when needed",
+  },
+  {
+    id: "financial",
+    name: "Financial Agent",
+    tagline: "Plain-English financials. No accountant needed.",
+    color: "amber",
+    deliverable: "Monthly P&L summaries, cash flow forecasts, actionable recommendations",
+    output: '"April was your best month since October — revenue up 22% driven by the Tuesday promotion. Watch your supply costs though: they jumped 14% and will eat the gain if unchecked. Recommendation: renegotiate the linen contract before June."',
+    outputLabel: "Monthly financial summary — plain English, 3 actions",
+    sellAs: "Financial Reporting & Insights",
+    clientRate: "$400–700/mo",
+    platforms: ["Stripe", "QuickBooks", "Manual Input"],
+    metric: "Monthly report in plain English, not spreadsheets",
+  },
+  {
+    id: "onboarding",
+    name: "Brand Voice Agent",
+    tagline: "Every client onboarded with a custom AI profile.",
+    color: "teal",
+    deliverable: "Brand voice profile, content strategy, platform recommendations",
+    output: '"Tone: Warm and authoritative. Personality: Expert but approachable, community-focused, never salesy. Audience: Phoenix homeowners 35–55, DIY-curious but time-poor. Avoid: corporate jargon, fear-based messaging."',
+    outputLabel: "Brand voice profile — built in 2 minutes at onboarding",
+    sellAs: "Brand Strategy & Onboarding",
+    clientRate: "One-time $500–1,000 setup fee",
+    platforms: ["All channels"],
+    metric: "Every client gets a custom AI trained to their voice",
+  },
+]
+
+const COLOR_MAP: Record<string, { bg: string; border: string; text: string; badge: string }> = {
+  indigo: { bg: "bg-indigo-950/20", border: "border-indigo-800/40", text: "text-indigo-400", badge: "bg-indigo-950/60 border-indigo-800/50 text-indigo-400" },
+  emerald: { bg: "bg-emerald-950/20", border: "border-emerald-800/40", text: "text-emerald-400", badge: "bg-emerald-950/60 border-emerald-800/50 text-emerald-400" },
+  violet: { bg: "bg-violet-950/20", border: "border-violet-800/40", text: "text-violet-400", badge: "bg-violet-950/60 border-violet-800/50 text-violet-400" },
+  orange: { bg: "bg-orange-950/20", border: "border-orange-800/40", text: "text-orange-400", badge: "bg-orange-950/60 border-orange-800/50 text-orange-400" },
+  cyan: { bg: "bg-cyan-950/20", border: "border-cyan-800/40", text: "text-cyan-400", badge: "bg-cyan-950/60 border-cyan-800/50 text-cyan-400" },
+  pink: { bg: "bg-pink-950/20", border: "border-pink-800/40", text: "text-pink-400", badge: "bg-pink-950/60 border-pink-800/50 text-pink-400" },
+  amber: { bg: "bg-amber-950/20", border: "border-amber-800/40", text: "text-amber-400", badge: "bg-amber-950/60 border-amber-800/50 text-amber-400" },
+  teal: { bg: "bg-teal-950/20", border: "border-teal-800/40", text: "text-teal-400", badge: "bg-teal-950/60 border-teal-800/50 text-teal-400" },
+}
+
 const SAAS_PLANS = [
   {
     label: "Free",
@@ -150,6 +268,7 @@ export default function LandingPage() {
           <div className="hidden md:flex items-center gap-8">
             <a href="#for-business" className="text-sm text-gray-400 hover:text-white transition-colors">For Businesses</a>
             <a href="#for-agencies" className="text-sm text-gray-400 hover:text-white transition-colors">For Agencies</a>
+            <a href="#ai-team" className="text-sm text-gray-400 hover:text-white transition-colors">AI Team</a>
             <a href="#pricing" className="text-sm text-gray-400 hover:text-white transition-colors">Pricing</a>
           </div>
           <div className="flex items-center gap-3">
@@ -422,6 +541,109 @@ export default function LandingPage() {
               className="shrink-0 px-7 py-3.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-xl transition-colors shadow-lg shadow-violet-900/40"
             >
               Start your agency
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* ── MEET YOUR AI TEAM (Agency Section) ── */}
+      <section id="ai-team" className="px-6 py-24 bg-gray-900/20 border-y border-gray-900">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center gap-2 bg-violet-950/60 border border-violet-800/60 text-violet-400 text-xs font-semibold px-3.5 py-1.5 rounded-full mb-5 tracking-wide uppercase">
+              <span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-pulse" />
+              8 Agents. 8 Services. One Subscription.
+            </div>
+            <h2 className="text-4xl font-extrabold tracking-tight mb-4">
+              Meet your AI team.
+            </h2>
+            <p className="text-gray-400 text-lg max-w-2xl mx-auto">
+              Each agent is a fully deployed service you can sell. Your clients see expert work. You see margin.
+            </p>
+          </div>
+
+          {/* Total revenue callout */}
+          <div className="bg-gradient-to-r from-violet-950/40 to-indigo-950/40 border border-violet-800/30 rounded-2xl p-6 mb-14 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div>
+              <p className="text-sm text-violet-400 font-semibold uppercase tracking-widest mb-1">If you sold all 8 services to one client</p>
+              <p className="text-3xl font-extrabold text-white">$3,000–6,100/month per client</p>
+              <p className="text-gray-500 text-sm mt-1">vs. your AutoPilot cost of $40/client on the Agency Starter plan</p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-5xl font-extrabold text-emerald-400">97%</p>
+              <p className="text-sm text-gray-500 mt-1">gross margin per client</p>
+            </div>
+          </div>
+
+          {/* Agent cards */}
+          <div className="space-y-6">
+            {AGENCY_AGENTS.map((agent) => {
+              const c = COLOR_MAP[agent.color]
+              return (
+                <div key={agent.id} className={`${c.bg} border ${c.border} rounded-2xl p-6 md:p-8`}>
+                  <div className="grid md:grid-cols-2 gap-8 items-start">
+                    {/* Left: agent info */}
+                    <div>
+                      <div className="flex items-start gap-4 mb-4">
+                        <div className={`w-10 h-10 rounded-xl border ${c.border} ${c.bg} flex items-center justify-center shrink-0`}>
+                          <span className={`text-lg font-bold ${c.text}`}>{agent.name[0]}</span>
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-white text-xl">{agent.name}</h3>
+                          <p className={`text-sm font-medium ${c.text} mt-0.5`}>{agent.tagline}</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 mb-5">
+                        <div className="flex gap-2 items-start">
+                          <span className="text-gray-600 text-xs uppercase tracking-widest shrink-0 mt-0.5 w-20">Delivers</span>
+                          <span className="text-gray-300 text-sm">{agent.deliverable}</span>
+                        </div>
+                        <div className="flex gap-2 items-start">
+                          <span className="text-gray-600 text-xs uppercase tracking-widest shrink-0 mt-0.5 w-20">Sell as</span>
+                          <span className="text-white text-sm font-semibold">{agent.sellAs}</span>
+                        </div>
+                        <div className="flex gap-2 items-center">
+                          <span className="text-gray-600 text-xs uppercase tracking-widest shrink-0 w-20">Bill at</span>
+                          <span className={`text-sm font-bold ${c.text}`}>{agent.clientRate}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {agent.platforms.map(p => (
+                          <span key={p} className={`text-xs px-2.5 py-1 rounded-full border ${c.badge}`}>{p}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Right: sample output */}
+                    <div>
+                      <p className="text-xs text-gray-600 uppercase tracking-widest mb-3">{agent.outputLabel}</p>
+                      <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-4">
+                        <p className="text-gray-300 text-sm leading-relaxed italic whitespace-pre-line">{agent.output}</p>
+                      </div>
+                      <div className={`mt-3 inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border ${c.badge}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${c.text.replace("text-", "bg-")}`} />
+                        {agent.metric}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Bottom agency CTA */}
+          <div className="mt-12 text-center">
+            <p className="text-gray-400 text-lg mb-6">
+              Every one of these agents is included in your agency plan. <br className="hidden md:block"/>
+              You don&apos;t build them. You don&apos;t hire for them. You just sell them.
+            </p>
+            <Link
+              href="/signup?plan=AGENCY_STARTER"
+              className="inline-block px-8 py-4 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-xl transition-colors text-lg shadow-lg shadow-violet-900/40"
+            >
+              Start selling these services today
             </Link>
           </div>
         </div>

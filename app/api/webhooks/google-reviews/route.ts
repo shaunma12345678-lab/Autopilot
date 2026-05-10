@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     if (!business) return Response.json({ error: "Business not found" }, { status: 404 })
 
     const brandVoice = business.brandVoice as Record<string, unknown>
-    const response = await generateReviewResponse({
+    const result = await generateReviewResponse({
       businessName: business.name,
       brandVoice,
       rating: review.rating,
@@ -27,7 +27,6 @@ export async function POST(request: NextRequest) {
       reviewerName: review.reviewerName,
     })
 
-    const autoApprove = review.rating >= 4
     const created = await prisma.review.create({
       data: {
         businessId,
@@ -35,8 +34,8 @@ export async function POST(request: NextRequest) {
         rating: review.rating,
         reviewText: review.text,
         reviewerName: review.reviewerName,
-        response,
-        status: autoApprove ? "APPROVED" : "PENDING",
+        response: result.response,
+        status: result.autoApprove ? "APPROVED" : "PENDING",
       },
     })
 

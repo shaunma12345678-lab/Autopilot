@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     }
 
     const brandVoice = review.business.brandVoice as Record<string, unknown>
-    const response = await generateReviewResponse({
+    const result = await generateReviewResponse({
       businessName: review.business.name,
       brandVoice,
       rating: review.rating,
@@ -31,7 +31,10 @@ export async function POST(request: NextRequest) {
 
     const updated = await prisma.review.update({
       where: { id: reviewId },
-      data: { response, status: review.rating >= 4 ? "APPROVED" : "PENDING" },
+      data: {
+        response: result.response,
+        status: result.autoApprove ? "APPROVED" : "PENDING",
+      },
     })
 
     return Response.json({ review: updated })
