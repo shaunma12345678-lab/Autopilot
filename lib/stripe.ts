@@ -1,7 +1,22 @@
 import Stripe from "stripe"
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2026-04-22.dahlia",
+let _stripe: Stripe | undefined
+
+function getInstance(): Stripe {
+  if (!_stripe) {
+    _stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+      apiVersion: "2026-04-22.dahlia",
+    })
+  }
+  return _stripe
+}
+
+export const stripe = new Proxy({} as Stripe, {
+  get: (_, prop) => {
+    const inst = getInstance()
+    const val = Reflect.get(inst, prop, inst)
+    return typeof val === "function" ? val.bind(inst) : val
+  },
 })
 
 export const PLAN_LIMITS = {

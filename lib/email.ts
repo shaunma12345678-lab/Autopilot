@@ -1,10 +1,14 @@
 import { Resend } from "resend"
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+let _resend: Resend | undefined
+const getResend = () => {
+  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY)
+  return _resend
+}
 const FROM = process.env.FROM_EMAIL ?? "hello@autopilot.ai"
 
 export async function sendContentReadyEmail(to: string, businessName: string, count: number) {
-  await resend.emails.send({
+  await getResend().emails.send({
     from: FROM,
     to,
     subject: `Your ${count} content pieces are ready to review — ${businessName}`,
@@ -20,7 +24,7 @@ export async function sendContentReadyEmail(to: string, businessName: string, co
 
 export async function sendReviewAlertEmail(to: string, businessName: string, rating: number, reviewerName: string) {
   const isNegative = rating <= 2
-  await resend.emails.send({
+  await getResend().emails.send({
     from: FROM,
     to,
     subject: `${isNegative ? "⚠️ Urgent: " : ""}New ${rating}★ review for ${businessName}`,
@@ -34,7 +38,7 @@ export async function sendReviewAlertEmail(to: string, businessName: string, rat
 }
 
 export async function sendWelcomeEmail(to: string, name: string) {
-  await resend.emails.send({
+  await getResend().emails.send({
     from: FROM,
     to,
     subject: "Welcome to AutoPilot — your AI business team is ready",
