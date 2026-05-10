@@ -1,33 +1,30 @@
-import Anthropic from "@anthropic-ai/sdk"
+import Groq from "groq-sdk"
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+let _groq: Groq | undefined
+const getGroq = () => {
+  if (!_groq) _groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+  return _groq
+}
 
 export async function runAgent(
   systemPrompt: string,
   userPrompt: string,
   options?: { maxTokens?: number; jsonMode?: boolean }
 ): Promise<string | Record<string, unknown>> {
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
+  const response = await getGroq().chat.completions.create({
+    model: "llama-3.3-70b-versatile",
     max_tokens: options?.maxTokens ?? 2048,
-    system: [
-      {
-        type: "text",
-        text: systemPrompt,
-        cache_control: { type: "ephemeral" },
-      },
+    response_format: options?.jsonMode ? { type: "json_object" } : undefined,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
     ],
-    messages: [{ role: "user", content: userPrompt }],
   })
 
-  const text =
-    response.content[0].type === "text" ? response.content[0].text : ""
+  const text = response.choices[0]?.message?.content ?? ""
 
   if (options?.jsonMode) {
-    const clean = text.replace(/```json\n?|\n?```/g, "").trim()
-    return JSON.parse(clean)
+    return JSON.parse(text)
   }
 
   return text
