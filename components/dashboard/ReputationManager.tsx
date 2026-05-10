@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { Review } from "@/app/generated/prisma"
+import type { Review } from "@/app/generated/prisma/client"
 
 interface Props {
   initialReviews: Review[]

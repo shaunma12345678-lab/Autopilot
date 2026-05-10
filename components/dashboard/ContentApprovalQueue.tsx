@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { Content } from "@/app/generated/prisma"
+import type { Content } from "@/app/generated/prisma/client"
 
 interface Props {
   initialContent: Content[]

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { Content } from "@/app/generated/prisma"
+import type { Content } from "@/app/generated/prisma/client"
 
 type FilterStatus = "ALL" | "PENDING" | "APPROVED" | "REJECTED" | "POSTED"
 

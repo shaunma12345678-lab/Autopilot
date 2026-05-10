@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { Lead } from "@/app/generated/prisma"
+import type { Lead } from "@/app/generated/prisma/client"
 
 const COLUMNS: Array<{ key: Lead["status"]; label: string; color: string }> = [
   { key: "NEW", label: "New", color: "border-blue-600" },

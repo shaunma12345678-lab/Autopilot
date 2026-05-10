@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { Business } from "@/app/generated/prisma"
+import type { Business } from "@/app/generated/prisma/client"
 
 interface Props {
   business: Business

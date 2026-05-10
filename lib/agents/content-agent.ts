@@ -1,6 +1,6 @@
 import { runAgent } from "@/lib/claude"
 import { prisma } from "@/lib/prisma"
-import type { Business } from "@/app/generated/prisma"
+import type { Business } from "@/app/generated/prisma/client"
 
 const SYSTEM_PROMPT = `You are an expert marketing copywriter. Always respond with valid JSON only. No preamble, no explanation, just the JSON array.`
 
