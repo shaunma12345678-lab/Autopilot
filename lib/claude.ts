@@ -1,9 +1,9 @@
-import Groq from "groq-sdk"
+import Anthropic from "@anthropic-ai/sdk"
 
-let _groq: Groq | undefined
-const getGroq = () => {
-  if (!_groq) _groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
-  return _groq
+let _client: Anthropic | undefined
+const getClient = () => {
+  if (!_client) _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  return _client
 }
 
 export async function runAgent(
@@ -11,20 +11,33 @@ export async function runAgent(
   userPrompt: string,
   options?: { maxTokens?: number; jsonMode?: boolean }
 ): Promise<string | Record<string, unknown>> {
-  const response = await getGroq().chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const client = getClient()
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-6",
     max_tokens: options?.maxTokens ?? 2048,
-    response_format: options?.jsonMode ? { type: "json_object" } : undefined,
+    system: [
+      {
+        type: "text",
+        text: systemPrompt,
+        cache_control: { type: "ephemeral" },
+      },
+    ],
     messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
+      {
+        role: "user",
+        content: options?.jsonMode
+          ? `${userPrompt}\n\nIMPORTANT: Return valid JSON only. No markdown fences, no preamble.`
+          : userPrompt,
+      },
     ],
   })
 
-  const text = response.choices[0]?.message?.content ?? ""
+  const text = response.content[0]?.type === "text" ? response.content[0].text : ""
 
   if (options?.jsonMode) {
-    return JSON.parse(text)
+    const clean = text.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim()
+    return JSON.parse(clean)
   }
 
   return text
