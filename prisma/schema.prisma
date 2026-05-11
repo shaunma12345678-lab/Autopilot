@@ -8,13 +8,18 @@ datasource db {
 }
 
 model User {
-  id         String     @id @default(cuid())
-  email      String     @unique
-  name       String?
-  stripeId   String?
-  plan       Plan       @default(FREE)
-  createdAt  DateTime   @default(now())
-  businesses Business[]
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String?
+  stripeId     String?
+  plan         Plan       @default(FREE)
+  createdAt    DateTime   @default(now())
+  businesses   Business[]
+  agencyName   String?
+  agencyLogo   String?
+  agencyColor  String     @default("#6366f1")
+  agencyDomain String?
+  isAgency     Boolean    @default(false)
 }
 
 model Business {
@@ -35,8 +40,23 @@ model Business {
   reviews        Review[]
   leads          Lead[]
   reports        Report[]
+  site           Site?
 
   @@index([userId])
+}
+
+model Site {
+  id         String   @id @default(cuid())
+  businessId String   @unique
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  slug       String   @unique
+  title      String
+  html       String
+  published  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([slug])
 }
 
 model Content {
@@ -120,6 +140,7 @@ enum ContentType {
   AD_COPY
   PROMO
   REVIEW_RESPONSE
+  WEBSITE
 }
 
 enum Status {
