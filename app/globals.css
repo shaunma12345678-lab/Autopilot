@@ -218,6 +218,29 @@ body {
     #030712;
 }
 
+/* ── Timeline 3D ── */
+.tl-card {
+  position: relative;
+  opacity: 0;
+  transform: perspective(900px) rotateY(var(--tilt, 14deg));
+  transition: opacity 0.75s ease, transform 0.95s cubic-bezier(.22,1,.36,1);
+  will-change: transform, opacity;
+}
+.tl-card.tl-revealed {
+  opacity: 1;
+  transform: perspective(900px) rotateY(0deg) translateZ(30px);
+}
+.tl-card.tl-live {
+  transition: transform 0.1s ease;
+}
+@media (max-width: 767px) {
+  .tl-card {
+    opacity: 1;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #111; }

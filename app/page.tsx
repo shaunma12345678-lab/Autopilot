@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect } from "react"
+import Timeline3D from "@/components/Timeline3D"
 
 /* ── Data ── */
 const QUICK_PRICES = [
@@ -210,7 +211,7 @@ export default function LandingPage() {
             <span className="font-bold text-lg tracking-tight">AutoPilot</span>
           </div>
           <div className="hidden md:flex items-center gap-7">
-            {[["#for-business","For Businesses"],["#how-it-works","How It Works"],["#ai-team","AI Team"],["#pricing","Pricing"]].map(([href,label]) => (
+            {[["#for-business","For Businesses"],["#how-it-works","How It Works"],["#journey","Results"],["#ai-team","AI Team"],["#pricing","Pricing"]].map(([href,label]) => (
               <a key={href} href={href} className="text-sm text-gray-400 hover:text-white transition-colors">{label}</a>
             ))}
           </div>
@@ -415,6 +416,9 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* ── 3D Journey Timeline ── */}
+      <Timeline3D />
 
       {/* ── Meet Your AI Team ── */}
       <section id="ai-team" className="px-6 py-24">
