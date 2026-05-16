@@ -83,7 +83,7 @@ const ORB_FRAG = /* glsl */`
 /* ─── Scene contents ─────────────────────────────────────── */
 
 function SceneContents() {
-  const orbRef  = useRef<THREE.Mesh>(null)
+  const orbRef      = useRef<THREE.Mesh>(null)
   const satGroupRef = useRef<THREE.Group>(null)
 
   const ring0 = useRef<THREE.Mesh>(null)
@@ -104,6 +104,21 @@ function SceneContents() {
     side: THREE.FrontSide,
   }), [])
 
+  /* Circular glow texture — eliminates the square sprite artifact */
+  const glowTex = useMemo(() => {
+    if (typeof window === "undefined") return null
+    const c   = document.createElement("canvas")
+    c.width   = c.height = 64
+    const ctx = c.getContext("2d")!
+    const grd = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+    grd.addColorStop(0,   "rgba(255,255,255,1)")
+    grd.addColorStop(0.4, "rgba(255,255,255,0.5)")
+    grd.addColorStop(1,   "rgba(255,255,255,0)")
+    ctx.fillStyle = grd
+    ctx.fillRect(0, 0, 64, 64)
+    return new THREE.CanvasTexture(c)
+  }, [])
+
   /* Connection lines geometry (satellites → center, inside satellite group) */
   const lineGeo = useMemo(() => {
     const pts: number[] = []
@@ -113,8 +128,7 @@ function SceneContents() {
     return g
   }, [])
 
-  /* Dispose manually-created objects on unmount */
-  useEffect(() => () => { orbMat.dispose(); lineGeo.dispose() }, [orbMat, lineGeo])
+  useEffect(() => () => { orbMat.dispose(); lineGeo.dispose(); glowTex?.dispose() }, [orbMat, lineGeo, glowTex])
 
   /* Animation loop */
   useFrame(({ clock, camera, mouse }) => {
@@ -184,12 +198,13 @@ function SceneContents() {
               <sphereGeometry args={[0.1, 16, 16]} />
               <meshBasicMaterial color={AGENT_COLORS[i]} />
             </mesh>
-            {/* Glow halo sprite */}
-            <sprite scale={[0.65, 0.65, 0.65]}>
+            {/* Circular glow halo — soft radial gradient, not a square */}
+            <sprite scale={[0.80, 0.80, 0.80]}>
               <spriteMaterial
+                map={glowTex}
                 color={AGENT_COLORS[i]}
                 transparent
-                opacity={0.28}
+                opacity={0.42}
                 blending={THREE.AdditiveBlending}
                 depthWrite={false}
               />
