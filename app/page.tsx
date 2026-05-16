@@ -1,11 +1,12 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import dynamic from "next/dynamic"
-import Timeline3D from "@/components/Timeline3D"
-
-const HeroGL = dynamic(() => import("@/components/HeroGL"), { ssr: false })
+const HatomScroll = dynamic(() => import("@/components/HatomScroll"), { ssr: false })
+const AutoPilotGate        = dynamic(() => import("@/components/AutoPilotGate"),        { ssr: false })
+const HeroGL    = dynamic(() => import("@/components/HeroGL"),    { ssr: false })
+const AICore3D  = dynamic(() => import("@/components/AICore3D"),  { ssr: false })
 
 /* ── Data ── */
 const STATS = [
@@ -15,20 +16,6 @@ const STATS = [
   { value: "8",      label: "AI agents running 24/7" },
 ]
 
-const ACTIVITY_FEED = [
-  { msg: "Content Agent generated 7 Instagram posts for Bloom Hair Studio", time: "2m ago",  dot: "bg-indigo-400" },
-  { msg: "Reputation Agent responded to 4★ Google review for T&T Contractors",  time: "9m ago",  dot: "bg-emerald-400" },
-  { msg: "Lead Gen Agent contacted 3 new prospects in Austin, TX",              time: "34m ago", dot: "bg-violet-400" },
-  { msg: "SEO Agent published 'Best HVAC Repair in Phoenix' blog post",         time: "1h ago",  dot: "bg-cyan-400" },
-  { msg: "Sales Agent generated proposal for Maple Street Dental",              time: "2h ago",  dot: "bg-amber-400" },
-]
-
-const DASHBOARD_METRICS = [
-  { label: "Posts this month",  value: "47",   delta: "+12", color: "indigo" },
-  { label: "Reviews handled",   value: "23",   delta: "+8",  color: "emerald" },
-  { label: "Leads contacted",   value: "12",   delta: "+5",  color: "violet" },
-  { label: "Google rating",     value: "4.8★", delta: "▲0.4", color: "amber" },
-]
 
 const AGENTS_OVERVIEW = [
   { label: "Content Agent",    stat: "47 posts/month",  desc: "Never repeats. Always on-brand. Instagram, Facebook, LinkedIn, Google — all handled." },
@@ -156,6 +143,17 @@ export default function LandingPage() {
   const [reviewCompany, setReviewCompany] = useState("")
   const [reviewSubmitted, setReviewSubmitted] = useState(false)
   const [reviewLoading, setReviewLoading] = useState(false)
+  const [gateVisible, setGateVisible] = useState(true)
+
+  const handleGateActivate = useCallback(() => {
+    setGateVisible(false)
+    // Init audio on user gesture (required by browser autoplay policy)
+    import("@/lib/audio").then(({ audioEngine }) => {
+      if (!audioEngine) return
+      audioEngine.init()
+      audioEngine.startAmbient()
+    })
+  }, [])
 
   async function submitReview(e: React.FormEvent) {
     e.preventDefault()
@@ -183,6 +181,9 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen text-white" style={{ background: "#050810" }}>
 
+      {/* ══ Entry Gate (hatom-style "CLICK TO ENTER") ══ */}
+      {gateVisible && <AutoPilotGate onActivate={handleGateActivate} />}
+
       {/* ══ Nav ══ */}
       <nav className="sticky top-0 z-50 border-b border-white/[0.05] backdrop-blur-2xl px-6 py-4" style={{ background: "rgba(5,8,16,0.88)" }}>
         <div className="max-w-6xl mx-auto flex items-center justify-between">
@@ -207,126 +208,113 @@ export default function LandingPage() {
       </nav>
 
       {/* ══ Hero ══ */}
-      <section className="relative px-6 pt-24 pb-8 text-center overflow-hidden">
+      <section className="relative overflow-hidden" style={{ height: "100svh", minHeight: "600px" }}>
+
+        {/* Ambient WebGL background — fills full section */}
         <div className="absolute inset-0 pointer-events-none">
           <HeroGL />
-          <div className="absolute top-20 left-[5%] w-[400px] h-[400px] bg-violet-600/[0.04] rounded-full blur-[120px] animate-orb-drift" />
-          <div className="absolute top-20 right-[5%] w-[350px] h-[350px] bg-cyan-600/[0.03] rounded-full blur-[120px] animate-orb-drift" style={{ animationDelay: "-9s" }} />
+          <div className="absolute top-1/4 left-[8%] w-[500px] h-[500px] bg-violet-600/[0.05] rounded-full blur-[140px] animate-orb-drift" />
+          <div className="absolute top-1/3 right-[8%] w-[420px] h-[420px] bg-cyan-600/[0.04] rounded-full blur-[140px] animate-orb-drift" style={{ animationDelay: "-9s" }} />
         </div>
 
-        <div className="max-w-4xl mx-auto relative">
-          {/* Section pill with glow dot */}
-          <div className="inline-flex items-center gap-2.5 bg-indigo-950/70 border border-indigo-800/50 text-indigo-300 text-xs font-semibold px-4 py-1.5 rounded-full mb-8 tracking-widest uppercase animate-fade-up">
-            <GlowDot color="glow-dot-indigo" />
-            AI Business Operating System — 8 agents
-          </div>
+        {/* ── Hatom-style split layout: text left · 3D right ── */}
+        <div className="relative h-full max-w-7xl mx-auto px-6 flex flex-col md:grid md:grid-cols-[1fr_1fr] md:items-center gap-0">
 
-          <h1 className="text-6xl md:text-7xl lg:text-8xl font-extrabold leading-[0.92] tracking-tight mb-7 animate-fade-up delay-100">
-            Stop paying $3,000/mo<br />
-            for a marketing agency.<br />
-            <span className="gradient-text">Pay $99. Get better results.</span>
-          </h1>
+          {/* ── Left: Text stack ── */}
+          <div className="relative z-10 flex flex-col justify-center pt-28 pb-8 md:pt-0 md:pb-0 md:pr-8">
 
-          <p className="text-xl text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed animate-fade-up delay-200">
-            8 AI agents that handle content, reputation, lead gen, SEO, sales, and support — automatically, every single day. Yours for less than you spend on lunch per week.
-          </p>
-
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-fade-up delay-300">
-            {/* Primary CTA — shimmer + SVG underline on hover */}
-            <Link
-              href="/signup"
-              className="shimmer-btn group relative px-9 py-4 text-white font-bold rounded-xl transition-all text-lg shadow-2xl shadow-indigo-900/50 hover:shadow-indigo-900/70 hover:-translate-y-0.5"
-              style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}
-            >
-              Start free — no card required
-            </Link>
-            <a
-              href="#how-it-works"
-              className="border-btn px-9 py-4 border border-white/10 hover:border-white/20 text-gray-300 hover:text-white font-semibold rounded-xl transition-colors text-lg"
-            >
-              <span className="btn-border-top" /><span className="btn-border-bottom" /><span className="btn-border-left" /><span className="btn-border-right" />
-              Build an agency →
-            </a>
-          </div>
-          <p className="mt-4 text-sm text-gray-700 animate-fade-up delay-400">Setup takes 5 minutes. First results in under 24 hours.</p>
-        </div>
-
-        {/* ── Live Dashboard Mockup ── */}
-        <div className="relative max-w-5xl mx-auto mt-16 animate-fade-up delay-500">
-          <div className="absolute -inset-8 bg-gradient-to-b from-indigo-600/15 via-violet-600/8 to-transparent rounded-3xl blur-2xl pointer-events-none" />
-          <div
-            className="relative rounded-2xl overflow-hidden border border-white/[0.08] shadow-2xl"
-            style={{ background: "rgba(10,12,24,0.97)", boxShadow: "0 32px 80px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.05), 0 0 60px rgba(99,102,241,0.08)" }}
-          >
-            {/* Browser chrome */}
-            <div className="flex items-center gap-2 px-5 py-3 border-b border-white/[0.05]" style={{ background: "rgba(255,255,255,0.02)" }}>
-              <div className="flex gap-1.5">
-                <div className="w-3 h-3 rounded-full bg-red-500/60" />
-                <div className="w-3 h-3 rounded-full bg-yellow-500/60" />
-                <div className="w-3 h-3 rounded-full bg-emerald-500/60" />
-              </div>
-              <div className="flex-1 flex justify-center">
-                <div className="bg-white/[0.04] border border-white/[0.06] rounded-md px-4 py-1 text-xs text-gray-600 font-mono">
-                  dashboard.autopilot.ai
-                </div>
-              </div>
+            <div className="inline-flex items-center gap-2.5 bg-indigo-950/70 border border-indigo-800/50 text-indigo-300 text-xs font-semibold px-4 py-1.5 rounded-full mb-8 w-fit tracking-widest uppercase animate-fade-up">
+              <GlowDot color="glow-dot-indigo" />
+              AI Business Operating System — 8 agents
             </div>
-            {/* Body */}
-            <div className="p-5 md:p-6">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-                {DASHBOARD_METRICS.map((m) => (
-                  <div key={m.label} className="rounded-xl p-4 border border-white/[0.05]" style={{ background: "rgba(255,255,255,0.025)" }}>
-                    <p className="text-xs text-gray-600 mb-2 font-medium">{m.label}</p>
-                    <p className="text-2xl font-extrabold text-white leading-none">{m.value}</p>
-                    <p className="text-xs text-emerald-400 mt-1.5 font-semibold">{m.delta} this week</p>
-                  </div>
-                ))}
-              </div>
-              <div className="rounded-xl border border-white/[0.05] overflow-hidden" style={{ background: "rgba(255,255,255,0.015)" }}>
-                <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.04]">
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Live Agent Activity</p>
-                  <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />All agents running
+
+            <h1
+              className="font-extrabold leading-[0.9] tracking-tight mb-7 animate-fade-up delay-100"
+              style={{
+                fontSize: "clamp(2.4rem, 5.5vw, 4.5rem)",
+                fontFamily: "'OCMikola', sans-serif",
+              }}
+            >
+              Stop paying<br />
+              $3,000/mo for an<br />
+              agency.<br />
+              <span className="gradient-text">Pay $99.</span>
+            </h1>
+
+            <p className="text-lg text-gray-400 max-w-lg mb-10 leading-relaxed animate-fade-up delay-200">
+              8 AI agents that handle content, reputation, lead gen, SEO, sales, and support — automatically, every single day.
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-start gap-4 animate-fade-up delay-300">
+              <Link
+                href="/signup"
+                className="shimmer-btn px-8 py-3.5 text-white font-bold rounded-xl transition-all text-base shadow-2xl shadow-indigo-900/50 hover:shadow-indigo-900/70 hover:-translate-y-0.5"
+                style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}
+              >
+                Start free — no card required
+              </Link>
+              <a
+                href="#how-it-works"
+                className="border-btn px-8 py-3.5 border border-white/10 hover:border-white/20 text-gray-300 hover:text-white font-semibold rounded-xl transition-colors text-base"
+              >
+                <span className="btn-border-top" /><span className="btn-border-bottom" /><span className="btn-border-left" /><span className="btn-border-right" />
+                Build an agency →
+              </a>
+            </div>
+
+            <p className="mt-4 text-sm text-gray-700 animate-fade-up delay-400">Setup takes 5 minutes. First results in under 24 hours.</p>
+
+            {/* ── Mini stats row ── */}
+            <div className="mt-10 grid grid-cols-2 gap-4 animate-fade-up delay-500">
+              {STATS.slice(0, 4).map((s) => (
+                <div key={s.label} className="flex flex-col">
+                  <span
+                    className="font-extrabold text-white leading-none"
+                    style={{ fontSize: "clamp(1.4rem, 2.5vw, 2rem)", fontFamily: "'OCMikola', sans-serif" }}
+                  >
+                    {s.value}
                   </span>
+                  <span className="text-xs text-gray-600 mt-0.5 leading-snug">{s.label}</span>
                 </div>
-                <div className="divide-y divide-white/[0.03]">
-                  {ACTIVITY_FEED.map((a, i) => (
-                    <div key={i} className="flex items-center gap-3 px-4 py-2.5">
-                      <div className={`w-1.5 h-1.5 rounded-full ${a.dot} shrink-0`} />
-                      <p className="text-xs text-gray-400 flex-1 truncate">{a.msg}</p>
-                      <span className="text-xs text-gray-700 shrink-0 hidden sm:block">{a.time}</span>
-                    </div>
-                  ))}
-                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Right: 3D AI Core scene ── */}
+          <div
+            className="relative pointer-events-none md:pointer-events-auto animate-fade-up delay-200"
+            style={{ height: "clamp(320px, 55vw, 700px)" }}
+          >
+            <AICore3D />
+
+            {/* Floating agent-activity badge — positioned over the 3D scene */}
+            <div
+              className="absolute bottom-8 left-4 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl pointer-events-none animate-float"
+              style={{ background: "rgba(10,12,24,0.95)", backdropFilter: "blur(20px)" }}
+            >
+              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <div>
+                <p className="text-xs font-semibold text-white leading-tight">All 8 agents running</p>
+                <p className="text-xs text-gray-500">47 posts · 23 reviews · 12 leads</p>
               </div>
             </div>
-          </div>
 
-          {/* Floating approval badge */}
-          <div className="absolute -bottom-4 -right-4 md:-right-8 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl animate-float" style={{ background: "rgba(10,12,24,0.98)", backdropFilter: "blur(20px)" }}>
-            <div className="w-8 h-8 rounded-full bg-emerald-900/60 border border-emerald-700/50 flex items-center justify-center shrink-0">
-              <span className="text-emerald-400 text-sm">✓</span>
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-white leading-tight">Content approved</p>
-              <p className="text-xs text-gray-500">Bloom Hair Studio · just now</p>
-            </div>
-          </div>
-
-          {/* Floating review badge */}
-          <div className="absolute -top-4 -left-4 md:-left-8 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl animate-float" style={{ background: "rgba(10,12,24,0.98)", backdropFilter: "blur(20px)", animationDelay: "-3s" }}>
-            <div className="w-8 h-8 rounded-full bg-amber-900/60 border border-amber-700/50 flex items-center justify-center shrink-0">
-              <span className="text-amber-400 text-xs font-bold">★</span>
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-white leading-tight">New 5★ review</p>
-              <p className="text-xs text-gray-500">Responded in 4 minutes</p>
+            {/* Floating review badge */}
+            <div
+              className="absolute top-8 right-4 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl pointer-events-none animate-float"
+              style={{ background: "rgba(10,12,24,0.95)", backdropFilter: "blur(20px)", animationDelay: "-3s" }}
+            >
+              <span className="text-amber-400 text-sm font-bold shrink-0">★</span>
+              <div>
+                <p className="text-xs font-semibold text-white leading-tight">New 5★ review</p>
+                <p className="text-xs text-gray-500">Responded in 4 minutes</p>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Scroll arrow */}
-        <div className="flex justify-center mt-16 animate-fade-up delay-600">
+        {/* Scroll arrow — bottom center */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 animate-fade-up delay-700">
           <a href="#stats" className="flex flex-col items-center gap-2 text-gray-700 hover:text-gray-500 transition-colors animate-scroll-arrow">
             <span className="text-xs uppercase tracking-widest font-medium">scroll</span>
             <svg width="16" height="24" viewBox="0 0 16 24" fill="none">
@@ -445,8 +433,8 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ══ 3D Journey Timeline ══ */}
-      <Timeline3D />
+      {/* ══ Hatom-Style Scroll Journey ══ */}
+      <HatomScroll />
 
       {/* ══ Meet Your AI Team ══ */}
       <section id="ai-team" className="px-6 py-28">

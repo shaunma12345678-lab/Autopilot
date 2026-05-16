@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'OCMikola';
+  src: url('/fonts/OCMikola.woff2') format('woff2');
+  font-weight: 400 500;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --background: #030712;
   --foreground: #f9fafb;
@@ -155,6 +163,18 @@ html {
 .delay-600 { animation-delay: 0.60s; }
 .delay-700 { animation-delay: 0.70s; }
 .delay-800 { animation-delay: 0.80s; }
+
+/* ═══════════════════════════════════════════════════════════
+   HATOM-STYLE HERO — full safe-area viewport height fallback
+═══════════════════════════════════════════════════════════ */
+@supports not (height: 100svh) {
+  [style*="100svh"] { height: 100vh !important; min-height: 100vh !important; }
+}
+
+/* Prevent hero canvas pointer-events from blocking scroll on mobile */
+@media (max-width: 767px) {
+  [style*="100svh"] .pointer-events-none { pointer-events: none !important; }
+}
 
 /* ═══════════════════════════════════════════════════════════
    SCROLL-REVEAL: hidden until JS adds .revealed
