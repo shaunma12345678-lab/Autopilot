@@ -586,9 +586,11 @@ const CITY_Y     = -6.5
 const CITY_COUNT = CITY_SIZE * CITY_SIZE
 
 function CityScene() {
-  const buildMeshRef = useRef<THREE.InstancedMesh>(null)
-  const buildMatRef  = useRef<THREE.MeshBasicMaterial>(null)
-  const gridMatRef   = useRef<THREE.LineBasicMaterial>(null)
+  const buildMeshRef  = useRef<THREE.InstancedMesh>(null)
+  const buildMatRef   = useRef<THREE.MeshBasicMaterial>(null)
+  const buildGlowRef  = useRef<THREE.InstancedMesh>(null)
+  const buildGlowMatRef = useRef<THREE.MeshBasicMaterial>(null)
+  const gridMatRef    = useRef<THREE.LineBasicMaterial>(null)
 
   const cityShader = useMemo(() => new THREE.ShaderMaterial({
     vertexShader:   CITY_VERT,
@@ -606,7 +608,7 @@ function CityScene() {
   }), [])
 
   const buildData = useMemo(() => {
-    /* Buildings are pure black — the purple comes from the floor glow beneath them */
+    /* Buildings pure black — capped so max world y ≈ −1.5, keeping crystal above city */
     const palette = [
       new THREE.Color("#000000"),
       new THREE.Color("#010005"),
@@ -621,8 +623,9 @@ function CityScene() {
         const dz    = (row / (CITY_SIZE - 1)) * 2 - 1
         const dist  = Math.sqrt(dx * dx + dz * dz)
         const boost = Math.max(0, 1 - dist * 0.52)
-        const isTall = Math.random() > 0.70
-        const h = isTall ? 0.6 + boost * 5.5 + Math.random() * 2.8 : 0.04 + Math.random() * 0.25
+        const isTall = Math.random() > 0.68
+        /* max h ≈ 0.5 + 3.5 + 1.0 = 5.0 → world max y = −6.5+5.0 = −1.5 */
+        const h = isTall ? 0.5 + boost * 3.5 + Math.random() * 1.0 : 0.04 + Math.random() * 0.20
         out.push({ h, color: palette[Math.floor(Math.random() * palette.length)] })
       }
     }
@@ -643,20 +646,30 @@ function CityScene() {
   }, [])
 
   useEffect(() => {
-    const mesh = buildMeshRef.current
+    const mesh     = buildMeshRef.current
+    const glowMesh = buildGlowRef.current
     if (!mesh) return
     const dummy = new THREE.Object3D()
     buildData.forEach((d, i) => {
       const row = Math.floor(i / CITY_SIZE)
       const col = i % CITY_SIZE
-      dummy.position.set((col - CITY_SIZE / 2) * CITY_SPACE, CITY_Y + d.h / 2, (row - CITY_SIZE / 2) * CITY_SPACE)
+      const x = (col - CITY_SIZE / 2) * CITY_SPACE
+      const z = (row - CITY_SIZE / 2) * CITY_SPACE
+      dummy.position.set(x, CITY_Y + d.h / 2, z)
       dummy.scale.set(0.40, d.h, 0.40)
       dummy.updateMatrix()
       mesh.setMatrixAt(i, dummy.matrix)
       mesh.setColorAt(i, d.color)
+      /* Glow outline: slightly bigger box, same center */
+      if (glowMesh) {
+        dummy.scale.set(0.46, d.h + 0.08, 0.46)
+        dummy.updateMatrix()
+        glowMesh.setMatrixAt(i, dummy.matrix)
+      }
     })
     mesh.instanceMatrix.needsUpdate = true
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+    if (glowMesh) glowMesh.instanceMatrix.needsUpdate = true
   }, [buildData])
 
   useEffect(() => () => { cityShader.dispose(); gridGeo.dispose(); glowMat.dispose() }, [cityShader, gridGeo, glowMat])
@@ -668,8 +681,9 @@ function CityScene() {
     cityShader.uniforms.uFade.value = fade
     glowMat.uniforms.uTime.value    = t
     glowMat.uniforms.uFade.value    = fade
-    if (buildMatRef.current) buildMatRef.current.opacity = fade * 0.98
-    if (gridMatRef.current)  gridMatRef.current.opacity  = fade * 0.32 * (0.7 + 0.3 * Math.sin(t * 0.55))
+    if (buildMatRef.current)     buildMatRef.current.opacity     = fade * 0.98
+    if (buildGlowMatRef.current) buildGlowMatRef.current.opacity = fade * 0.45
+    if (gridMatRef.current)      gridMatRef.current.opacity      = fade * 0.32 * (0.7 + 0.3 * Math.sin(t * 0.55))
   })
 
   return (
@@ -687,7 +701,14 @@ function CityScene() {
       <lineSegments geometry={gridGeo}>
         <lineBasicMaterial ref={gridMatRef} color="#6622e8" transparent opacity={0} />
       </lineSegments>
-      <instancedMesh ref={buildMeshRef} args={[undefined, undefined, CITY_COUNT]}>
+      {/* Purple outline glow — slightly oversized boxes, additive blending */}
+      <instancedMesh ref={buildGlowRef} args={[undefined, undefined, CITY_COUNT]} renderOrder={1}>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshBasicMaterial ref={buildGlowMatRef} color="#6018cc" transparent opacity={0}
+          blending={THREE.AdditiveBlending} depthWrite={false} />
+      </instancedMesh>
+      {/* Black building bodies — render after glow so they occlude it, leaving edge rim */}
+      <instancedMesh ref={buildMeshRef} args={[undefined, undefined, CITY_COUNT]} renderOrder={2}>
         <boxGeometry args={[1, 1, 1]} />
         <meshBasicMaterial ref={buildMatRef} transparent opacity={0} vertexColors />
       </instancedMesh>
@@ -703,13 +724,14 @@ function WindowLights() {
   const matRef = useRef<THREE.PointsMaterial>(null)
 
   const geo = useMemo(() => {
-    const count     = 1400
+    const count     = 3200
     const positions = new Float32Array(count * 3)
     const colors    = new Float32Array(count * 3)
     for (let i = 0; i < count; i++) {
       const row  = Math.floor(Math.random() * CITY_SIZE)
       const col  = Math.floor(Math.random() * CITY_SIZE)
-      const h    = Math.random() * 8.5 * (0.2 + 0.8 * Math.random())
+      /* Cap at max building height (5.0) so windows don't float above buildings */
+      const h    = Math.random() * 5.0 * (0.2 + 0.8 * Math.random())
       const off  = 0.20
       const side = Math.floor(Math.random() * 4)
       positions[i*3  ] = (col - CITY_SIZE/2) * CITY_SPACE + (side === 0 ? off : side === 1 ? -off : (Math.random()-0.5)*0.38)
@@ -734,13 +756,13 @@ function WindowLights() {
   useFrame(({ clock }) => {
     if (!matRef.current) return
     const fade = THREE.MathUtils.smoothstep(_prog.current, 0.02, 0.12)
-    matRef.current.opacity = fade * 0.75 * (0.85 + 0.15 * Math.sin(clock.getElapsedTime() * 1.1))
+    matRef.current.opacity = fade * 0.95 * (0.82 + 0.18 * Math.sin(clock.getElapsedTime() * 1.1))
   })
 
   return (
     <points geometry={geo}>
       <pointsMaterial
-        ref={matRef} size={0.10} vertexColors transparent opacity={0}
+        ref={matRef} size={0.16} vertexColors transparent opacity={0}
         blending={THREE.AdditiveBlending} depthWrite={false} sizeAttenuation
       />
     </points>
@@ -929,8 +951,8 @@ function JourneyScene() {
     tempCam.current.lerpVectors(CAM_POS[idx0], CAM_POS[idx1], rawIdx - idx0)
     camera.position.lerp(tempCam.current, 0.055)
 
-    /* Always look down toward city — shifts from steep (-4.5) to moderate (-2.5) */
-    const lookY = THREE.MathUtils.lerp(-4.5, -2.5, THREE.MathUtils.smoothstep(p, 0.0, 0.85))
+    /* Look at midpoint between city and crystal — city at bottom, crystal at top */
+    const lookY = THREE.MathUtils.lerp(-0.5, 1.5, THREE.MathUtils.smoothstep(p, 0.0, 0.85))
     lookTarget.current.set(0, lookY, 0)
     camera.lookAt(lookTarget.current)
 
@@ -1022,39 +1044,42 @@ function JourneyScene() {
       {/* Purple city aurora — ceiling atmosphere */}
       <mesh geometry={auroraGeo} material={auroraMat} position={[0, 9, -4]} rotation={[Math.PI / 2, 0, 0]} />
 
-      {/* Crystalline Consciousness — non-indexed flat-shaded icosahedron */}
-      <mesh ref={crystalRef} geometry={crystalGeo} material={crystalMat} />
+      {/* Central object group — elevated above city (CITY_Y=-6.5, max building ~-1.5) */}
+      <group position={[0, 3.5, 0]}>
+        {/* Crystalline Consciousness — non-indexed flat-shaded icosahedron */}
+        <mesh ref={crystalRef} geometry={crystalGeo} material={crystalMat} />
 
-      {/* Wireframe edge overlay — data network */}
-      <lineSegments ref={wireRef} geometry={wireGeo} material={wireMat} />
+        {/* Wireframe edge overlay — data network */}
+        <lineSegments ref={wireRef} geometry={wireGeo} material={wireMat} />
 
-      {/* Orbital rings */}
-      {RINGS.map((cfg, i) => (
-        <mesh key={i} ref={ringRefs[i]} rotation={cfg.rotation}>
-          <torusGeometry args={[cfg.r, 0.012, 16, 128]} />
-          <meshBasicMaterial color={cfg.color} transparent opacity={0} />
-        </mesh>
-      ))}
-
-      <points geometry={partGeo} material={partMat} />
-
-      {/* Agent satellite group */}
-      <group ref={satGroupRef}>
-        <lineSegments geometry={lineGeo} material={lineMat} />
-        {SAT_POS.map((pos, i) => (
-          <group key={i} position={pos}>
-            <mesh ref={(el) => { if (el) satRefs.current[i] = el as unknown as THREE.Mesh }} scale={[0, 0, 0]}>
-              <sphereGeometry args={[0.13, 16, 16]} />
-              <meshBasicMaterial color={AGENT_COLORS[i]} />
-            </mesh>
-            <sprite ref={(el) => { if (el) satSprRefs.current[i] = el }} scale={[1.1, 1.1, 1.1]}>
-              <spriteMaterial
-                map={glowTex} color={AGENT_COLORS[i]}
-                transparent opacity={0} blending={THREE.AdditiveBlending} depthWrite={false}
-              />
-            </sprite>
-          </group>
+        {/* Orbital rings */}
+        {RINGS.map((cfg, i) => (
+          <mesh key={i} ref={ringRefs[i]} rotation={cfg.rotation}>
+            <torusGeometry args={[cfg.r, 0.012, 16, 128]} />
+            <meshBasicMaterial color={cfg.color} transparent opacity={0} />
+          </mesh>
         ))}
+
+        <points geometry={partGeo} material={partMat} />
+
+        {/* Agent satellite group */}
+        <group ref={satGroupRef}>
+          <lineSegments geometry={lineGeo} material={lineMat} />
+          {SAT_POS.map((pos, i) => (
+            <group key={i} position={pos}>
+              <mesh ref={(el) => { if (el) satRefs.current[i] = el as unknown as THREE.Mesh }} scale={[0, 0, 0]}>
+                <sphereGeometry args={[0.13, 16, 16]} />
+                <meshBasicMaterial color={AGENT_COLORS[i]} />
+              </mesh>
+              <sprite ref={(el) => { if (el) satSprRefs.current[i] = el }} scale={[1.1, 1.1, 1.1]}>
+                <spriteMaterial
+                  map={glowTex} color={AGENT_COLORS[i]}
+                  transparent opacity={0} blending={THREE.AdditiveBlending} depthWrite={false}
+                />
+              </sprite>
+            </group>
+          ))}
+        </group>
       </group>
 
       {/* Lighting — key + purple city ambient + accent */}
@@ -1063,13 +1088,19 @@ function JourneyScene() {
       <pointLight                   position={[-4, -3, -3]}  intensity={0.80} color="#7c3aed" />
       <pointLight                   position={[0, 0, 6]}     intensity={0.28} color="#ffffff" />
       <pointLight ref={accentLight} position={[0, 3, 5]}     intensity={0}    color="#6366f1" />
-      {/* Purple ground-outline lights — at city floor level (CITY_Y + 1.5 = -5.0) */}
+      {/* Floor-level purple outline lights (CITY_Y + 1.5 = -5.0) */}
       <pointLight position={[-9, -5.0, -9]} intensity={3.2} color="#5020c0" distance={22} />
       <pointLight position={[ 9, -5.0,  9]} intensity={2.8} color="#6030d0" distance={20} />
       <pointLight position={[ 0, -5.0,-12]} intensity={4.0} color="#3010a8" distance={28} />
       <pointLight position={[-10,-5.0,  6]} intensity={2.4} color="#7c3aed" distance={16} />
       <pointLight position={[ 6, -5.0, -5]} intensity={2.2} color="#5825cc" distance={14} />
       <pointLight position={[-4, -5.0,  8]} intensity={2.0} color="#6c28e8" distance={14} />
+      {/* Mid-building accent lights — illuminate building sides for visible purple on structures */}
+      <pointLight position={[-6, -3.0, -6]} intensity={2.8} color="#7030e0" distance={18} />
+      <pointLight position={[ 6, -3.0,  6]} intensity={2.6} color="#6828d8" distance={16} />
+      <pointLight position={[ 0, -3.0,-10]} intensity={3.2} color="#5520c8" distance={22} />
+      <pointLight position={[-8, -3.0,  4]} intensity={2.2} color="#8038f0" distance={14} />
+      <pointLight position={[ 4, -3.0, -8]} intensity={2.2} color="#6025d8" distance={14} />
     </>
   )
 }
