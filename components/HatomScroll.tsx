@@ -104,6 +104,9 @@ const _sceneI   = { current: 0 }
 const _progLast = { current: 0 }
 const _scrollVel = { current: 0 }
 const _holdInt  = { current: 0 }  // 0=scrolling, 1=fully paused
+/* pointer hold: ramps to 1.0 when mouse/touch held, back to 0 on release */
+const _pointerHeld    = { current: false }
+const _pointerHoldInt = { current: 0 }
 
 /* ═══════════════════════════════════════════════════════════
    CRYSTALLINE CONSCIOUSNESS SHADERS
@@ -175,67 +178,254 @@ const CRYSTAL_FRAG = /* glsl */`
     vec3  viewDir = normalize(uCamPos - vWorldPosition);
     vec3  N       = normalize(vNormal);
     float NdotV   = max(0.0, dot(N, viewDir));
-    float fresnel = pow(1.0 - NdotV, 2.5);
 
-    /* ── Stage-blended color palette ── */
-    /* void-violet → crystal-indigo → electric-blue → blazing-lavender */
-    vec3 c0 = vec3(0.04, 0.00, 0.20);
-    vec3 c1 = vec3(0.18, 0.06, 0.62);
-    vec3 c2 = vec3(0.05, 0.40, 1.00);
-    vec3 c3 = vec3(0.88, 0.75, 1.00);
+    /* Physical glass Fresnel (IOR ~1.5, R0 = ((1.5-1)/(1.5+1))^2 = 0.04) */
+    float R0      = 0.04;
+    float fresnel = R0 + (1.0 - R0) * pow(1.0 - NdotV, 5.0);
 
+    /* Chromatic dispersion: R / G / B split at slightly different angles */
+    float frR = R0 + (1.0 - R0) * pow(1.0 - max(0.0, NdotV - 0.025), 5.0);
+    float frB = R0 + (1.0 - R0) * pow(1.0 - min(1.0, NdotV + 0.025), 5.0);
+
+    /* Stage palette (subtle tint — glass picks up scene color) */
+    vec3 c0 = vec3(0.04, 0.00, 0.18);
+    vec3 c1 = vec3(0.12, 0.04, 0.55);
+    vec3 c2 = vec3(0.03, 0.35, 0.90);
+    vec3 c3 = vec3(0.70, 0.55, 1.00);
     vec3 base;
-    if (uProgress < 0.33) {
-      base = mix(c0, c1, smoothstep(0.0, 0.33, uProgress));
-    } else if (uProgress < 0.66) {
-      base = mix(c1, c2, smoothstep(0.33, 0.66, uProgress));
-    } else {
-      base = mix(c2, c3, smoothstep(0.66, 1.00, uProgress));
-    }
+    if      (uProgress < 0.33) base = mix(c0, c1, smoothstep(0.00, 0.33, uProgress));
+    else if (uProgress < 0.66) base = mix(c1, c2, smoothstep(0.33, 0.66, uProgress));
+    else                       base = mix(c2, c3, smoothstep(0.66, 1.00, uProgress));
 
-    /* ── Iridescence: angle + time = rainbow facet shimmer ── */
-    float iriPhase = NdotV * 4.0 + uTime * 0.12;
-    vec3  iriColor = 0.5 + 0.5 * cos(6.28318 * (vec3(0.0, 0.333, 0.666) + iriPhase * 0.5));
-    base = mix(base, iriColor, (1.0 - NdotV) * 0.48 * smoothstep(0.15, 0.52, uProgress));
+    /* Thin-film iridescence (angle + time → rainbow at facet edges) */
+    float iriPhase = NdotV * 5.5 + uTime * 0.14;
+    vec3  iriColor = 0.5 + 0.5 * cos(6.28318 * (vec3(0.0, 0.333, 0.666) + iriPhase * 0.55));
+    float iriMix   = pow(1.0 - NdotV, 2.5) * 0.85 * smoothstep(0.12, 0.48, uProgress);
+    base           = mix(base, iriColor, iriMix);
 
-    /* ── Caustic interference bands — refractive light splitting ── */
-    float c1x = sin(vWorldPosition.x * 3.8 + uTime * 0.55) *
-                sin(vWorldPosition.y * 4.2 - uTime * 0.38) *
-                sin(vWorldPosition.z * 3.1 + uTime * 0.46);
-    float c2x = sin(vWorldPosition.x * 6.5 - uTime * 0.72) *
-                cos(vWorldPosition.z * 5.8 + uTime * 0.31);
-    float causticBand = pow(max(0.0, c1x), 2.0) * 0.45 + pow(max(0.0, c2x), 2.0) * 0.30;
-    vec3  causticCol  = mix(vec3(0.4, 0.2, 1.0), vec3(0.2, 0.8, 1.0), c1x * 0.5 + 0.5);
-    base += causticCol * causticBand * smoothstep(0.20, 0.55, uProgress) * 1.4;
+    /* Multi-octave caustic interference bands */
+    float ca = sin(vWorldPosition.x * 4.1 + uTime * 0.58) *
+               sin(vWorldPosition.y * 3.7 - uTime * 0.41) *
+               sin(vWorldPosition.z * 3.4 + uTime * 0.49);
+    float cb = sin(vWorldPosition.x * 7.2 - uTime * 0.76) *
+               cos(vWorldPosition.z * 6.1 + uTime * 0.33);
+    float cc = cos(vWorldPosition.y * 5.6 + uTime * 0.62) *
+               sin(vWorldPosition.x * 4.8 - uTime * 0.54);
+    float caustic  = pow(max(0.0, ca), 2.2) * 0.55
+                   + pow(max(0.0, cb), 2.2) * 0.35
+                   + pow(max(0.0, cc), 2.8) * 0.20;
+    vec3  cCol     = mix(vec3(0.45, 0.15, 1.0), vec3(0.15, 0.85, 1.0), ca * 0.5 + 0.5);
+    base          += cCol * caustic * smoothstep(0.18, 0.52, uProgress) * 1.8;
 
-    /* ── Subsurface scattering — translucent inner glow from backlight ── */
-    float sss    = pow(1.0 - NdotV, 3.5) * smoothstep(0.18, 0.55, uProgress);
-    vec3  sssCol = mix(vec3(0.55, 0.05, 1.00), vec3(0.15, 0.65, 1.00), uProgress);
-    base += sssCol * sss * 0.85;
+    /* Subsurface scattering (backlit inner glow transmission) */
+    float sss    = pow(1.0 - NdotV, 4.0) * smoothstep(0.16, 0.50, uProgress);
+    vec3  sssCol = mix(vec3(0.60, 0.06, 1.00), vec3(0.12, 0.70, 1.00), uProgress);
+    base        += sssCol * sss * 1.0;
 
-    /* ── Crystal sparkle: hard specular at geometric angles — sharper ── */
-    float sx = sin(vWorldPosition.x * 6.1 + uTime * 0.7);
-    float sy = sin(vWorldPosition.y * 4.8 + uTime * 0.9);
-    float sz = sin(vWorldPosition.z * 5.5 + uTime * 0.6);
-    float sparkle = pow(max(0.0, sx * sy * sz), 3.5) * smoothstep(0.2, 0.55, uProgress);
-    base += vec3(1.0, 0.92, 1.0) * sparkle * 2.8;
+    /* Hard specular at facet angles (micro-glints that look like light bouncing inside) */
+    vec3  lDir    = normalize(vec3(2.0, 3.5, 4.0));
+    vec3  hDir    = normalize(lDir + viewDir);
+    float spec    = pow(max(dot(N, hDir), 0.0), 280.0);
+    float spec2   = pow(max(dot(N, normalize(vec3(-3.0, 2.0, 1.5) + viewDir)), 0.0), 180.0);
+    base         += vec3(1.0, 0.94, 1.0) * (spec + spec2 * 0.55) * 1.6;
 
-    /* ── Internal refraction glints — secondary micro-specular layer ── */
-    float rx = sin(vWorldPosition.x * 11.3 - uTime * 1.1);
-    float ry = sin(vWorldPosition.y * 9.7  + uTime * 0.8);
-    float rz = sin(vWorldPosition.z * 10.1 - uTime * 0.9);
-    float refractGlint = pow(max(0.0, rx * ry * rz), 6.0);
-    base += vec3(0.85, 0.90, 1.0) * refractGlint * 1.6 * smoothstep(0.3, 0.6, uProgress);
+    /* Secondary micro-refraction glints (hexagonal shimmer) */
+    float rx = sin(vWorldPosition.x * 12.2 - uTime * 1.15);
+    float ry = sin(vWorldPosition.y * 10.4 + uTime * 0.85);
+    float rz = sin(vWorldPosition.z * 11.1 - uTime * 0.95);
+    float rGlint = pow(max(0.0, rx * ry * rz), 7.0);
+    base        += vec3(0.88, 0.93, 1.0) * rGlint * 2.0 * smoothstep(0.28, 0.58, uProgress);
 
-    /* ── Fresnel rim glow — stronger ── */
-    vec3 rimCol = mix(vec3(0.48, 0.18, 1.00), vec3(0.18, 0.78, 1.00), uProgress);
-    base += rimCol * fresnel * 2.6;
+    /* Hold activation surge: inner core light breaks through the shell */
+    float holdPulse = 0.5 + 0.5 * sin(uTime * 5.0 + vRand * 6.28);
+    base += vec3(0.60, 0.25, 1.0) * uHold * (1.0 - NdotV) * 1.4 * (0.7 + holdPulse * 0.3);
+    base += vec3(0.25, 0.70, 1.0) * uHold * fresnel * 1.0;
+    base += iriColor * uHold * pow(1.0 - NdotV, 2.5) * 0.8;
+    /* Caustic beams ignite on hold */
+    base += cCol * caustic * uHold * 2.5;
 
-    /* ── Hold surge: inner radiance brightens when paused ── */
-    base += vec3(0.55, 0.22, 1.0) * uHold * (1.0 - NdotV) * 0.8;
-    base += vec3(0.3, 0.6, 1.0) * uHold * fresnel * 0.6;
+    /* Chromatic dispersion color (R/G/B shift at edges) */
+    vec3 col = vec3(
+      base.r + iriColor.r * (frR - fresnel) * 0.5,
+      base.g,
+      base.b + iriColor.b * (frB - fresnel) * 0.5
+    );
 
-    float alpha = mix(0.48, 0.94, fresnel + smoothstep(0.5, 0.9, uProgress) * 0.4) * uOpacity;
+    /* KEY TRANSPARENCY FIX — glass-like alpha, face is nearly invisible
+       Face-on (NdotV≈1): alpha ≈ 0.07  (transparent glass face)
+       Edge-on (NdotV≈0): alpha ≈ 1.5+  (bright opaque edge like real crystal) */
+    float faceBase  = 0.07 * smoothstep(0.14, 0.42, uProgress);
+    float edgeAlpha = pow(fresnel, 1.15) * 1.6;
+    float specAlpha = (spec + spec2 * 0.4) * 0.8;
+    float alpha     = (faceBase + edgeAlpha + specAlpha) * uOpacity;
+    alpha           = clamp(alpha + uHold * (fresnel * 0.55 + 0.04), 0.0, 0.98);
+
+    gl_FragColor = vec4(col, alpha);
+  }
+`
+
+/* ══════════════════════════════════════════════════════════
+   INNER PLASMA CORE — visible glowing centre through the shell
+══════════════════════════════════════════════════════════ */
+const CORE_VERT = /* glsl */`
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform float uHold;
+
+  float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  float n2d(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash2(i),hash2(i+vec2(1,0)),u.x),mix(hash2(i+vec2(0,1)),hash2(i+vec2(1,1)),u.x),u.y);
+  }
+  float fbm2(vec2 p){float v=0.0,a=0.5;for(int i=0;i<5;i++){v+=a*n2d(p);p=p*2.1+vec2(1.7,9.2);a*=0.5;}return v;}
+
+  void main() {
+    vNormal   = normalize(normalMatrix * normal);
+    vUv       = uv;
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+
+    /* Plasma surface turbulence */
+    float d1 = (fbm2(vUv * 5.0 + vec2(uTime * 0.24, uTime * 0.18)) - 0.5) * 0.30;
+    float d2 = (fbm2(vUv * 9.5 - vec2(uTime * 0.34, uTime * 0.26)) - 0.5) * 0.14;
+    float d3 = (fbm2(vUv * 18.0 + vec2(uTime * 0.55)) - 0.5) * 0.06;
+    /* Hold amplifies plasma turbulence */
+    float disp = (d1 + d2 + d3) * (1.0 + uHold * 0.55);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position + normal * disp, 1.0);
+  }
+`
+
+const CORE_FRAG = /* glsl */`
+  precision highp float;
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform vec3  uCamPos;
+  uniform float uOpacity;
+  uniform float uProgress;
+  uniform float uHold;
+
+  float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  float n2d(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash2(i),hash2(i+vec2(1,0)),u.x),mix(hash2(i+vec2(0,1)),hash2(i+vec2(1,1)),u.x),u.y);
+  }
+  float fbm2(vec2 p){float v=0.0,a=0.5;for(int i=0;i<5;i++){v+=a*n2d(p);p=p*2.1+vec2(1.7,9.2);a*=0.5;}return v;}
+
+  void main() {
+    vec3  viewDir = normalize(uCamPos - vWorldPos);
+    vec3  N       = normalize(vNormal);
+    float NdotV   = max(0.0, dot(N, viewDir));
+    float fresnel = pow(1.0 - NdotV, 3.5);
+
+    /* Multi-octave plasma */
+    float p1 = fbm2(vUv * 6.0 + vec2(uTime * 0.22, uTime * 0.17));
+    float p2 = fbm2(vUv * 11.0 - vec2(uTime * 0.30, uTime * 0.25));
+    float p3 = fbm2(vUv * 22.0 + vec2(uTime * 0.48));
+    float plasma = p1 * 0.55 + p2 * 0.30 + p3 * 0.15;
+
+    /* Stage-tracked core color: violet → cyan → electric pink on hold */
+    vec3 cv0 = vec3(0.50, 0.05, 0.95);
+    vec3 cv1 = vec3(0.06, 0.65, 1.00);
+    vec3 cv2 = vec3(0.95, 0.35, 1.00);
+    float phase = sin(uTime * 0.6 + plasma * 3.14) * 0.5 + 0.5;
+    vec3  core  = mix(mix(cv0, cv1, plasma), cv2, phase * 0.4 + uHold * 0.5);
+
+    /* Bright inner volume — forward-facing faces glow brighter */
+    core += vec3(0.65, 0.55, 1.0) * (1.0 - NdotV * NdotV) * 0.9;
+    /* Rim light from edge */
+    core += vec3(0.40, 0.85, 1.0) * fresnel * 1.8;
+    /* Hotspot at centre */
+    core += vec3(1.0, 0.95, 1.0) * pow(1.0 - NdotV, 9.0) * 1.5;
+
+    /* Specular from key light */
+    vec3  lDir  = normalize(vec3(2.0, 3.5, 4.0));
+    vec3  hDir  = normalize(lDir + viewDir);
+    float spec  = pow(max(dot(N, hDir), 0.0), 220.0);
+    core       += vec3(1.0) * spec * 1.2;
+
+    /* Hold activation — core blazes, colour erupts */
+    float holdPulse = 0.5 + 0.5 * sin(uTime * 6.5);
+    core += vec3(0.85, 0.40, 1.0) * uHold * holdPulse * 2.2;
+    core += vec3(0.30, 0.80, 1.0) * uHold * (1.0 - NdotV) * 1.4;
+    core *= 1.0 + uHold * 0.7;
+
+    /* Heartbeat pulse */
+    float beat = 0.88 + sin(uTime * 2.4) * 0.12;
+    core *= beat;
+
+    /* Core is mostly opaque (visible from outside through glass shell) */
+    float alpha = (0.78 + fresnel * 0.22 + uHold * 0.18) * uOpacity;
+    gl_FragColor = vec4(core, alpha);
+  }
+`
+
+/* ══════════════════════════════════════════════════════════
+   MID STRUCTURAL LAYER — geometric interior, semi-transparent
+   Uses same vertex shader as outer (CRYSTAL_VERT) since geometry
+   has identical aRand / aScatterDir attributes.
+══════════════════════════════════════════════════════════ */
+const MID_FRAG = /* glsl */`
+  precision highp float;
+  varying vec3  vNormal;
+  varying vec3  vWorldPosition;
+  varying float vRand;
+  uniform float uTime;
+  uniform vec3  uCamPos;
+  uniform float uOpacity;
+  uniform float uProgress;
+  uniform float uHold;
+
+  void main() {
+    vec3  viewDir = normalize(uCamPos - vWorldPosition);
+    vec3  N       = normalize(vNormal);
+    float NdotV   = max(0.0, dot(N, viewDir));
+    float fresnel = pow(1.0 - NdotV, 4.0);
+
+    /* Mid-layer palette: shows the internal crystal structure colour */
+    vec3 m0 = vec3(0.18, 0.04, 0.60);
+    vec3 m1 = vec3(0.04, 0.55, 1.00);
+    vec3 base = mix(m0, m1, uProgress);
+
+    /* Thin-film iridescence — slightly different phase than outer shell
+       creates visible colour depth difference between layers */
+    float iriPhase = NdotV * 7.0 + uTime * 0.20;
+    vec3  iri = 0.5 + 0.5 * cos(6.28318 * (vec3(0.166, 0.500, 0.833) + iriPhase * 0.45));
+    base = mix(base, iri, 0.42 * smoothstep(0.14, 0.46, uProgress));
+
+    /* Energy channel lattice — geometric flow paths */
+    float ex = sin(vWorldPosition.x * 5.2 + uTime * 0.82);
+    float ey = sin(vWorldPosition.y * 4.8 + uTime * 1.08);
+    float ez = sin(vWorldPosition.z * 5.0 + uTime * 0.74);
+    float energy = pow(max(0.0, ex * ey * ez), 2.2);
+    vec3  eCol   = mix(vec3(0.65, 0.18, 1.0), vec3(0.18, 0.88, 1.0), uProgress);
+    base += eCol * energy * 1.4;
+
+    /* Specular on inner surfaces */
+    vec3  lDir = normalize(vec3(2.0, 3.5, 4.0));
+    vec3  hDir = normalize(lDir + viewDir);
+    float spec = pow(max(dot(N, hDir), 0.0), 140.0);
+    base += vec3(0.9, 0.95, 1.0) * spec * 0.9;
+
+    /* Hold: energy channels blaze, mid-layer becomes more visible */
+    base += eCol * energy * uHold * 3.0;
+    base += vec3(0.35, 0.75, 1.0) * uHold * (1.0 - NdotV) * 0.8;
+    base += iri * uHold * fresnel * 0.7;
+
+    /* Rim */
+    base += vec3(0.55, 0.22, 1.0) * fresnel * 1.0;
+
+    /* Semi-transparent: enough opacity to show structure, enough transparency
+       to see the core through it.
+       Face-on: ~22% (shows interior structure without blocking core view)
+       Edge-on: ~80% (bright facet edges) */
+    float reveal = smoothstep(0.06, 0.32, uProgress);
+    float alpha  = (0.22 + fresnel * 0.58 + energy * 0.12) * uOpacity * reveal;
+    alpha       += uHold * 0.10;
+    alpha        = clamp(alpha, 0.0, 0.92);
+
     gl_FragColor = vec4(base, alpha);
   }
 `
@@ -809,8 +999,10 @@ function JourneyScene() {
     return () => { scene.fog = null }
   }, [scene])
 
-  const crystalRef = useRef<THREE.Mesh>(null)
-  const wireRef    = useRef<THREE.LineSegments>(null)
+  const crystalRef  = useRef<THREE.Mesh>(null)
+  const coreRef     = useRef<THREE.Mesh>(null)
+  const midRef      = useRef<THREE.Mesh>(null)
+  const wireRef     = useRef<THREE.LineSegments>(null)
   const satGroupRef = useRef<THREE.Group>(null)
   const satRefs    = useRef<THREE.Mesh[]>([])
   const satSprRefs = useRef<THREE.Sprite[]>([])
@@ -848,6 +1040,31 @@ function JourneyScene() {
     return geo
   }, [])
 
+  /* Inner plasma core — visible glowing sphere inside the crystal */
+  const coreGeo = useMemo(() => new THREE.SphereGeometry(0.54, 80, 80), [])
+
+  /* Mid structural layer — non-indexed icosahedron with same scatter attrs */
+  const midGeo = useMemo(() => {
+    const base = new THREE.IcosahedronGeometry(1.08, 1)
+    const geo  = base.toNonIndexed()
+    geo.computeVertexNormals()
+    base.dispose()
+    const count      = geo.attributes.position.count
+    const rand       = new Float32Array(count)
+    const scatterDir = new Float32Array(count * 3)
+    for (let i = 0; i < count; i++) {
+      rand[i] = Math.random()
+      const theta = Math.random() * Math.PI * 2
+      const phi   = Math.acos(2 * Math.random() - 1)
+      scatterDir[i*3  ] = Math.sin(phi) * Math.cos(theta)
+      scatterDir[i*3+1] = Math.cos(phi)
+      scatterDir[i*3+2] = Math.sin(phi) * Math.sin(theta)
+    }
+    geo.setAttribute('aRand',       new THREE.Float32BufferAttribute(rand,       1))
+    geo.setAttribute('aScatterDir', new THREE.Float32BufferAttribute(scatterDir, 3))
+    return geo
+  }, [])
+
   /* EdgesGeometry: clean crystalline wireframe, slightly larger */
   const wireGeo = useMemo(() => {
     const base  = new THREE.IcosahedronGeometry(1.58, 2)
@@ -869,6 +1086,34 @@ function JourneyScene() {
   const crystalMat = useMemo(() => new THREE.ShaderMaterial({
     vertexShader:   CRYSTAL_VERT,
     fragmentShader: CRYSTAL_FRAG,
+    uniforms: {
+      uTime:     { value: 0 },
+      uCamPos:   { value: new THREE.Vector3() },
+      uOpacity:  { value: 0 },
+      uProgress: { value: 0 },
+      uHold:     { value: 0 },
+    },
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  }), [])
+
+  /* Inner plasma core material */
+  const coreMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   CORE_VERT,
+    fragmentShader: CORE_FRAG,
+    uniforms: {
+      uTime:     { value: 0 },
+      uCamPos:   { value: new THREE.Vector3() },
+      uOpacity:  { value: 0 },
+      uProgress: { value: 0 },
+      uHold:     { value: 0 },
+    },
+    transparent: true, depthWrite: false, side: THREE.FrontSide,
+  }), [])
+
+  /* Mid structural layer material (reuses outer vert shader — same attributes) */
+  const midMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   CRYSTAL_VERT,
+    fragmentShader: MID_FRAG,
     uniforms: {
       uTime:     { value: 0 },
       uCamPos:   { value: new THREE.Vector3() },
@@ -950,24 +1195,34 @@ function JourneyScene() {
 
   useEffect(() => () => {
     crystalGeo.dispose(); crystalMat.dispose()
+    coreGeo.dispose();    coreMat.dispose()
+    midGeo.dispose();     midMat.dispose()
     wireGeo.dispose(); wireMat.dispose()
     auroraGeo.dispose(); auroraMat.dispose()
     partGeo.dispose(); partMat.dispose()
     lineGeo.dispose(); lineMat.dispose()
     glowTex?.dispose()
-  }, [crystalGeo, crystalMat, wireGeo, wireMat, auroraGeo, auroraMat, partGeo, partMat, lineGeo, lineMat, glowTex])
+  }, [crystalGeo, crystalMat, coreGeo, coreMat, midGeo, midMat, wireGeo, wireMat, auroraGeo, auroraMat, partGeo, partMat, lineGeo, lineMat, glowTex])
 
   useFrame(({ clock }) => {
     const t  = clock.getElapsedTime()
     const p  = _prog.current
     const si = _sceneI.current
 
-    /* ── Hold detection: track scroll velocity ── */
+    /* ── Hold detection: scroll velocity + pointer/touch hold ── */
     const progDelta  = Math.abs(p - _progLast.current)
     _scrollVel.current = THREE.MathUtils.lerp(_scrollVel.current, progDelta * 90, 0.06)
     _progLast.current  = p
-    const targetHold   = _scrollVel.current < 0.003 ? 1.0 : 0.0
-    _holdInt.current   = THREE.MathUtils.lerp(_holdInt.current, targetHold, 0.022)
+    const targetScrollHold = _scrollVel.current < 0.003 ? 1.0 : 0.0
+    _holdInt.current = THREE.MathUtils.lerp(_holdInt.current, targetScrollHold, 0.022)
+    /* Pointer hold: fast ramp up when held, slower decay on release */
+    _pointerHoldInt.current = THREE.MathUtils.lerp(
+      _pointerHoldInt.current,
+      _pointerHeld.current ? 1.0 : 0.0,
+      _pointerHeld.current ? 0.045 : 0.022
+    )
+    /* Combined hold: max of scroll-pause and pointer-held */
+    const combinedHold = Math.max(_holdInt.current, _pointerHoldInt.current)
 
     /* ── Camera path ── */
     const rawIdx = p * (CAM_POS.length - 1)
@@ -986,16 +1241,51 @@ function JourneyScene() {
     const baseOpacity = THREE.MathUtils.smoothstep(p, 0.05, 0.28)
     const crystalOp   = Math.max(baseOpacity, burstFac)
 
+    /* Scale + rotation shared across all three crystal layers */
+    const crystalScale = 0.05 + baseOpacity * 1.15 + burstFac * 1.9
+    const crystalRotY  = crystalRef.current ? crystalRef.current.rotation.y + 0.0045 : 0
+    const crystalRotX  = Math.sin(t * 0.28) * 0.13
+
+    /* ── Outer glass shell ── */
     crystalMat.uniforms.uTime.value     = t
     crystalMat.uniforms.uProgress.value = p
     crystalMat.uniforms.uOpacity.value  = crystalOp
-    crystalMat.uniforms.uHold.value     = _holdInt.current
+    crystalMat.uniforms.uHold.value     = combinedHold
     crystalMat.uniforms.uCamPos.value.copy(camera.position)
 
     if (crystalRef.current) {
-      crystalRef.current.scale.setScalar(0.05 + baseOpacity * 1.15 + burstFac * 1.9)
-      crystalRef.current.rotation.y += 0.0045
-      crystalRef.current.rotation.x = Math.sin(t * 0.28) * 0.13
+      crystalRef.current.scale.setScalar(crystalScale)
+      crystalRef.current.rotation.y = crystalRotY
+      crystalRef.current.rotation.x = crystalRotX
+    }
+
+    /* ── Mid structural layer ── */
+    midMat.uniforms.uTime.value     = t
+    midMat.uniforms.uProgress.value = p
+    midMat.uniforms.uOpacity.value  = crystalOp
+    midMat.uniforms.uHold.value     = combinedHold
+    midMat.uniforms.uCamPos.value.copy(camera.position)
+
+    if (midRef.current) {
+      midRef.current.scale.setScalar(crystalScale)
+      midRef.current.rotation.y = crystalRotY * 1.08   // slightly counter-rotated
+      midRef.current.rotation.x = crystalRotX * 0.85
+    }
+
+    /* ── Inner plasma core ── */
+    coreMat.uniforms.uTime.value     = t
+    coreMat.uniforms.uProgress.value = p
+    coreMat.uniforms.uOpacity.value  = THREE.MathUtils.smoothstep(p, 0.08, 0.30)
+    coreMat.uniforms.uHold.value     = combinedHold
+    coreMat.uniforms.uCamPos.value.copy(camera.position)
+
+    if (coreRef.current) {
+      /* Core scale: slightly pulsing, grows on hold */
+      const coreBase  = crystalScale * 0.78
+      const corePulse = 1.0 + Math.sin(t * 2.4) * 0.025 + combinedHold * 0.12
+      coreRef.current.scale.setScalar(coreBase * corePulse)
+      coreRef.current.rotation.y = crystalRotY * -0.55
+      coreRef.current.rotation.x = crystalRotX * -0.45
     }
 
     /* ── Wireframe edges ── */
@@ -1047,13 +1337,15 @@ function JourneyScene() {
       const c1   = LIGHT_COLORS[Math.min(si + 1, LIGHT_COLORS.length - 1)]
       const frac = THREE.MathUtils.clamp(p * SCENES.length - si, 0, 1)
       ptLight.current.color.lerpColors(c0, c1, frac)
-      ptLight.current.intensity = 2.5 + burstFac * 5.0
+      /* On hold, inner core light bleeds through the glass shell */
+      ptLight.current.intensity = 2.5 + burstFac * 5.0 + combinedHold * 4.0
     }
 
     if (accentLight.current && si >= 2) {
       tempColor.current.set(AGENT_COLORS[Math.min(si - 2, 7)])
       accentLight.current.color.lerp(tempColor.current, 0.06)
       accentLight.current.intensity = THREE.MathUtils.smoothstep(p, 0.28, 0.45) * 2.0
+        + combinedHold * 2.5
     }
   })
 
@@ -1071,11 +1363,17 @@ function JourneyScene() {
 
       {/* Central object group — elevated above city (CITY_Y=-6.5, max building ~-1.5) */}
       <group position={[0, 3.5, 0]}>
-        {/* Crystalline Consciousness — non-indexed flat-shaded icosahedron */}
-        <mesh ref={crystalRef} geometry={crystalGeo} material={crystalMat} />
+        {/* Layer 1 — Inner plasma core (renders first, visible through all outer layers) */}
+        <mesh ref={coreRef} geometry={coreGeo} material={coreMat} renderOrder={10} />
+
+        {/* Layer 2 — Mid structural crystal (visible interior geometry) */}
+        <mesh ref={midRef} geometry={midGeo} material={midMat} renderOrder={11} />
+
+        {/* Layer 3 — Outer glass shell (edge-fresnel transparent, shows layers inside) */}
+        <mesh ref={crystalRef} geometry={crystalGeo} material={crystalMat} renderOrder={12} />
 
         {/* Wireframe edge overlay — data network */}
-        <lineSegments ref={wireRef} geometry={wireGeo} material={wireMat} />
+        <lineSegments ref={wireRef} geometry={wireGeo} material={wireMat} renderOrder={13} />
 
         {/* Orbital rings */}
         {RINGS.map((cfg, i) => (
@@ -1229,6 +1527,24 @@ export default function HatomScroll() {
     return () => {
       document.documentElement.style.overflow = ""
       document.body.style.overflow = ""
+    }
+  }, [])
+
+  /* Pointer/touch hold detection — drives crystal activation state */
+  useEffect(() => {
+    const onDown = () => { _pointerHeld.current = true }
+    const onUp   = () => { _pointerHeld.current = false }
+    window.addEventListener("mousedown",  onDown, { passive: true })
+    window.addEventListener("mouseup",    onUp,   { passive: true })
+    window.addEventListener("touchstart", onDown, { passive: true })
+    window.addEventListener("touchend",   onUp,   { passive: true })
+    window.addEventListener("touchcancel",onUp,   { passive: true })
+    return () => {
+      window.removeEventListener("mousedown",   onDown)
+      window.removeEventListener("mouseup",     onUp)
+      window.removeEventListener("touchstart",  onDown)
+      window.removeEventListener("touchend",    onUp)
+      window.removeEventListener("touchcancel", onUp)
     }
   }, [])
 
