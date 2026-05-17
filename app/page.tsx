@@ -3,10 +3,9 @@
 import Link from "next/link"
 import { useEffect, useState, useCallback } from "react"
 import dynamic from "next/dynamic"
-const HatomScroll = dynamic(() => import("@/components/HatomScroll"), { ssr: false })
-const AutoPilotGate        = dynamic(() => import("@/components/AutoPilotGate"),        { ssr: false })
-const HeroGL    = dynamic(() => import("@/components/HeroGL"),    { ssr: false })
-const AICore3D  = dynamic(() => import("@/components/AICore3D"),  { ssr: false })
+const HatomScroll   = dynamic(() => import("@/components/HatomScroll"),   { ssr: false })
+const AutoPilotGate = dynamic(() => import("@/components/AutoPilotGate"), { ssr: false })
+const CityHero      = dynamic(() => import("@/components/CityHero"),      { ssr: false })
 
 /* ── Data ── */
 const STATS = [
@@ -215,45 +214,36 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* ══ Hero — full-screen cinematic ══ */}
-      <section className="relative overflow-hidden" style={{ height: "100svh", minHeight: "600px" }}>
+      {/* ══ Hero — cyberpunk city ══ */}
+      <section className="relative overflow-hidden" style={{ height: "100svh", minHeight: "600px", background: "#000000" }}>
 
-        {/* Layer 1: HeroGL nebula — deepest background */}
-        <div className="absolute inset-0 pointer-events-none">
-          <HeroGL />
-        </div>
-
-        {/* Layer 2: AICore3D — fills full viewport */}
+        {/* Full-screen city canvas */}
         <div className="absolute inset-0">
-          <AICore3D />
+          <CityHero />
         </div>
 
-        {/* Layer 3: Atmospheric gradient masks — make text legible without hiding the orb */}
+        {/* Gradient overlays — text legibility without killing the city */}
         <div
           className="absolute inset-0 pointer-events-none"
-          style={{ background: "radial-gradient(ellipse 65% 55% at 50% 48%, transparent 18%, rgba(5,8,16,0.52) 65%, rgba(5,8,16,0.90) 100%)" }}
+          style={{ background: "radial-gradient(ellipse 68% 58% at 50% 48%, transparent 16%, rgba(0,0,0,0.42) 60%, rgba(0,0,0,0.86) 100%)" }}
         />
-        <div className="absolute bottom-0 left-0 right-0 h-48 pointer-events-none" style={{ background: "linear-gradient(to top, rgba(5,8,16,1) 0%, transparent 100%)" }} />
-        <div className="absolute top-0 left-0 right-0 h-28 pointer-events-none" style={{ background: "linear-gradient(to bottom, rgba(5,8,16,0.5) 0%, transparent 100%)" }} />
+        <div className="absolute bottom-0 left-0 right-0 h-52 pointer-events-none" style={{ background: "linear-gradient(to top, #050810 0%, transparent 100%)" }} />
+        <div className="absolute top-0 left-0 right-0 h-24 pointer-events-none" style={{ background: "linear-gradient(to bottom, rgba(0,0,0,0.62) 0%, transparent 100%)" }} />
 
-        {/* Ambient color orbs */}
-        <div className="absolute top-1/4 left-[8%] w-[500px] h-[500px] bg-violet-600/[0.05] rounded-full blur-[140px] animate-orb-drift pointer-events-none" />
-        <div className="absolute top-1/3 right-[8%] w-[420px] h-[420px] bg-cyan-600/[0.04] rounded-full blur-[140px] animate-orb-drift pointer-events-none" style={{ animationDelay: "-9s" }} />
-
-        {/* Layer 4: Centered story text */}
+        {/* Centered text */}
         <div className="relative z-10 h-full flex flex-col items-center justify-center text-center px-6 pt-16">
 
-          <div className="inline-flex items-center gap-2.5 bg-indigo-950/70 border border-indigo-800/50 text-indigo-300 text-xs font-semibold px-4 py-1.5 rounded-full mb-8 tracking-widest uppercase animate-fade-up">
+          <div
+            className="inline-flex items-center gap-2.5 text-xs font-semibold px-4 py-1.5 rounded-full mb-8 tracking-widest uppercase animate-fade-up"
+            style={{ background: "rgba(124,58,237,0.15)", border: "1px solid rgba(124,58,237,0.35)", color: "#c4b5fd" }}
+          >
             <GlowDot color="glow-dot-indigo" />
             AI Business Operating System — 8 agents
           </div>
 
           <h1
             className="font-extrabold leading-[0.88] tracking-tight mb-7 animate-fade-up delay-100"
-            style={{
-              fontSize: "clamp(3.2rem, 8.5vw, 7.5rem)",
-              fontFamily: "'OCMikola', sans-serif",
-            }}
+            style={{ fontSize: "clamp(3.2rem, 8.5vw, 7.5rem)", fontFamily: "'OCMikola', sans-serif" }}
           >
             Stop paying<br />
             <span className="gradient-text">$3,000/mo</span><br />
@@ -269,50 +259,52 @@ export default function LandingPage() {
               href="/signup"
               onMouseEnter={playRollover}
               onClick={playClick}
-              className="shimmer-btn px-8 py-3.5 text-white font-bold rounded-xl transition-all text-base shadow-2xl shadow-indigo-900/50 hover:shadow-indigo-900/70 hover:-translate-y-0.5"
-              style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}
+              className="shimmer-btn px-8 py-3.5 text-white font-bold rounded-xl transition-all text-base shadow-2xl hover:-translate-y-0.5"
+              style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)", boxShadow: "0 0 40px rgba(124,58,237,0.4)" }}
             >
               Start free — no card required
             </Link>
             <a
               href="#how-it-works"
               onMouseEnter={playRollover}
-              className="border-btn px-8 py-3.5 border border-white/10 hover:border-white/20 text-gray-300 hover:text-white font-semibold rounded-xl transition-colors text-base"
+              className="border-btn px-8 py-3.5 border border-white/10 hover:border-violet-500/40 text-gray-300 hover:text-white font-semibold rounded-xl transition-colors text-base"
             >
               <span className="btn-border-top" /><span className="btn-border-bottom" /><span className="btn-border-left" /><span className="btn-border-right" />
               Build an agency →
             </a>
           </div>
 
-          <p className="mt-4 text-sm text-gray-700 animate-fade-up delay-400">Setup takes 5 minutes. First results in under 24 hours.</p>
+          <p className="mt-4 text-sm animate-fade-up delay-400" style={{ color: "rgba(255,255,255,0.22)" }}>
+            Setup takes 5 minutes. First results in under 24 hours.
+          </p>
         </div>
 
-        {/* Layer 5: Floating status badges — bottom corners */}
+        {/* Floating status badges — bottom corners */}
         <div
-          className="absolute bottom-16 left-8 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl z-10 animate-float pointer-events-none"
-          style={{ background: "rgba(10,12,24,0.90)", backdropFilter: "blur(20px)" }}
+          className="absolute bottom-16 left-8 hidden md:flex items-center gap-3 rounded-2xl border px-4 py-3 shadow-2xl z-10 animate-float pointer-events-none"
+          style={{ background: "rgba(5,1,18,0.88)", backdropFilter: "blur(20px)", borderColor: "rgba(124,58,237,0.25)" }}
         >
           <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
           <div>
             <p className="text-xs font-semibold text-white leading-tight">All 8 agents running</p>
-            <p className="text-xs text-gray-500">47 posts · 23 reviews · 12 leads</p>
+            <p className="text-xs" style={{ color: "rgba(255,255,255,0.3)" }}>47 posts · 23 reviews · 12 leads</p>
           </div>
         </div>
 
         <div
-          className="absolute bottom-16 right-8 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl z-10 animate-float pointer-events-none"
-          style={{ background: "rgba(10,12,24,0.90)", backdropFilter: "blur(20px)", animationDelay: "-3s" }}
+          className="absolute bottom-16 right-8 hidden md:flex items-center gap-3 rounded-2xl border px-4 py-3 shadow-2xl z-10 animate-float pointer-events-none"
+          style={{ background: "rgba(5,1,18,0.88)", backdropFilter: "blur(20px)", borderColor: "rgba(124,58,237,0.25)", animationDelay: "-3s" }}
         >
           <span className="text-amber-400 text-sm font-bold shrink-0">★</span>
           <div>
             <p className="text-xs font-semibold text-white leading-tight">New 5★ review</p>
-            <p className="text-xs text-gray-500">Responded in 4 minutes</p>
+            <p className="text-xs" style={{ color: "rgba(255,255,255,0.3)" }}>Responded in 4 minutes</p>
           </div>
         </div>
 
-        {/* Scroll arrow — bottom center */}
+        {/* Scroll arrow */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 animate-fade-up delay-700">
-          <a href="#stats" className="flex flex-col items-center gap-2 text-gray-700 hover:text-gray-500 transition-colors animate-scroll-arrow">
+          <a href="#stats" className="flex flex-col items-center gap-2 transition-colors animate-scroll-arrow" style={{ color: "rgba(124,58,237,0.5)" }}>
             <span className="text-xs uppercase tracking-widest font-medium">scroll</span>
             <svg width="16" height="24" viewBox="0 0 16 24" fill="none">
               <path d="M8 0v20M1 13l7 7 7-7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>

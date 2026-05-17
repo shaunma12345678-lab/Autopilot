@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useMemo, useEffect, useState } from "react"
+import { useRef, useMemo, useEffect, useState, useCallback } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Stars, Sparkles } from "@react-three/drei"
 import * as THREE from "three"
@@ -12,44 +12,44 @@ gsap.registerPlugin(ScrollTrigger)
 /* ─── Scene narrative ──────────────────────────────────────── */
 const SCENES = [
   {
-    label: "CHAPTER 01 — DORMANT",
-    title: "Every business has\nan untapped potential.",
-    body: "You're working 14-hour days. Marketing still feels like guesswork. The tools exist — but nothing connects them into a system.",
+    label: "CHAPTER 01 — BEFORE",
+    title: "You're running\non empty.",
+    body: "14-hour days. Marketing that doesn't move the needle. Tools that don't talk to each other. Every week, a repeat of the last.",
   },
   {
     label: "CHAPTER 02 — THE SIGNAL",
-    title: "A new kind\nof intelligence.",
-    body: "Not another dashboard. Not another tool to manage. A living system that learns, decides, and acts on its own.",
+    title: "Something different\nis coming.",
+    body: "Not another dashboard. Not another tool to manage. A system that thinks, decides, and acts — while you sleep.",
   },
   {
-    label: "CHAPTER 03 — IGNITION",
-    title: "AutoPilot,\nactivated.",
-    body: "The moment you onboard, everything changes. 8 specialized AI agents come online simultaneously and begin working immediately.",
+    label: "CHAPTER 03 — ACTIVATION",
+    title: "8 agents.\nOnline. Now.",
+    body: "The instant you onboard, AutoPilot begins. Eight specialized AI agents come alive simultaneously and start working on your business.",
   },
   {
     label: "CHAPTER 04 — CONTENT",
-    title: "Never write\na post again.",
-    body: "Content Agent delivers 47 on-brand posts per month across every platform. Reputation Agent answers every review in under 5 minutes.",
+    title: "Your voice.\nEverywhere. Always.",
+    body: "47 on-brand posts per month. Every review answered in under 5 minutes. Present every day on every platform — without you touching it.",
   },
   {
     label: "CHAPTER 05 — GROWTH",
-    title: "Your pipeline,\nalways full.",
-    body: "Lead Gen Agent sends 50 personalized outreach sequences monthly. SEO Agent publishes 4 posts targeting local keywords that rank.",
+    title: "Your pipeline\nnever runs dry.",
+    body: "50 personalized outreach sequences monthly. 4 SEO posts ranking for local keywords. New customers find you while you serve the ones you have.",
   },
   {
     label: "CHAPTER 06 — REVENUE",
-    title: "Every customer\nhandled.",
-    body: "Sales Agent generates scripts, proposals, and objection handlers in 60 seconds. Support Agent handles 24/7 customer replies.",
+    title: "Close more.\nSupport everyone.",
+    body: "Scripts and proposals in 60 seconds. Every customer query answered instantly. No lead slips. No customer left behind.",
   },
   {
     label: "CHAPTER 07 — INTELLIGENCE",
-    title: "The full picture,\nclear as day.",
-    body: "Financial Agent delivers monthly P&L in plain English with 3 actionable recommendations. Brand Voice Agent powers all 8 agents.",
+    title: "Your business\nthinks for itself.",
+    body: "Monthly P&L in plain English. Cash flow predictions. Three specific actions. Your brand voice powering every single agent, every day.",
   },
   {
     label: "CHAPTER 08 — AUTOPILOT",
-    title: "Your business\nruns itself.",
-    body: "4.2 hours saved every single day. 3.8× more reviews in 90 days. $8,400 average monthly agency revenue. While you slept.",
+    title: "This is what\nafter looks like.",
+    body: "4.2 hours saved every single day. 3.8× more reviews in 90 days. $8,400 average monthly agency revenue. The transformation is complete.",
   },
 ]
 
@@ -72,14 +72,14 @@ const AGENT_INFO = [
 
 /* ─── Camera positions per scene ───────────────────────────── */
 const CAM_POS = [
-  new THREE.Vector3(0,    0,    13.5),  // S0: dormant — far
-  new THREE.Vector3(0,    0.5,   9.5),  // S1: signal — approaching
-  new THREE.Vector3(0,    0,     5.0),  // S2: ignition — burst close
-  new THREE.Vector3(2.5,  1.5,   9.0),  // S3: content — low angle, city visible
-  new THREE.Vector3(-2.5, 2.5,   9.5),  // S4: growth — opposite side, more city
-  new THREE.Vector3(0,    3.5,  10.5),  // S5: revenue — elevated, full city spread
-  new THREE.Vector3(1.5,  1.0,   7.0),  // S6: intelligence — street level
-  new THREE.Vector3(0,    1.5,  16.0),  // S7: autopilot — cosmic pull-back
+  new THREE.Vector3(0,    2.5,  14.0),  // S0: before — wide, city in fog
+  new THREE.Vector3(0,    1.5,  10.0),  // S1: signal — approaching, city wakes
+  new THREE.Vector3(0,   -0.5,   5.5),  // S2: activation — inside, orb ignites
+  new THREE.Vector3(3.5,  1.5,   9.5),  // S3: content — side angle, city lit
+  new THREE.Vector3(-3.5, 1.5,  10.0),  // S4: growth — opposite tower, full spread
+  new THREE.Vector3(0,    4.5,  12.0),  // S5: revenue — elevated, entire city
+  new THREE.Vector3(2.0,  0.5,   7.5),  // S6: intelligence — street level
+  new THREE.Vector3(0,    2.0,  18.0),  // S7: autopilot — cosmic pullback
 ]
 
 /* ─── Scene light colors ───────────────────────────────────── */
@@ -736,7 +736,9 @@ function JourneyScene() {
     const idx1   = Math.min(idx0 + 1, CAM_POS.length - 1)
     tempCam.current.lerpVectors(CAM_POS[idx0], CAM_POS[idx1], rawIdx - idx0)
     camera.position.lerp(tempCam.current, 0.055)
-    camera.lookAt(0, 0, 0)
+    /* LookAt shifts from orb (0,0) to city level (-1.8) as scroll progresses */
+    const lookY = THREE.MathUtils.lerp(0, -1.8, THREE.MathUtils.smoothstep(p, 0.2, 0.7))
+    camera.lookAt(0, lookY, 0)
 
     /* Burst spike at scene 2 (p ≈ 0.25) */
     const burstFac = Math.max(0, 1.0 - Math.abs(p - 0.25) * 38)
@@ -894,6 +896,15 @@ export default function HatomScroll() {
     })
   }
 
+  /* Jump to a specific chapter by computing its scroll position within the section */
+  const jumpToChapter = useCallback((i: number) => {
+    const el = sectionRef.current
+    if (!el) return
+    const sectionTop  = el.getBoundingClientRect().top + window.scrollY
+    const scrollRange = el.offsetHeight - window.innerHeight
+    window.scrollTo({ top: sectionTop + (i / SCENES.length) * scrollRange, behavior: "smooth" })
+  }, [])
+
   useEffect(() => {
     const el = sectionRef.current
     if (!el) return
@@ -943,92 +954,79 @@ export default function HatomScroll() {
           style={{ background: "radial-gradient(ellipse 75% 75% at 50% 50%, transparent 30%, rgba(3,7,18,0.72) 100%)" }}
         />
 
-        {/* ── TOP LEFT: Chapter label + active agent status ── */}
+        {/* ── TOP LEFT: Chapter label ── */}
         <div className="absolute top-8 left-8 md:left-14 z-20">
           <p
             key={`ch${sceneIdx}`}
-            className="text-xs font-bold tracking-[0.3em] uppercase animate-fade-up mb-1"
-            style={{ color: "rgba(99,102,241,0.65)" }}
+            className="text-xs font-bold tracking-[0.3em] uppercase animate-fade-up mb-1.5"
+            style={{ color: "rgba(124,58,237,0.70)" }}
           >
             {scene.label}
           </p>
           {activeAgent && (
-            <p
-              key={`ag${sceneIdx}`}
-              className="text-xs font-semibold tracking-widest uppercase animate-fade-up"
-              style={{ color: activeColor, animationDelay: "50ms" }}
-            >
-              ↳ {activeAgent.name} — online
-            </p>
+            <div key={`ag${sceneIdx}`} className="flex items-center gap-2 animate-fade-up" style={{ animationDelay: "50ms" }}>
+              <div className="w-1.5 h-1.5 rounded-full animate-pulse shrink-0" style={{ background: activeColor, boxShadow: `0 0 5px ${activeColor}` }} />
+              <p className="text-xs font-bold tracking-widest uppercase" style={{ color: activeColor }}>
+                {activeAgent.name} — {activeAgent.stat}
+              </p>
+            </div>
           )}
         </div>
 
-        {/* ── TOP RIGHT: Colored progress dots (each = one agent) ── */}
-        <div className="absolute top-8 right-8 md:right-14 z-20 flex items-center gap-2">
-          {SCENES.map((_, i) => {
+        {/* ── RIGHT: Chapter navigation dots ── */}
+        <div className="absolute right-5 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-4">
+          {SCENES.map((s, i) => {
             const col      = AGENT_COLORS[i] ?? "#6366f1"
             const isActive = i === sceneIdx
             const isPast   = i < sceneIdx
             return (
-              <div
+              <button
                 key={i}
-                className="rounded-full transition-all duration-500"
-                style={{
-                  width:      isActive ? "28px" : "7px",
-                  height:     "7px",
-                  background: isActive
-                    ? col
-                    : isPast
-                      ? `${col}55`
-                      : "rgba(255,255,255,0.08)",
-                  boxShadow: isActive ? `0 0 10px ${col}` : "none",
-                }}
-              />
+                onClick={() => jumpToChapter(i)}
+                aria-label={s.label}
+                className="relative flex items-center justify-end gap-2.5 group bg-transparent border-0 p-0 cursor-pointer"
+              >
+                {/* Hover tooltip */}
+                <span
+                  className="absolute right-6 text-[10px] font-bold tracking-widest uppercase whitespace-nowrap px-2 py-1 rounded pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-200"
+                  style={{
+                    color:            col,
+                    background:       "rgba(0,0,0,0.80)",
+                    border:           `1px solid ${col}30`,
+                    backdropFilter:   "blur(8px)",
+                  }}
+                >
+                  {s.label.split(" — ")[1]}
+                </span>
+                {/* Dot */}
+                <div
+                  className="rounded-full shrink-0 transition-all duration-500"
+                  style={{
+                    width:      isActive ? "11px" : "7px",
+                    height:     isActive ? "11px" : "7px",
+                    background: isActive
+                      ? col
+                      : isPast
+                        ? `${col}60`
+                        : "rgba(255,255,255,0.12)",
+                    boxShadow: isActive ? `0 0 10px ${col}, 0 0 22px ${col}44` : "none",
+                  }}
+                />
+              </button>
             )
           })}
         </div>
 
-        {/* ── RIGHT SIDE: Active agent info card (scenes 2–7) ── */}
-        {activeAgent && (
-          <div
-            key={`card${sceneIdx}`}
-            className="absolute z-20 pointer-events-none hidden md:block animate-fade-up"
-            style={{ right: "3.5rem", top: "50%", transform: "translateY(-50%)" }}
-          >
-            <div
-              className="rounded-2xl border px-6 py-5 backdrop-blur-sm"
-              style={{
-                borderColor: `${activeColor}28`,
-                background:  `${activeColor}0b`,
-                minWidth:    "220px",
-              }}
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <div
-                  className="w-2 h-2 rounded-full animate-pulse"
-                  style={{ background: activeColor, boxShadow: `0 0 6px ${activeColor}` }}
-                />
-                <span className="text-xs font-bold tracking-widest uppercase" style={{ color: activeColor }}>
-                  ONLINE
-                </span>
-              </div>
-              <p className="text-white font-bold text-base mb-1">{activeAgent.name}</p>
-              <p className="mb-4 text-xs" style={{ color: "rgba(255,255,255,0.28)" }}>{activeAgent.desc}</p>
-              <p className="font-mono font-bold text-2xl" style={{ color: activeColor }}>{activeAgent.stat}</p>
-            </div>
-          </div>
-        )}
-
         {/* ── BOTTOM LEFT: Story text ── */}
-        <div className="absolute bottom-20 left-8 md:left-14 z-20 max-w-xl pointer-events-none">
+        <div className="absolute bottom-20 left-8 md:left-14 z-20 max-w-lg pointer-events-none">
           <h2
             key={`t${sceneIdx}`}
-            className="font-extrabold leading-[0.9] mb-5 animate-fade-up"
+            className="font-extrabold leading-[0.88] mb-5 animate-fade-up"
             style={{
-              fontSize:      "clamp(2.2rem, 4.5vw, 4rem)",
+              fontSize:      "clamp(2.4rem, 5vw, 4.5rem)",
               fontFamily:    "'OCMikola', sans-serif",
               whiteSpace:    "pre-line",
-              letterSpacing: "-0.02em",
+              letterSpacing: "-0.025em",
             }}
           >
             {scene.title}
@@ -1036,16 +1034,40 @@ export default function HatomScroll() {
           <p
             key={`b${sceneIdx}`}
             className="text-gray-400 leading-relaxed animate-fade-up"
-            style={{ animationDelay: "90ms", fontSize: "clamp(0.875rem, 1.4vw, 1rem)", maxWidth: "380px" }}
+            style={{ animationDelay: "80ms", fontSize: "clamp(0.875rem, 1.35vw, 1rem)", maxWidth: "360px" }}
           >
             {scene.body}
           </p>
 
+          {/* Agent stat pill — integrated, not floating */}
+          {activeAgent && sceneIdx >= 2 && (
+            <div
+              key={`stat${sceneIdx}`}
+              className="mt-5 inline-flex items-center gap-3 animate-fade-up"
+              style={{ animationDelay: "130ms" }}
+            >
+              <div
+                className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
+                style={{ background: activeColor, boxShadow: `0 0 6px ${activeColor}` }}
+              />
+              <span className="font-mono font-bold text-sm" style={{ color: activeColor }}>
+                {activeAgent.stat}
+              </span>
+              <span className="text-xs" style={{ color: "rgba(255,255,255,0.28)" }}>
+                · {activeAgent.desc}
+              </span>
+            </div>
+          )}
+
           {sceneIdx === SCENES.length - 1 && (
             <a
               href="/signup"
-              className="inline-flex items-center gap-3 mt-8 px-7 py-3.5 rounded-xl text-white font-bold text-sm shadow-2xl shadow-indigo-900/60 hover:-translate-y-0.5 transition-transform animate-fade-up"
-              style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)", animationDelay: "180ms" }}
+              className="inline-flex items-center gap-3 mt-8 px-7 py-3.5 rounded-xl text-white font-bold text-sm hover:-translate-y-0.5 transition-transform animate-fade-up pointer-events-auto"
+              style={{
+                background:  "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                boxShadow:   "0 0 40px rgba(124,58,237,0.45)",
+                animationDelay: "180ms",
+              }}
             >
               Start free — no card required
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -1059,7 +1081,7 @@ export default function HatomScroll() {
         <button
           onClick={toggleMute}
           className="absolute bottom-24 right-8 md:right-14 z-30 flex items-center gap-2 text-[10px] tracking-[0.25em] uppercase transition-opacity hover:opacity-100"
-          style={{ color: muted ? "rgba(255,255,255,0.25)" : "rgba(99,102,241,0.65)" }}
+          style={{ color: muted ? "rgba(255,255,255,0.20)" : "rgba(124,58,237,0.65)" }}
           title={muted ? "Unmute" : "Mute"}
         >
           {muted ? (
@@ -1090,13 +1112,14 @@ export default function HatomScroll() {
           </p>
         </div>
 
-        {/* Progress bar — gradient follows agent colors */}
-        <div className="absolute bottom-0 left-0 right-0 h-px bg-white/[0.04] z-20">
+        {/* Progress bar */}
+        <div className="absolute bottom-0 left-0 right-0 h-px z-20" style={{ background: "rgba(124,58,237,0.12)" }}>
           <div
             className="h-full transition-all duration-700"
             style={{
               width:      `${((sceneIdx + 1) / SCENES.length) * 100}%`,
-              background: `linear-gradient(90deg, ${AGENT_COLORS[0]}, ${AGENT_COLORS[Math.min(sceneIdx, 7)]})`,
+              background: `linear-gradient(90deg, #4f46e5, ${AGENT_COLORS[Math.min(sceneIdx, 7)]})`,
+              boxShadow:  `0 0 8px ${AGENT_COLORS[Math.min(sceneIdx, 7)]}`,
             }}
           />
         </div>
