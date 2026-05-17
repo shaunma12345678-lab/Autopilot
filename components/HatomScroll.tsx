@@ -4,7 +4,7 @@ import { useRef, useMemo, useEffect, useState, useCallback } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Stars, Sparkles } from "@react-three/drei"
 import * as THREE from "three"
-import { EffectComposer, Bloom, ChromaticAberration } from "@react-three/postprocessing"
+import { EffectComposer, Bloom, ChromaticAberration, DepthOfField, Vignette } from "@react-three/postprocessing"
 import { BlendFunction } from "postprocessing"
 import { gsap } from "gsap"
 
@@ -179,10 +179,10 @@ const CRYSTAL_FRAG = /* glsl */`
 
     /* ── Stage-blended color palette ── */
     /* void-violet → crystal-indigo → electric-blue → blazing-lavender */
-    vec3 c0 = vec3(0.04, 0.00, 0.20);   /* void deep violet */
-    vec3 c1 = vec3(0.18, 0.06, 0.62);   /* crystal rich indigo */
-    vec3 c2 = vec3(0.05, 0.40, 1.00);   /* network electric blue */
-    vec3 c3 = vec3(0.88, 0.75, 1.00);   /* blaze white-lavender */
+    vec3 c0 = vec3(0.04, 0.00, 0.20);
+    vec3 c1 = vec3(0.18, 0.06, 0.62);
+    vec3 c2 = vec3(0.05, 0.40, 1.00);
+    vec3 c3 = vec3(0.88, 0.75, 1.00);
 
     vec3 base;
     if (uProgress < 0.33) {
@@ -194,20 +194,42 @@ const CRYSTAL_FRAG = /* glsl */`
     }
 
     /* ── Iridescence: angle + time = rainbow facet shimmer ── */
-    float iriPhase  = NdotV * 4.0 + uTime * 0.12;
-    vec3  iriColor  = 0.5 + 0.5 * cos(6.28318 * (vec3(0.0, 0.333, 0.666) + iriPhase * 0.5));
+    float iriPhase = NdotV * 4.0 + uTime * 0.12;
+    vec3  iriColor = 0.5 + 0.5 * cos(6.28318 * (vec3(0.0, 0.333, 0.666) + iriPhase * 0.5));
     base = mix(base, iriColor, (1.0 - NdotV) * 0.48 * smoothstep(0.15, 0.52, uProgress));
 
-    /* ── Crystal sparkle: hard reflection at geometric angles ── */
+    /* ── Caustic interference bands — refractive light splitting ── */
+    float c1x = sin(vWorldPosition.x * 3.8 + uTime * 0.55) *
+                sin(vWorldPosition.y * 4.2 - uTime * 0.38) *
+                sin(vWorldPosition.z * 3.1 + uTime * 0.46);
+    float c2x = sin(vWorldPosition.x * 6.5 - uTime * 0.72) *
+                cos(vWorldPosition.z * 5.8 + uTime * 0.31);
+    float causticBand = pow(max(0.0, c1x), 2.0) * 0.45 + pow(max(0.0, c2x), 2.0) * 0.30;
+    vec3  causticCol  = mix(vec3(0.4, 0.2, 1.0), vec3(0.2, 0.8, 1.0), c1x * 0.5 + 0.5);
+    base += causticCol * causticBand * smoothstep(0.20, 0.55, uProgress) * 1.4;
+
+    /* ── Subsurface scattering — translucent inner glow from backlight ── */
+    float sss    = pow(1.0 - NdotV, 3.5) * smoothstep(0.18, 0.55, uProgress);
+    vec3  sssCol = mix(vec3(0.55, 0.05, 1.00), vec3(0.15, 0.65, 1.00), uProgress);
+    base += sssCol * sss * 0.85;
+
+    /* ── Crystal sparkle: hard specular at geometric angles — sharper ── */
     float sx = sin(vWorldPosition.x * 6.1 + uTime * 0.7);
     float sy = sin(vWorldPosition.y * 4.8 + uTime * 0.9);
     float sz = sin(vWorldPosition.z * 5.5 + uTime * 0.6);
-    float sparkle = pow(max(0.0, sx * sy * sz), 5.0) * smoothstep(0.2, 0.55, uProgress);
-    base += vec3(1.0, 0.92, 1.0) * sparkle * 1.2;
+    float sparkle = pow(max(0.0, sx * sy * sz), 3.5) * smoothstep(0.2, 0.55, uProgress);
+    base += vec3(1.0, 0.92, 1.0) * sparkle * 2.8;
 
-    /* ── Fresnel rim glow ── */
+    /* ── Internal refraction glints — secondary micro-specular layer ── */
+    float rx = sin(vWorldPosition.x * 11.3 - uTime * 1.1);
+    float ry = sin(vWorldPosition.y * 9.7  + uTime * 0.8);
+    float rz = sin(vWorldPosition.z * 10.1 - uTime * 0.9);
+    float refractGlint = pow(max(0.0, rx * ry * rz), 6.0);
+    base += vec3(0.85, 0.90, 1.0) * refractGlint * 1.6 * smoothstep(0.3, 0.6, uProgress);
+
+    /* ── Fresnel rim glow — stronger ── */
     vec3 rimCol = mix(vec3(0.48, 0.18, 1.00), vec3(0.18, 0.78, 1.00), uProgress);
-    base += rimCol * fresnel * 1.9;
+    base += rimCol * fresnel * 2.6;
 
     /* ── Hold surge: inner radiance brightens when paused ── */
     base += vec3(0.55, 0.22, 1.0) * uHold * (1.0 - NdotV) * 0.8;
@@ -590,7 +612,7 @@ const CITY_COUNT = CITY_SIZE * CITY_SIZE
 
 function CityScene() {
   const buildMeshRef  = useRef<THREE.InstancedMesh>(null)
-  const buildMatRef   = useRef<THREE.MeshBasicMaterial>(null)
+  const buildMatRef   = useRef<THREE.MeshStandardMaterial>(null)
   const buildGlowRef  = useRef<THREE.InstancedMesh>(null)
   const buildGlowMatRef = useRef<THREE.MeshBasicMaterial>(null)
   const gridMatRef    = useRef<THREE.LineBasicMaterial>(null)
@@ -613,11 +635,11 @@ function CityScene() {
   const buildData = useMemo(() => {
     /* Buildings pure black — capped so max world y ≈ −1.5, keeping crystal above city */
     const palette = [
-      new THREE.Color("#000000"),
-      new THREE.Color("#010005"),
-      new THREE.Color("#000003"),
-      new THREE.Color("#020008"),
-      new THREE.Color("#010002"),
+      new THREE.Color("#060016"),
+      new THREE.Color("#04000e"),
+      new THREE.Color("#08001c"),
+      new THREE.Color("#050012"),
+      new THREE.Color("#030009"),
     ]
     const out: { h: number; color: THREE.Color }[] = []
     for (let row = 0; row < CITY_SIZE; row++) {
@@ -713,7 +735,7 @@ function CityScene() {
       {/* Black building bodies — render after glow so they occlude it, leaving edge rim */}
       <instancedMesh ref={buildMeshRef} args={[undefined, undefined, CITY_COUNT]} renderOrder={2}>
         <boxGeometry args={[1, 1, 1]} />
-        <meshBasicMaterial ref={buildMatRef} transparent opacity={0} vertexColors />
+        <meshStandardMaterial ref={buildMatRef} transparent opacity={0} vertexColors metalness={0.92} roughness={0.08} />
       </instancedMesh>
     </>
   )
@@ -1016,7 +1038,7 @@ function JourneyScene() {
     ringRefs.forEach((ref, i) => {
       if (!ref.current) return
       ref.current.rotation.z = t * RINGS[i].speed
-      ;(ref.current.material as THREE.MeshBasicMaterial).opacity =
+      ;(ref.current.material as THREE.MeshStandardMaterial).opacity =
         THREE.MathUtils.smoothstep(p, ringThresholds[i], ringThresholds[i] + 0.04) * 0.40
     })
 
@@ -1059,7 +1081,7 @@ function JourneyScene() {
         {RINGS.map((cfg, i) => (
           <mesh key={i} ref={ringRefs[i]} rotation={cfg.rotation}>
             <torusGeometry args={[cfg.r, 0.012, 16, 128]} />
-            <meshBasicMaterial color={cfg.color} transparent opacity={0} />
+            <meshStandardMaterial color={cfg.color} emissive={cfg.color} emissiveIntensity={1.2} transparent opacity={0} metalness={0.3} roughness={0.1} />
           </mesh>
         ))}
 
@@ -1072,7 +1094,7 @@ function JourneyScene() {
             <group key={i} position={pos}>
               <mesh ref={(el) => { if (el) satRefs.current[i] = el as unknown as THREE.Mesh }} scale={[0, 0, 0]}>
                 <sphereGeometry args={[0.13, 16, 16]} />
-                <meshBasicMaterial color={AGENT_COLORS[i]} />
+                <meshStandardMaterial color={AGENT_COLORS[i]} emissive={AGENT_COLORS[i]} emissiveIntensity={0.8} metalness={0.4} roughness={0.15} />
               </mesh>
               <sprite ref={(el) => { if (el) satSprRefs.current[i] = el }} scale={[1.1, 1.1, 1.1]}>
                 <spriteMaterial
@@ -1374,11 +1396,12 @@ export default function HatomScroll() {
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
         <Canvas
           camera={{ position: [0, 13.0, 26.0], fov: 50 }}
-          gl={{ antialias: true, alpha: false }}
+          gl={{ antialias: true, alpha: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.15 }}
           style={{ width: "100%", height: "100%" }}
         >
           <JourneyScene />
           <EffectComposer multisampling={0}>
+            <DepthOfField focusDistance={0.025} focalLength={0.018} bokehScale={4.0} />
             <Bloom
               luminanceThreshold={0.14}
               luminanceSmoothing={0.82}
@@ -1390,6 +1413,7 @@ export default function HatomScroll() {
               offset={[0.0005, 0.0005] as unknown as THREE.Vector2}
               blendFunction={BlendFunction.NORMAL}
             />
+            <Vignette eskil={false} offset={0.12} darkness={0.95} />
           </EffectComposer>
         </Canvas>
       </div>
