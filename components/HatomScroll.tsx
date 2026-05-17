@@ -55,16 +55,16 @@ const AGENT_COLORS = [
   "#f59e0b", "#ec4899", "#f97316", "#14b8a6",
 ]
 
-/* ─── Camera waypoints ─────────────────────────────────────── */
+/* ─── Camera waypoints — elevated so city stays at bottom ─── */
 const CAM_POS = [
-  new THREE.Vector3(0,     10.5, 24.0),
-  new THREE.Vector3(0,      5.5, 17.5),
-  new THREE.Vector3(0,      0.5,  7.5),
-  new THREE.Vector3( 4.8,   2.0,  9.5),
-  new THREE.Vector3(-4.8,   2.0, 10.0),
-  new THREE.Vector3(0,      6.0, 13.0),
-  new THREE.Vector3( 1.8,   0.5,  6.0),
-  new THREE.Vector3(0,      3.0, 26.0),
+  new THREE.Vector3(0,    13.0, 26.0),
+  new THREE.Vector3(0,     9.0, 20.0),
+  new THREE.Vector3(0,     6.5, 14.0),
+  new THREE.Vector3( 4.8,  5.5, 12.0),
+  new THREE.Vector3(-4.8,  5.5, 12.0),
+  new THREE.Vector3(0,     8.5, 16.0),
+  new THREE.Vector3( 1.8,  5.0,  9.5),
+  new THREE.Vector3(0,     7.0, 28.0),
 ]
 
 /* ─── Per-chapter light colors ─────────────────────────────── */
@@ -325,17 +325,69 @@ const CITY_FRAG = /* glsl */`
   uniform float uFade;
 
   void main() {
-    vec2  uvScaled = vUv * 32.0;
-    vec2  g  = fract(uvScaled);
-    float d  = min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y));
-    float line = 1.0 - smoothstep(0.0, 0.044, d);
-    float p1 = 0.55 + 0.45 * sin(uTime * 1.1 + vUv.x * 14.0 - vUv.y * 9.0);
-    float p2 = 0.50 + 0.50 * sin(uTime * 0.42 + vUv.y * 6.0 + vUv.x * 4.0);
-    /* Purple-shifted grid lines */
-    vec3 col = mix(vec3(0.06, 0.02, 0.28), vec3(0.50, 0.30, 1.00), line * p1);
-    col += vec3(0.15, 0.05, 0.50) * line * p2 * 0.45;
-    float edgeFade = smoothstep(0.0, 0.14, min(min(vUv.x, 1.0-vUv.x), min(vUv.y, 1.0-vUv.y)));
-    float alpha = line * (0.55 + p1 * 0.45) * edgeFade * uFade;
+    /* Solid purple floor base */
+    vec3 baseCol = vec3(0.07, 0.00, 0.22);
+
+    /* Grid lines at building spacing */
+    vec2  uvGrid = vUv * 32.0;
+    vec2  g      = fract(uvGrid);
+    float d      = min(min(g.x, 1.0-g.x), min(g.y, 1.0-g.y));
+    float line   = 1.0 - smoothstep(0.0, 0.055, d);
+
+    /* Animated pulse */
+    float p1 = 0.55 + 0.45 * sin(uTime * 0.9 + vUv.x * 14.0 - vUv.y * 9.0);
+    float p2 = 0.50 + 0.50 * sin(uTime * 0.40 + vUv.y * 6.0 + vUv.x * 4.0);
+
+    /* Neon purple grid lines — brighter, sharper */
+    vec3 lineCol = mix(vec3(0.62, 0.18, 1.00), vec3(0.88, 0.48, 1.00), p1);
+
+    /* Edge fade */
+    float edgeFade = smoothstep(0.0, 0.12, min(min(vUv.x, 1.0-vUv.x), min(vUv.y, 1.0-vUv.y)));
+
+    vec3 col   = baseCol + lineCol * line * 1.6 * p1;
+    col       += vec3(0.18, 0.03, 0.48) * p2 * 0.30;
+
+    /* Mostly opaque — this IS the purple floor */
+    float alpha = (0.88 + line * 0.12) * edgeFade * uFade;
+    gl_FragColor = vec4(col, alpha);
+  }
+`
+
+/* ── Purple floor glow — additive halo over the base plane ── */
+const GLOW_VERT = /* glsl */`
+  varying vec2 vUv;
+  void main() {
+    vUv         = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+
+const GLOW_FRAG = /* glsl */`
+  precision mediump float;
+  varying vec2  vUv;
+  uniform float uTime;
+  uniform float uFade;
+
+  void main() {
+    vec2  center = vUv - 0.5;
+    float dist   = length(center);
+
+    /* Radial purple glow — brightest at center, fades to edges */
+    float glow   = pow(1.0 - smoothstep(0.0, 0.5, dist), 1.5);
+
+    /* Ripple rings radiating outward */
+    float ripple = 0.5 + 0.5 * sin(dist * 22.0 - uTime * 1.5);
+
+    /* Fine grid overlay matching building footprints */
+    vec2  uvGrid   = vUv * 34.0;
+    vec2  gf       = fract(uvGrid);
+    float dg       = min(min(gf.x, 1.0-gf.x), min(gf.y, 1.0-gf.y));
+    float gridLine = 1.0 - smoothstep(0.0, 0.07, dg);
+
+    /* Purple neon color */
+    vec3 col = mix(vec3(0.42, 0.06, 1.00), vec3(0.72, 0.28, 1.00), ripple * 0.35 + gridLine * 0.45);
+
+    float alpha = (glow * 0.32 + gridLine * glow * 0.50 + ripple * glow * 0.10) * uFade;
     gl_FragColor = vec4(col, alpha);
   }
 `
@@ -530,7 +582,7 @@ function SceneBackground() {
 
 const CITY_SIZE  = 32
 const CITY_SPACE = 0.88
-const CITY_Y     = -4.5
+const CITY_Y     = -6.5
 const CITY_COUNT = CITY_SIZE * CITY_SIZE
 
 function CityScene() {
@@ -545,20 +597,23 @@ function CityScene() {
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
   }), [])
 
-  const buildData = useMemo(() => {
-    /* City stays BLACK — but tall buildings pick up more violet */
-    const base      = new THREE.Color("#020008")
-    const palette   = [
-      new THREE.Color("#050118"),
-      new THREE.Color("#0a0228"),
-      new THREE.Color("#0d0330"),
-      new THREE.Color("#030112"),
-      new THREE.Color("#080220"),
-    ]
-    const midViolet  = new THREE.Color("#150540")
-    const highViolet = new THREE.Color("#2d0878")   // visible purple on tallest
-    const brightAcc  = new THREE.Color("#4a0e9e")   // rare very-tall accent
+  const glowMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   GLOW_VERT,
+    fragmentShader: GLOW_FRAG,
+    uniforms: { uTime: { value: 0 }, uFade: { value: 0 } },
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  }), [])
 
+  const buildData = useMemo(() => {
+    /* Buildings are pure black — the purple comes from the floor glow beneath them */
+    const palette = [
+      new THREE.Color("#000000"),
+      new THREE.Color("#010005"),
+      new THREE.Color("#000003"),
+      new THREE.Color("#020008"),
+      new THREE.Color("#010002"),
+    ]
     const out: { h: number; color: THREE.Color }[] = []
     for (let row = 0; row < CITY_SIZE; row++) {
       for (let col = 0; col < CITY_SIZE; col++) {
@@ -568,14 +623,7 @@ function CityScene() {
         const boost = Math.max(0, 1 - dist * 0.52)
         const isTall = Math.random() > 0.70
         const h = isTall ? 0.6 + boost * 5.5 + Math.random() * 2.8 : 0.04 + Math.random() * 0.25
-        const t = Math.min(1, h / 8.5)
-        const r = Math.random()
-        let target: THREE.Color
-        if (r < 0.06 && h > 4)      target = brightAcc
-        else if (r < 0.18 && h > 3) target = highViolet
-        else if (r < 0.32 && h > 2) target = midViolet
-        else                         target = palette[Math.floor(Math.random() * palette.length)]
-        out.push({ h, color: base.clone().lerp(target, t * 0.88 + 0.12) })
+        out.push({ h, color: palette[Math.floor(Math.random() * palette.length)] })
       }
     }
     return out
@@ -611,25 +659,33 @@ function CityScene() {
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
   }, [buildData])
 
-  useEffect(() => () => { cityShader.dispose(); gridGeo.dispose() }, [cityShader, gridGeo])
+  useEffect(() => () => { cityShader.dispose(); gridGeo.dispose(); glowMat.dispose() }, [cityShader, gridGeo, glowMat])
 
   useFrame(({ clock }) => {
     const t    = clock.getElapsedTime()
     const fade = THREE.MathUtils.smoothstep(_prog.current, 0.02, 0.12)
     cityShader.uniforms.uTime.value = t
     cityShader.uniforms.uFade.value = fade
-    if (buildMatRef.current) buildMatRef.current.opacity = fade * 0.94
-    if (gridMatRef.current)  gridMatRef.current.opacity  = fade * 0.28 * (0.7 + 0.3 * Math.sin(t * 0.55))
+    glowMat.uniforms.uTime.value    = t
+    glowMat.uniforms.uFade.value    = fade
+    if (buildMatRef.current) buildMatRef.current.opacity = fade * 0.98
+    if (gridMatRef.current)  gridMatRef.current.opacity  = fade * 0.32 * (0.7 + 0.3 * Math.sin(t * 0.55))
   })
 
   return (
     <>
+      {/* Solid purple floor */}
       <mesh position={[0, CITY_Y - 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[CITY_SIZE * CITY_SPACE + 8, CITY_SIZE * CITY_SPACE + 8]} />
         <primitive object={cityShader} attach="material" />
       </mesh>
+      {/* Additive purple glow — outlines building bases */}
+      <mesh position={[0, CITY_Y + 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[CITY_SIZE * CITY_SPACE + 20, CITY_SIZE * CITY_SPACE + 20]} />
+        <primitive object={glowMat} attach="material" />
+      </mesh>
       <lineSegments geometry={gridGeo}>
-        <lineBasicMaterial ref={gridMatRef} color="#5822d0" transparent opacity={0} />
+        <lineBasicMaterial ref={gridMatRef} color="#6622e8" transparent opacity={0} />
       </lineSegments>
       <instancedMesh ref={buildMeshRef} args={[undefined, undefined, CITY_COUNT]}>
         <boxGeometry args={[1, 1, 1]} />
@@ -873,9 +929,8 @@ function JourneyScene() {
     tempCam.current.lerpVectors(CAM_POS[idx0], CAM_POS[idx1], rawIdx - idx0)
     camera.position.lerp(tempCam.current, 0.055)
 
-    let lookY = p < 0.20
-      ? THREE.MathUtils.lerp(-3.0, 0.0, p / 0.20)
-      : THREE.MathUtils.lerp(0.0, -0.7, THREE.MathUtils.smoothstep(p, 0.35, 0.85))
+    /* Always look down toward city — shifts from steep (-4.5) to moderate (-2.5) */
+    const lookY = THREE.MathUtils.lerp(-4.5, -2.5, THREE.MathUtils.smoothstep(p, 0.0, 0.85))
     lookTarget.current.set(0, lookY, 0)
     camera.lookAt(lookTarget.current)
 
@@ -1008,11 +1063,13 @@ function JourneyScene() {
       <pointLight                   position={[-4, -3, -3]}  intensity={0.80} color="#7c3aed" />
       <pointLight                   position={[0, 0, 6]}     intensity={0.28} color="#ffffff" />
       <pointLight ref={accentLight} position={[0, 3, 5]}     intensity={0}    color="#6366f1" />
-      {/* Purple street-level atmosphere lights */}
-      <pointLight position={[-9,  1.0, -9]} intensity={1.4} color="#5020c0" distance={22} />
-      <pointLight position={[ 9,  1.0,  9]} intensity={1.2} color="#6030d0" distance={20} />
-      <pointLight position={[ 0,  1.5,-12]} intensity={1.8} color="#3010a8" distance={28} />
-      <pointLight position={[-10, 0.5,  6]} intensity={1.0} color="#7c3aed" distance={16} />
+      {/* Purple ground-outline lights — at city floor level (CITY_Y + 1.5 = -5.0) */}
+      <pointLight position={[-9, -5.0, -9]} intensity={3.2} color="#5020c0" distance={22} />
+      <pointLight position={[ 9, -5.0,  9]} intensity={2.8} color="#6030d0" distance={20} />
+      <pointLight position={[ 0, -5.0,-12]} intensity={4.0} color="#3010a8" distance={28} />
+      <pointLight position={[-10,-5.0,  6]} intensity={2.4} color="#7c3aed" distance={16} />
+      <pointLight position={[ 6, -5.0, -5]} intensity={2.2} color="#5825cc" distance={14} />
+      <pointLight position={[-4, -5.0,  8]} intensity={2.0} color="#6c28e8" distance={14} />
     </>
   )
 }
@@ -1182,7 +1239,7 @@ export default function HatomScroll() {
       {/* ══ WEBGL ══ */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
         <Canvas
-          camera={{ position: [0, 10.5, 24.0], fov: 50 }}
+          camera={{ position: [0, 13.0, 26.0], fov: 50 }}
           gl={{ antialias: true, alpha: false }}
           style={{ width: "100%", height: "100%" }}
         >
