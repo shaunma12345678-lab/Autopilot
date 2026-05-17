@@ -304,7 +304,7 @@ export default function LandingPage() {
 
         {/* Scroll arrow */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 animate-fade-up delay-700">
-          <a href="#stats" className="flex flex-col items-center gap-2 transition-colors animate-scroll-arrow" style={{ color: "rgba(124,58,237,0.5)" }}>
+          <a href="#journey" className="flex flex-col items-center gap-2 transition-colors animate-scroll-arrow" style={{ color: "rgba(124,58,237,0.5)" }}>
             <span className="text-xs uppercase tracking-widest font-medium">scroll</span>
             <svg width="16" height="24" viewBox="0 0 16 24" fill="none">
               <path d="M8 0v20M1 13l7 7 7-7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -312,6 +312,9 @@ export default function LandingPage() {
           </a>
         </div>
       </section>
+
+      {/* ══ Hatom-Style Scroll Journey ══ */}
+      <HatomScroll />
 
       {/* ══ Stats bar ══ */}
       <section id="stats" className="px-6 py-16 mt-4 border-y border-white/[0.04]" style={{ background: "rgba(255,255,255,0.012)" }}>
@@ -421,9 +424,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
-      {/* ══ Hatom-Style Scroll Journey ══ */}
-      <HatomScroll />
 
       {/* ══ Meet Your AI Team ══ */}
       <section id="ai-team" className="px-6 py-28">

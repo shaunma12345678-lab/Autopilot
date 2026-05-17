@@ -70,16 +70,16 @@ const AGENT_INFO = [
   { name: "Brand Voice",      stat: "All 8 agents",     desc: "Custom AI profile for each client"       },
 ]
 
-/* ─── Camera positions per scene ───────────────────────────── */
+/* ─── Camera positions — aerial descent into city then pullback ─── */
 const CAM_POS = [
-  new THREE.Vector3(0,    2.5,  14.0),  // S0: before — wide, city in fog
-  new THREE.Vector3(0,    1.5,  10.0),  // S1: signal — approaching, city wakes
-  new THREE.Vector3(0,   -0.5,   5.5),  // S2: activation — inside, orb ignites
-  new THREE.Vector3(3.5,  1.5,   9.5),  // S3: content — side angle, city lit
-  new THREE.Vector3(-3.5, 1.5,  10.0),  // S4: growth — opposite tower, full spread
-  new THREE.Vector3(0,    4.5,  12.0),  // S5: revenue — elevated, entire city
-  new THREE.Vector3(2.0,  0.5,   7.5),  // S6: intelligence — street level
-  new THREE.Vector3(0,    2.0,  18.0),  // S7: autopilot — cosmic pullback
+  new THREE.Vector3(0,     10.5, 24.0),  // S0: aerial overview — full city spread below
+  new THREE.Vector3(0,      5.5, 17.5),  // S1: descending — towers rise on horizon
+  new THREE.Vector3(0,      0.5,  7.5),  // S2: street level — orb ignites, buildings surround
+  new THREE.Vector3( 4.8,   2.0,  9.5),  // S3: right district — city lit on that side
+  new THREE.Vector3(-4.8,   2.0, 10.0),  // S4: left district — opposite tower spread
+  new THREE.Vector3(0,      6.0, 13.0),  // S5: elevated vista — full skyline visible
+  new THREE.Vector3( 1.8,   0.5,  6.0),  // S6: close street — intelligence at eye level
+  new THREE.Vector3(0,      3.0, 26.0),  // S7: cosmic pullback — city fades to stars
 ]
 
 /* ─── Scene light colors ───────────────────────────────────── */
@@ -103,9 +103,9 @@ const SAT_POS: [number, number, number][] = AGENT_COLORS.map((_, i) => {
 
 /* ─── Ring configs ─────────────────────────────────────────── */
 const RINGS = [
-  { rotation: [Math.PI / 2, 0, 0] as [number, number, number],          r: 1.65, color: "#6366f1", speed:  0.42 },
-  { rotation: [Math.PI / 5, Math.PI / 3, 0] as [number, number, number],r: 2.05, color: "#8b5cf6", speed: -0.30 },
-  { rotation: [-Math.PI / 4, Math.PI / 4, 0] as [number, number, number],r:2.40, color: "#06b6d4", speed:  0.54 },
+  { rotation: [Math.PI / 2, 0, 0] as [number, number, number],           r: 1.65, color: "#6366f1", speed:  0.42 },
+  { rotation: [Math.PI / 5, Math.PI / 3, 0] as [number, number, number], r: 2.05, color: "#8b5cf6", speed: -0.30 },
+  { rotation: [-Math.PI / 4, Math.PI / 4, 0] as [number, number, number],r: 2.40, color: "#06b6d4", speed:  0.54 },
 ]
 
 /* ─── Agent reveal thresholds ──────────────────────────────── */
@@ -213,15 +213,17 @@ const CITY_FRAG = /* glsl */`
   uniform float uFade;
 
   void main() {
-    vec2 uvScaled = vUv * 24.0;
+    vec2 uvScaled = vUv * 32.0;
     vec2 g = fract(uvScaled);
     float d = min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y));
-    float line = 1.0 - smoothstep(0.0, 0.048, d);
-    float pulse = 0.55 + 0.45 * sin(uTime * 1.1 + vUv.x * 12.0 - vUv.y * 8.0);
-    vec3 gridCol = mix(vec3(0.14, 0.10, 0.48), vec3(0.5, 0.42, 1.0), line * pulse);
-    float edgeFade = smoothstep(0.0, 0.15, min(min(vUv.x, 1.0-vUv.x), min(vUv.y, 1.0-vUv.y)));
-    float alpha = line * pulse * edgeFade * uFade;
-    gl_FragColor = vec4(gridCol, alpha);
+    float line = 1.0 - smoothstep(0.0, 0.044, d);
+    float p1 = 0.55 + 0.45 * sin(uTime * 1.1 + vUv.x * 14.0 - vUv.y * 9.0);
+    float p2 = 0.50 + 0.50 * sin(uTime * 0.42 + vUv.y * 6.0 + vUv.x * 4.0);
+    vec3 col = mix(vec3(0.08, 0.04, 0.35), vec3(0.55, 0.38, 1.0), line * p1);
+    col += vec3(0.02, 0.18, 0.55) * line * p2 * 0.40;
+    float edgeFade = smoothstep(0.0, 0.14, min(min(vUv.x, 1.0-vUv.x), min(vUv.y, 1.0-vUv.y)));
+    float alpha = line * (0.55 + p1 * 0.45) * edgeFade * uFade;
+    gl_FragColor = vec4(col, alpha);
   }
 `
 
@@ -299,7 +301,7 @@ function HelixStreams() {
       for (let i = 0; i < HELIX_PTS; i++) {
         const idx    = h * HELIX_PTS + i
         const t      = i / HELIX_PTS
-        const angle  = t * Math.PI * 8      // 4 full rotations
+        const angle  = t * Math.PI * 8
         const radius = 1.70 + Math.sin(t * Math.PI) * 0.20
         const y      = (t - 0.5) * 4.0
 
@@ -361,8 +363,8 @@ const BG_FRAG = /* glsl */`
   precision highp float;
   varying vec2  vUv;
   uniform float uTime;
-  uniform vec3  uColorA;  /* deep background */
-  uniform vec3  uColorB;  /* accent nebula */
+  uniform vec3  uColorA;
+  uniform vec3  uColorB;
   uniform float uBlend;
 
   float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
@@ -377,7 +379,6 @@ const BG_FRAG = /* glsl */`
     float n1 = fbm(vUv * 2.5 + vec2(t, t*0.7));
     float n2 = fbm(vUv * 4.5 - vec2(t*0.6, t));
     vec3  col = mix(uColorA, uColorA + uColorB * 0.55, n1 * 0.5 + n2 * 0.25);
-    /* Radial vignette — brighter at center */
     float rad = 1.0 - length(vUv - 0.5) * 1.6;
     col      += uColorB * max(0.0, rad * rad) * 0.18;
     gl_FragColor = vec4(col, 1.0);
@@ -386,14 +387,14 @@ const BG_FRAG = /* glsl */`
 
 /* Per-scene palette pairs [dark, accent] */
 const BG_PALETTES: Array<[THREE.Color, THREE.Color]> = [
-  [new THREE.Color(0x010110), new THREE.Color(0x1a1055)], // 0 — dormant: deep void
-  [new THREE.Color(0x010115), new THREE.Color(0x2d1a7a)], // 1 — signal: violet deepens
-  [new THREE.Color(0x050210), new THREE.Color(0x5a1a8a)], // 2 — ignition: magenta burst
-  [new THREE.Color(0x010112), new THREE.Color(0x1a2880)], // 3 — content: deep blue
-  [new THREE.Color(0x010112), new THREE.Color(0x2a1870)], // 4 — growth: indigo
-  [new THREE.Color(0x010213), new THREE.Color(0x083060)], // 5 — revenue: ocean blue
-  [new THREE.Color(0x020111), new THREE.Color(0x3a1040)], // 6 — intelligence: deep rose
-  [new THREE.Color(0x010112), new THREE.Color(0x0e0e55)], // 7 — autopilot: cosmic
+  [new THREE.Color(0x010110), new THREE.Color(0x1a1055)], // 0 dormant
+  [new THREE.Color(0x010115), new THREE.Color(0x2d1a7a)], // 1 signal
+  [new THREE.Color(0x050210), new THREE.Color(0x5a1a8a)], // 2 ignition
+  [new THREE.Color(0x010112), new THREE.Color(0x1a2880)], // 3 content
+  [new THREE.Color(0x010112), new THREE.Color(0x2a1870)], // 4 growth
+  [new THREE.Color(0x010213), new THREE.Color(0x083060)], // 5 revenue
+  [new THREE.Color(0x020111), new THREE.Color(0x3a1040)], // 6 intelligence
+  [new THREE.Color(0x010112), new THREE.Color(0x0e0e55)], // 7 autopilot
 ]
 
 function SceneBackground() {
@@ -441,12 +442,12 @@ function SceneBackground() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   CITY COMPONENT
+   CITY COMPONENT — 32×32 grid, camera weaves through at street level
 ═══════════════════════════════════════════════════════════ */
 
-const CITY_SIZE  = 24
-const CITY_SPACE = 1.05
-const CITY_Y     = -5.0
+const CITY_SIZE  = 32
+const CITY_SPACE = 0.88
+const CITY_Y     = -4.5
 const CITY_COUNT = CITY_SIZE * CITY_SIZE
 
 function CityScene() {
@@ -465,24 +466,41 @@ function CityScene() {
 
   const buildData = useMemo(() => {
     const out: { h: number; color: THREE.Color }[] = []
-    const colA    = new THREE.Color("#4f46e5")
-    const colB    = new THREE.Color("#818cf8")
-    const colC    = new THREE.Color("#06b6d4")
-    const colD    = new THREE.Color("#7c3aed")
-    const colDark = new THREE.Color("#0c0b22")
+    // Deep cyberpunk palette — very dark purples, occasional violet
+    const palette = [
+      new THREE.Color("#0c0730"),
+      new THREE.Color("#18094c"),
+      new THREE.Color("#220c60"),
+      new THREE.Color("#0a0528"),
+      new THREE.Color("#2e1275"),
+      new THREE.Color("#050318"),
+    ]
+    const accentCyan   = new THREE.Color("#062845")
+    const accentViolet = new THREE.Color("#1a0858")
+    const base = new THREE.Color("#030112")
+
     for (let row = 0; row < CITY_SIZE; row++) {
       for (let col = 0; col < CITY_SIZE; col++) {
         const dx   = (col / (CITY_SIZE - 1)) * 2 - 1
         const dz   = (row / (CITY_SIZE - 1)) * 2 - 1
         const dist = Math.sqrt(dx * dx + dz * dz)
-        const boost = Math.max(0, 1 - dist * 0.75)
-        const isTall = Math.random() > 0.78
+        const boost = Math.max(0, 1 - dist * 0.55)
+        const isTall = Math.random() > 0.72
         const h = isTall
-          ? 0.6 + boost * 3.2 + Math.random() * 1.0
+          ? 0.6 + boost * 5.0 + Math.random() * 2.5
           : 0.04 + Math.random() * 0.22
-        const t    = Math.min(1, h / 4.2)
-        const base = colDark.clone().lerp([colA, colB, colC, colD][Math.floor(Math.random() * 4)], t * 0.9 + 0.1)
-        out.push({ h, color: base })
+        const t = Math.min(1, h / 8.0)
+        const randPalette = Math.random()
+        let target: THREE.Color
+        if (randPalette < 0.08) {
+          target = accentCyan
+        } else if (randPalette < 0.15) {
+          target = accentViolet
+        } else {
+          target = palette[Math.floor(Math.random() * palette.length)]
+        }
+        const c = base.clone().lerp(target, t * 0.92 + 0.08)
+        out.push({ h, color: c })
       }
     }
     return out
@@ -511,7 +529,7 @@ function CityScene() {
       const x   = (col - CITY_SIZE / 2) * CITY_SPACE
       const z   = (row - CITY_SIZE / 2) * CITY_SPACE
       dummy.position.set(x, CITY_Y + d.h / 2, z)
-      dummy.scale.set(0.42, d.h, 0.42)
+      dummy.scale.set(0.40, d.h, 0.40)
       dummy.updateMatrix()
       mesh.setMatrixAt(i, dummy.matrix)
       mesh.setColorAt(i, d.color)
@@ -524,21 +542,21 @@ function CityScene() {
 
   useFrame(({ clock }) => {
     const t    = clock.getElapsedTime()
-    const fade = THREE.MathUtils.smoothstep(_prog.current, 0.06, 0.22)
+    const fade = THREE.MathUtils.smoothstep(_prog.current, 0.02, 0.12)
     cityShader.uniforms.uTime.value = t
     cityShader.uniforms.uFade.value = fade
-    if (buildMatRef.current) buildMatRef.current.opacity = fade * 0.88
-    if (gridMatRef.current)  gridMatRef.current.opacity  = fade * 0.25 * (0.7 + 0.3 * Math.sin(t * 0.55))
+    if (buildMatRef.current) buildMatRef.current.opacity = fade * 0.95
+    if (gridMatRef.current)  gridMatRef.current.opacity  = fade * 0.30 * (0.7 + 0.3 * Math.sin(t * 0.55))
   })
 
   return (
     <>
       <mesh position={[0, CITY_Y - 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[CITY_SIZE * CITY_SPACE + 5, CITY_SIZE * CITY_SPACE + 5]} />
+        <planeGeometry args={[CITY_SIZE * CITY_SPACE + 8, CITY_SIZE * CITY_SPACE + 8]} />
         <primitive object={cityShader} attach="material" />
       </mesh>
       <lineSegments geometry={gridGeo}>
-        <lineBasicMaterial ref={gridMatRef} color="#5855d8" transparent opacity={0} />
+        <lineBasicMaterial ref={gridMatRef} color="#4a38d8" transparent opacity={0} />
       </lineSegments>
       <instancedMesh ref={buildMeshRef} args={[undefined, undefined, CITY_COUNT]}>
         <boxGeometry args={[1, 1, 1]} />
@@ -549,14 +567,14 @@ function CityScene() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   WINDOW LIGHTS — glowing dots on building faces
+   WINDOW LIGHTS — 1200 neon glow dots on building faces
 ═══════════════════════════════════════════════════════════ */
 
 function WindowLights() {
   const matRef = useRef<THREE.PointsMaterial>(null)
 
   const geo = useMemo(() => {
-    const count     = 900
+    const count     = 1200
     const positions = new Float32Array(count * 3)
     const colors    = new Float32Array(count * 3)
 
@@ -565,21 +583,25 @@ function WindowLights() {
       const col  = Math.floor(Math.random() * CITY_SIZE)
       const x    = (col - CITY_SIZE / 2) * CITY_SPACE
       const z    = (row - CITY_SIZE / 2) * CITY_SPACE
-      const h    = Math.random() * 4.5 * (0.3 + 0.7 * Math.random())
-      const off  = 0.21
+      // Height matches taller buildings
+      const h    = Math.random() * 8.5 * (0.2 + 0.8 * Math.random())
+      const off  = 0.20
       const side = Math.floor(Math.random() * 4)
 
-      positions[i*3]   = x + (side === 0 ? off : side === 1 ? -off : (Math.random()-0.5)*0.40)
+      positions[i*3]   = x + (side === 0 ? off : side === 1 ? -off : (Math.random()-0.5)*0.38)
       positions[i*3+1] = CITY_Y + h
-      positions[i*3+2] = z + (side === 2 ? off : side === 3 ? -off : (Math.random()-0.5)*0.40)
+      positions[i*3+2] = z + (side === 2 ? off : side === 3 ? -off : (Math.random()-0.5)*0.38)
 
+      // Neon cyberpunk window colors — heavy violet/cyan bias
       const t = Math.random()
-      if (t < 0.55) {
-        colors[i*3] = 0.98; colors[i*3+1] = 0.88; colors[i*3+2] = 0.60 // warm amber
-      } else if (t < 0.80) {
-        colors[i*3] = 0.75; colors[i*3+1] = 0.85; colors[i*3+2] = 1.00 // cool blue
+      if (t < 0.40) {
+        colors[i*3] = 0.90; colors[i*3+1] = 0.78; colors[i*3+2] = 1.00 // soft violet-white
+      } else if (t < 0.65) {
+        colors[i*3] = 0.55; colors[i*3+1] = 0.20; colors[i*3+2] = 1.00 // deep violet
+      } else if (t < 0.82) {
+        colors[i*3] = 0.06; colors[i*3+1] = 0.80; colors[i*3+2] = 1.00 // cyan
       } else {
-        colors[i*3] = 0.65; colors[i*3+1] = 0.50; colors[i*3+2] = 1.00 // indigo
+        colors[i*3] = 1.00; colors[i*3+1] = 0.12; colors[i*3+2] = 0.88 // hot pink
       }
     }
 
@@ -593,15 +615,15 @@ function WindowLights() {
 
   useFrame(({ clock }) => {
     if (!matRef.current) return
-    const fade = THREE.MathUtils.smoothstep(_prog.current, 0.06, 0.22)
-    matRef.current.opacity = fade * 0.70 * (0.88 + 0.12 * Math.sin(clock.getElapsedTime() * 1.1))
+    const fade = THREE.MathUtils.smoothstep(_prog.current, 0.02, 0.12)
+    matRef.current.opacity = fade * 0.72 * (0.88 + 0.12 * Math.sin(clock.getElapsedTime() * 1.1))
   })
 
   return (
     <points geometry={geo}>
       <pointsMaterial
         ref={matRef}
-        size={0.09}
+        size={0.10}
         vertexColors
         transparent
         opacity={0}
@@ -634,6 +656,7 @@ function JourneyScene() {
   const accentLight = useRef<THREE.PointLight>(null)
   const tempCam     = useRef(new THREE.Vector3())
   const tempColor   = useRef(new THREE.Color())
+  const lookTarget  = useRef(new THREE.Vector3())
 
   const orbMat = useMemo(() => new THREE.ShaderMaterial({
     vertexShader:   ORB_VERT,
@@ -652,7 +675,6 @@ function JourneyScene() {
   const halo1 = useMemo(() => new THREE.MeshBasicMaterial({ color: "#818cf8", transparent: true, opacity: 0, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false }), [])
   const halo2 = useMemo(() => new THREE.MeshBasicMaterial({ color: "#c4b5fd", transparent: true, opacity: 0, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false }), [])
 
-  /* Soft circular glow texture — eliminates the square sprite artifact */
   const glowTex = useMemo(() => {
     if (typeof window === "undefined") return null
     const c   = document.createElement("canvas")
@@ -730,17 +752,24 @@ function JourneyScene() {
     orbMat.uniforms.uCamPos.value.copy(camera.position)
     partMat.uniforms.uTime.value = t
 
-    /* Camera path lerp */
+    /* Camera path — smooth interpolation through CAM_POS waypoints */
     const rawIdx = p * (CAM_POS.length - 1)
     const idx0   = Math.floor(rawIdx)
     const idx1   = Math.min(idx0 + 1, CAM_POS.length - 1)
     tempCam.current.lerpVectors(CAM_POS[idx0], CAM_POS[idx1], rawIdx - idx0)
     camera.position.lerp(tempCam.current, 0.055)
-    /* LookAt shifts from orb (0,0) to city level (-1.8) as scroll progresses */
-    const lookY = THREE.MathUtils.lerp(0, -1.8, THREE.MathUtils.smoothstep(p, 0.2, 0.7))
-    camera.lookAt(0, lookY, 0)
 
-    /* Burst spike at scene 2 (p ≈ 0.25) */
+    /* LookAt: starts looking down into city (aerial), transitions to orb as camera descends */
+    let lookY: number
+    if (p < 0.20) {
+      lookY = THREE.MathUtils.lerp(-3.0, 0.0, p / 0.20)
+    } else {
+      lookY = THREE.MathUtils.lerp(0.0, -0.7, THREE.MathUtils.smoothstep(p, 0.35, 0.85))
+    }
+    lookTarget.current.set(0, lookY, 0)
+    camera.lookAt(lookTarget.current)
+
+    /* Burst spike at scene 2 (p ≈ 0.25) — orb ignition moment */
     const burstFac = Math.max(0, 1.0 - Math.abs(p - 0.25) * 38)
 
     /* Orb */
@@ -798,7 +827,6 @@ function JourneyScene() {
       ptLight.current.intensity = 2.2 + burstFac * 5.0
     }
 
-    /* Accent light follows active agent color */
     if (accentLight.current && si >= 2) {
       const idx = Math.min(si - 2, 7)
       tempColor.current.set(AGENT_COLORS[idx])
@@ -823,12 +851,12 @@ function JourneyScene() {
         <primitive object={orbMat} attach="material" />
       </mesh>
 
-      {/* Glow halo layers — fake bloom via BackSide additive spheres */}
+      {/* Glow halo layers */}
       <mesh><sphereGeometry args={[1.55, 32, 32]} /><primitive object={halo0} attach="material" /></mesh>
       <mesh><sphereGeometry args={[2.10, 32, 32]} /><primitive object={halo1} attach="material" /></mesh>
       <mesh><sphereGeometry args={[3.00, 32, 32]} /><primitive object={halo2} attach="material" /></mesh>
 
-      {/* Orbital rings — progressive reveal */}
+      {/* Orbital rings */}
       {RINGS.map((cfg, i) => (
         <mesh key={i} ref={ringRefs[i]} rotation={cfg.rotation}>
           <torusGeometry args={[cfg.r, 0.012, 16, 128]} />
@@ -850,7 +878,6 @@ function JourneyScene() {
               <sphereGeometry args={[0.13, 16, 16]} />
               <meshBasicMaterial color={AGENT_COLORS[i]} />
             </mesh>
-            {/* Circular glow halo — NOT a square */}
             <sprite
               ref={(el) => { if (el) satSprRefs.current[i] = el }}
               scale={[1.1, 1.1, 1.1]}
@@ -896,7 +923,7 @@ export default function HatomScroll() {
     })
   }
 
-  /* Jump to a specific chapter by computing its scroll position within the section */
+  /* Jump to a specific chapter by computing its scroll position */
   const jumpToChapter = useCallback((i: number) => {
     const el = sectionRef.current
     if (!el) return
@@ -905,6 +932,22 @@ export default function HatomScroll() {
     window.scrollTo({ top: sectionTop + (i / SCENES.length) * scrollRange, behavior: "smooth" })
   }, [])
 
+  /* Keyboard navigation — Arrow keys jump chapters */
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+        e.preventDefault()
+        jumpToChapter(Math.min(_sceneI.current + 1, SCENES.length - 1))
+      } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+        e.preventDefault()
+        jumpToChapter(Math.max(_sceneI.current - 1, 0))
+      }
+    }
+    window.addEventListener("keydown", handleKey)
+    return () => window.removeEventListener("keydown", handleKey)
+  }, [jumpToChapter])
+
+  /* GSAP ScrollTrigger */
   useEffect(() => {
     const el = sectionRef.current
     if (!el) return
@@ -940,7 +983,7 @@ export default function HatomScroll() {
         {/* Canvas */}
         <div className="absolute inset-0">
           <Canvas
-            camera={{ position: [0, 0, 13.5], fov: 46 }}
+            camera={{ position: [0, 10.5, 24.0], fov: 50 }}
             gl={{ antialias: true, alpha: false }}
             style={{ width: "100%", height: "100%" }}
           >
@@ -954,26 +997,86 @@ export default function HatomScroll() {
           style={{ background: "radial-gradient(ellipse 75% 75% at 50% 50%, transparent 30%, rgba(3,7,18,0.72) 100%)" }}
         />
 
-        {/* ── TOP LEFT: Chapter label ── */}
-        <div className="absolute top-8 left-8 md:left-14 z-20">
-          <p
-            key={`ch${sceneIdx}`}
-            className="text-xs font-bold tracking-[0.3em] uppercase animate-fade-up mb-1.5"
-            style={{ color: "rgba(124,58,237,0.70)" }}
-          >
-            {scene.label}
-          </p>
-          {activeAgent && (
-            <div key={`ag${sceneIdx}`} className="flex items-center gap-2 animate-fade-up" style={{ animationDelay: "50ms" }}>
-              <div className="w-1.5 h-1.5 rounded-full animate-pulse shrink-0" style={{ background: activeColor, boxShadow: `0 0 5px ${activeColor}` }} />
-              <p className="text-xs font-bold tracking-widest uppercase" style={{ color: activeColor }}>
-                {activeAgent.name} — {activeAgent.stat}
-              </p>
-            </div>
-          )}
+        {/* ══ TOP CENTER: Hatom-style horizontal chapter navigation ══ */}
+        <div
+          className="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-full"
+          style={{
+            top: "76px",
+            background:    "rgba(0,0,0,0.60)",
+            backdropFilter: "blur(20px)",
+            border:        "1px solid rgba(255,255,255,0.07)",
+            padding:       "6px 8px",
+          }}
+        >
+          {SCENES.map((s, i) => {
+            const col      = AGENT_COLORS[i] ?? "#6366f1"
+            const isActive = i === sceneIdx
+            const isPast   = i < sceneIdx
+            const shortName = s.label.split(" — ")[1]
+            return (
+              <button
+                key={i}
+                onClick={() => jumpToChapter(i)}
+                aria-label={s.label}
+                className="relative flex items-center gap-1.5 cursor-pointer rounded-full bg-transparent border-0 p-0 transition-all"
+                style={{
+                  padding:    isActive ? "4px 10px 4px 7px" : "4px 7px",
+                  background: isActive ? `${col}22` : "transparent",
+                  border:     isActive ? `1px solid ${col}55` : "1px solid transparent",
+                  transition: "all 0.45s cubic-bezier(0.34,1.56,0.64,1)",
+                }}
+              >
+                <div
+                  style={{
+                    width:      isActive ? "7px" : "5px",
+                    height:     isActive ? "7px" : "5px",
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    background: isActive ? col : isPast ? `${col}80` : "rgba(255,255,255,0.18)",
+                    boxShadow:  isActive ? `0 0 8px ${col}, 0 0 18px ${col}55` : "none",
+                    transition: "all 0.4s",
+                  }}
+                />
+                {isActive && (
+                  <span
+                    style={{
+                      fontSize:      "9px",
+                      fontWeight:    700,
+                      letterSpacing: "0.14em",
+                      color:         col,
+                      textTransform: "uppercase",
+                      whiteSpace:    "nowrap",
+                    }}
+                  >
+                    {shortName}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
 
-        {/* ── RIGHT: Chapter navigation dots ── */}
+        {/* ── TOP LEFT: Active agent name ── */}
+        {activeAgent && (
+          <div
+            key={`ag${sceneIdx}`}
+            className="absolute z-20 flex items-center gap-2 animate-fade-up"
+            style={{ top: "76px", left: "2rem" }}
+          >
+            <div
+              className="w-1.5 h-1.5 rounded-full animate-pulse shrink-0"
+              style={{ background: activeColor, boxShadow: `0 0 5px ${activeColor}` }}
+            />
+            <p
+              className="text-xs font-bold tracking-widest uppercase"
+              style={{ color: activeColor }}
+            >
+              {activeAgent.name} — {activeAgent.stat}
+            </p>
+          </div>
+        )}
+
+        {/* ── RIGHT: Chapter navigation dots (secondary, vertical) ── */}
         <div className="absolute right-5 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-4">
           {SCENES.map((s, i) => {
             const col      = AGENT_COLORS[i] ?? "#6366f1"
@@ -990,10 +1093,10 @@ export default function HatomScroll() {
                 <span
                   className="absolute right-6 text-[10px] font-bold tracking-widest uppercase whitespace-nowrap px-2 py-1 rounded pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-200"
                   style={{
-                    color:            col,
-                    background:       "rgba(0,0,0,0.80)",
-                    border:           `1px solid ${col}30`,
-                    backdropFilter:   "blur(8px)",
+                    color:          col,
+                    background:     "rgba(0,0,0,0.80)",
+                    border:         `1px solid ${col}30`,
+                    backdropFilter: "blur(8px)",
                   }}
                 >
                   {s.label.split(" — ")[1]}
@@ -1019,6 +1122,13 @@ export default function HatomScroll() {
 
         {/* ── BOTTOM LEFT: Story text ── */}
         <div className="absolute bottom-20 left-8 md:left-14 z-20 max-w-lg pointer-events-none">
+          <p
+            key={`ch${sceneIdx}`}
+            className="text-xs font-bold tracking-[0.28em] uppercase mb-3 animate-fade-up"
+            style={{ color: "rgba(124,58,237,0.65)" }}
+          >
+            {scene.label}
+          </p>
           <h2
             key={`t${sceneIdx}`}
             className="font-extrabold leading-[0.88] mb-5 animate-fade-up"
@@ -1039,7 +1149,7 @@ export default function HatomScroll() {
             {scene.body}
           </p>
 
-          {/* Agent stat pill — integrated, not floating */}
+          {/* Agent stat pill */}
           {activeAgent && sceneIdx >= 2 && (
             <div
               key={`stat${sceneIdx}`}
@@ -1064,8 +1174,8 @@ export default function HatomScroll() {
               href="/signup"
               className="inline-flex items-center gap-3 mt-8 px-7 py-3.5 rounded-xl text-white font-bold text-sm hover:-translate-y-0.5 transition-transform animate-fade-up pointer-events-auto"
               style={{
-                background:  "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                boxShadow:   "0 0 40px rgba(124,58,237,0.45)",
+                background:     "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                boxShadow:      "0 0 40px rgba(124,58,237,0.45)",
                 animationDelay: "180ms",
               }}
             >
@@ -1077,7 +1187,7 @@ export default function HatomScroll() {
           )}
         </div>
 
-        {/* ── BOTTOM RIGHT: Mute toggle + large scene number ── */}
+        {/* ── BOTTOM RIGHT: Mute toggle ── */}
         <button
           onClick={toggleMute}
           className="absolute bottom-24 right-8 md:right-14 z-30 flex items-center gap-2 text-[10px] tracking-[0.25em] uppercase transition-opacity hover:opacity-100"
@@ -1096,6 +1206,7 @@ export default function HatomScroll() {
           {muted ? "muted" : "sound on"}
         </button>
 
+        {/* Large ghosted chapter number */}
         <div className="absolute bottom-16 right-8 md:right-14 z-20 pointer-events-none select-none">
           <p
             key={`n${sceneIdx}`}
@@ -1112,12 +1223,28 @@ export default function HatomScroll() {
           </p>
         </div>
 
+        {/* Keyboard hint — only show at beginning */}
+        {sceneIdx === 0 && (
+          <div
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 pointer-events-none animate-fade-up"
+            style={{ color: "rgba(255,255,255,0.20)", animationDelay: "1s" }}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1"/>
+              <path d="M6 4v4M4 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span style={{ fontSize: "9px", letterSpacing: "0.2em", textTransform: "uppercase", fontWeight: 600 }}>
+              arrow keys or scroll
+            </span>
+          </div>
+        )}
+
         {/* Progress bar */}
         <div className="absolute bottom-0 left-0 right-0 h-px z-20" style={{ background: "rgba(124,58,237,0.12)" }}>
           <div
             className="h-full transition-all duration-700"
             style={{
-              width:      `${((sceneIdx + 1) / SCENES.length) * 100}%`,
+              width:     `${((sceneIdx + 1) / SCENES.length) * 100}%`,
               background: `linear-gradient(90deg, #4f46e5, ${AGENT_COLORS[Math.min(sceneIdx, 7)]})`,
               boxShadow:  `0 0 8px ${AGENT_COLORS[Math.min(sceneIdx, 7)]}`,
             }}
