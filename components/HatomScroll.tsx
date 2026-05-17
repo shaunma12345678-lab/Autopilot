@@ -226,6 +226,221 @@ const CITY_FRAG = /* glsl */`
 `
 
 /* ═══════════════════════════════════════════════════════════
+   HELIX DATA STREAMS — signature visual
+   Three interlocked helixes carrying "data pulses" around the orb
+═══════════════════════════════════════════════════════════ */
+
+const HELIX_COUNT  = 3
+const HELIX_PTS    = 300
+const HELIX_TOTAL  = HELIX_COUNT * HELIX_PTS
+
+const HELIX_VERT = /* glsl */`
+  attribute vec3  aColor;
+  attribute float aPhase;
+  attribute float aHelixId;
+  uniform float   uTime;
+  uniform float   uProgress;
+  varying vec3    vColor;
+  varying float   vAlpha;
+
+  void main() {
+    vColor = aColor;
+
+    /* Travelling pulse along the helix */
+    float travel = mod(aPhase - uTime * 1.3, 6.2832);
+    float pulse  = 1.0 - smoothstep(0.0, 1.4, abs(travel - 3.14159));
+
+    /* Per-helix reveal threshold */
+    float threshold = aHelixId * 0.055;
+    float reveal    = smoothstep(threshold, threshold + 0.10, uProgress);
+
+    vAlpha = (0.12 + pulse * 0.88) * reveal;
+
+    /* Rotate each helix at different speed/direction */
+    float dir  = mod(aHelixId, 2.0) < 0.5 ? 1.0 : -1.0;
+    float rotY = uTime * 0.20 * dir + aHelixId * 2.0944; /* 120° apart */
+    float cosR = cos(rotY), sinR = sin(rotY);
+    vec3  pos  = position;
+    float nx   = pos.x * cosR - pos.z * sinR;
+    float nz   = pos.x * sinR + pos.z * cosR;
+    pos.x = nx; pos.z = nz;
+
+    vec4  mvPos      = modelViewMatrix * vec4(pos, 1.0);
+    gl_PointSize     = (1.6 + pulse * 4.5) * (240.0 / -mvPos.z);
+    gl_Position      = projectionMatrix * mvPos;
+  }
+`
+
+const HELIX_FRAG = /* glsl */`
+  varying vec3  vColor;
+  varying float vAlpha;
+  void main() {
+    float d = length(gl_PointCoord - 0.5);
+    float a = smoothstep(0.5, 0.0, d);
+    gl_FragColor = vec4(vColor + 0.35 * vAlpha, a * vAlpha);
+  }
+`
+
+const HELIX_COLORS = [
+  new THREE.Color(AGENT_COLORS[0]), // indigo
+  new THREE.Color(AGENT_COLORS[2]), // violet
+  new THREE.Color(AGENT_COLORS[3]), // cyan
+]
+
+function HelixStreams() {
+  const { geo, mat } = useMemo(() => {
+    const positions = new Float32Array(HELIX_TOTAL * 3)
+    const colors    = new Float32Array(HELIX_TOTAL * 3)
+    const phases    = new Float32Array(HELIX_TOTAL)
+    const ids       = new Float32Array(HELIX_TOTAL)
+
+    for (let h = 0; h < HELIX_COUNT; h++) {
+      const col = HELIX_COLORS[h]
+      for (let i = 0; i < HELIX_PTS; i++) {
+        const idx    = h * HELIX_PTS + i
+        const t      = i / HELIX_PTS
+        const angle  = t * Math.PI * 8      // 4 full rotations
+        const radius = 1.70 + Math.sin(t * Math.PI) * 0.20
+        const y      = (t - 0.5) * 4.0
+
+        positions[idx*3  ] = Math.cos(angle) * radius
+        positions[idx*3+1] = y
+        positions[idx*3+2] = Math.sin(angle) * radius
+
+        const bright = 0.65 + 0.35 * Math.sin(t * Math.PI)
+        colors[idx*3  ] = col.r * bright
+        colors[idx*3+1] = col.g * bright
+        colors[idx*3+2] = col.b * bright
+
+        phases[idx] = t * Math.PI * 2
+        ids[idx]    = h
+      }
+    }
+
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    g.setAttribute('aColor',   new THREE.Float32BufferAttribute(colors,    3))
+    g.setAttribute('aPhase',   new THREE.Float32BufferAttribute(phases,    1))
+    g.setAttribute('aHelixId', new THREE.Float32BufferAttribute(ids,       1))
+
+    const m = new THREE.ShaderMaterial({
+      vertexShader:   HELIX_VERT,
+      fragmentShader: HELIX_FRAG,
+      uniforms: {
+        uTime:     { value: 0 },
+        uProgress: { value: 0 },
+      },
+      transparent: true,
+      depthWrite:  false,
+      blending:    THREE.AdditiveBlending,
+    })
+
+    return { geo: g, mat: m }
+  }, [])
+
+  useEffect(() => () => { geo.dispose(); mat.dispose() }, [geo, mat])
+
+  useFrame(({ clock }) => {
+    mat.uniforms.uTime.value     = clock.getElapsedTime()
+    mat.uniforms.uProgress.value = _prog.current
+  })
+
+  return <points geometry={geo} material={mat} />
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCENE BACKGROUND — per-scene atmospheric color shader
+═══════════════════════════════════════════════════════════ */
+
+const BG_VERT = /* glsl */`
+  varying vec2 vUv;
+  void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+`
+
+const BG_FRAG = /* glsl */`
+  precision highp float;
+  varying vec2  vUv;
+  uniform float uTime;
+  uniform vec3  uColorA;  /* deep background */
+  uniform vec3  uColorB;  /* accent nebula */
+  uniform float uBlend;
+
+  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  float noise(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);
+  }
+  float fbm(vec2 p){float v=0.0,a=0.5;for(int i=0;i<4;i++){v+=a*noise(p);p=p*2.0+vec2(1.7,9.2);a*=0.5;}return v;}
+
+  void main() {
+    float t  = uTime * 0.04;
+    float n1 = fbm(vUv * 2.5 + vec2(t, t*0.7));
+    float n2 = fbm(vUv * 4.5 - vec2(t*0.6, t));
+    vec3  col = mix(uColorA, uColorA + uColorB * 0.55, n1 * 0.5 + n2 * 0.25);
+    /* Radial vignette — brighter at center */
+    float rad = 1.0 - length(vUv - 0.5) * 1.6;
+    col      += uColorB * max(0.0, rad * rad) * 0.18;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`
+
+/* Per-scene palette pairs [dark, accent] */
+const BG_PALETTES: Array<[THREE.Color, THREE.Color]> = [
+  [new THREE.Color(0x010110), new THREE.Color(0x1a1055)], // 0 — dormant: deep void
+  [new THREE.Color(0x010115), new THREE.Color(0x2d1a7a)], // 1 — signal: violet deepens
+  [new THREE.Color(0x050210), new THREE.Color(0x5a1a8a)], // 2 — ignition: magenta burst
+  [new THREE.Color(0x010112), new THREE.Color(0x1a2880)], // 3 — content: deep blue
+  [new THREE.Color(0x010112), new THREE.Color(0x2a1870)], // 4 — growth: indigo
+  [new THREE.Color(0x010213), new THREE.Color(0x083060)], // 5 — revenue: ocean blue
+  [new THREE.Color(0x020111), new THREE.Color(0x3a1040)], // 6 — intelligence: deep rose
+  [new THREE.Color(0x010112), new THREE.Color(0x0e0e55)], // 7 — autopilot: cosmic
+]
+
+function SceneBackground() {
+  const matRef = useRef<THREE.ShaderMaterial | null>(null)
+  const colA   = useRef(new THREE.Color())
+  const colB   = useRef(new THREE.Color())
+
+  const bgMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   BG_VERT,
+    fragmentShader: BG_FRAG,
+    uniforms: {
+      uTime:   { value: 0 },
+      uColorA: { value: new THREE.Color(0x010110) },
+      uColorB: { value: new THREE.Color(0x1a1055) },
+      uBlend:  { value: 0 },
+    },
+    depthWrite: false,
+    depthTest:  false,
+    side: THREE.BackSide,
+  }), [])
+
+  useEffect(() => { matRef.current = bgMat; return () => bgMat.dispose() }, [bgMat])
+
+  useFrame(({ clock }) => {
+    if (!matRef.current) return
+    bgMat.uniforms.uTime.value = clock.getElapsedTime()
+
+    const si  = _sceneI.current
+    const [a0, b0] = BG_PALETTES[si]
+    const [a1, b1] = BG_PALETTES[Math.min(si + 1, BG_PALETTES.length - 1)]
+    const frac = THREE.MathUtils.clamp(_prog.current * SCENES.length - si, 0, 1)
+
+    colA.current.lerpColors(a0, a1, frac)
+    colB.current.lerpColors(b0, b1, frac)
+    bgMat.uniforms.uColorA.value.lerp(colA.current, 0.04)
+    bgMat.uniforms.uColorB.value.lerp(colB.current, 0.04)
+  })
+
+  return (
+    <mesh renderOrder={-1}>
+      <sphereGeometry args={[80, 32, 32]} />
+      <primitive object={bgMat} attach="material" />
+    </mesh>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════
    CITY COMPONENT
 ═══════════════════════════════════════════════════════════ */
 
@@ -526,8 +741,10 @@ function JourneyScene() {
 
   return (
     <>
+      <SceneBackground />
       <Stars radius={65} depth={50} count={2200} factor={3.5} saturation={0.4} fade speed={0.4} />
       <Sparkles count={90} size={1.3} scale={6} speed={0.15} color="#818cf8" noise={0.9} />
+      <HelixStreams />
 
       <CityScene />
 
@@ -600,6 +817,15 @@ export default function HatomScroll() {
   const sectionRef  = useRef<HTMLDivElement>(null)
   const lastBeatRef = useRef(-1)
   const [sceneIdx, setSceneIdx] = useState(0)
+  const [muted, setMuted]       = useState(false)
+
+  const toggleMute = () => {
+    import("@/lib/audio").then(({ audioEngine }) => {
+      if (!audioEngine) return
+      const nowMuted = audioEngine.toggle()
+      setMuted(!nowMuted)
+    })
+  }
 
   useEffect(() => {
     const el = sectionRef.current
@@ -762,7 +988,25 @@ export default function HatomScroll() {
           )}
         </div>
 
-        {/* ── BOTTOM RIGHT: Large translucent scene number ── */}
+        {/* ── BOTTOM RIGHT: Mute toggle + large scene number ── */}
+        <button
+          onClick={toggleMute}
+          className="absolute bottom-24 right-8 md:right-14 z-30 flex items-center gap-2 text-[10px] tracking-[0.25em] uppercase transition-opacity hover:opacity-100"
+          style={{ color: muted ? "rgba(255,255,255,0.25)" : "rgba(99,102,241,0.65)" }}
+          title={muted ? "Unmute" : "Mute"}
+        >
+          {muted ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            </svg>
+          )}
+          {muted ? "muted" : "sound on"}
+        </button>
+
         <div className="absolute bottom-16 right-8 md:right-14 z-20 pointer-events-none select-none">
           <p
             key={`n${sceneIdx}`}

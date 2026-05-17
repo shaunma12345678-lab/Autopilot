@@ -36,11 +36,23 @@ const ORB_VERT = /* glsl */`
   varying vec3 vNormal;
   varying vec3 vWorldPosition;
   varying vec2 vUv;
+  uniform float uTime;
+  uniform float uMorph;
+
+  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  float n2(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);
+  }
+  float fbm(vec2 p){float v=0.0,a=0.5;for(int i=0;i<5;i++){v+=a*n2(p);p*=2.1;p+=vec2(1.7,9.2);a*=0.5;}return v;}
+
   void main() {
     vNormal = normalize(normalMatrix * normal);
     vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    float disp = (fbm(vUv * 3.5 + vec2(uTime*0.18, uTime*0.13)) - 0.5) * 2.0;
+    vec3 displaced = position + normal * disp * uMorph * 0.35;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
   }
 `
 
@@ -86,9 +98,11 @@ function SceneContents() {
   const orbRef      = useRef<THREE.Mesh>(null)
   const satGroupRef = useRef<THREE.Group>(null)
 
-  const ring0 = useRef<THREE.Mesh>(null)
-  const ring1 = useRef<THREE.Mesh>(null)
-  const ring2 = useRef<THREE.Mesh>(null)
+  const ring0    = useRef<THREE.Mesh>(null)
+  const ring1    = useRef<THREE.Mesh>(null)
+  const ring2    = useRef<THREE.Mesh>(null)
+  const scanRing = useRef<THREE.Mesh>(null)
+  const scanMat  = useRef<THREE.MeshBasicMaterial>(null)
   const ringRefs = [ring0, ring1, ring2]
 
   /* Orb ShaderMaterial */
@@ -98,6 +112,7 @@ function SceneContents() {
     uniforms: {
       uTime:   { value: 0 },
       uCamPos: { value: new THREE.Vector3() },
+      uMorph:  { value: 0.38 },
     },
     transparent: true,
     depthWrite:  false,
@@ -138,6 +153,15 @@ function SceneContents() {
     orbMat.uniforms.uTime.value = t
     orbMat.uniforms.uCamPos.value.copy(camera.position)
 
+    /* Scan ring — oscillates vertically with opacity sync */
+    if (scanRing.current) {
+      scanRing.current.position.y = Math.sin(t * 0.75) * 1.05
+      scanRing.current.rotation.z = t * 0.1
+    }
+    if (scanMat.current) {
+      scanMat.current.opacity = 0.12 + Math.abs(Math.sin(t * 0.75)) * 0.22
+    }
+
     /* Orb slow self-rotation */
     if (orbRef.current) orbRef.current.rotation.y += 0.003
 
@@ -167,8 +191,14 @@ function SceneContents() {
       {/* ── Floating central orb ── */}
       <Float speed={1.8} rotationIntensity={0.25} floatIntensity={0.45}>
         <mesh ref={orbRef}>
-          <sphereGeometry args={[1.2, 64, 64]} />
+          <sphereGeometry args={[1.2, 96, 96]} />
           <primitive object={orbMat} attach="material" />
+        </mesh>
+
+        {/* Cyan scan ring — oscillates up/down */}
+        <mesh ref={scanRing}>
+          <torusGeometry args={[1.24, 0.005, 8, 96]} />
+          <meshBasicMaterial ref={scanMat} color="#06b6d4" transparent opacity={0.2} depthWrite={false} />
         </mesh>
       </Float>
 

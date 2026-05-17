@@ -147,12 +147,20 @@ export default function LandingPage() {
 
   const handleGateActivate = useCallback(() => {
     setGateVisible(false)
-    // Init audio on user gesture (required by browser autoplay policy)
     import("@/lib/audio").then(({ audioEngine }) => {
       if (!audioEngine) return
       audioEngine.init()
       audioEngine.startAmbient()
     })
+  }, [])
+
+  /* Rollover sound helper — safe to call before audio init */
+  const playRollover = useCallback(() => {
+    import("@/lib/audio").then(({ audioEngine }) => audioEngine?.playRollover())
+  }, [])
+
+  const playClick = useCallback(() => {
+    import("@/lib/audio").then(({ audioEngine }) => audioEngine?.playClick())
   }, [])
 
   async function submitReview(e: React.FormEvent) {
@@ -195,12 +203,12 @@ export default function LandingPage() {
           </div>
           <div className="hidden md:flex items-center gap-8">
             {[["#for-business","For Businesses"],["#how-it-works","For Agencies"],["#journey","Results"],["#ai-team","AI Team"],["#pricing","Pricing"]].map(([href,label]) => (
-              <a key={href} href={href} className="text-sm text-gray-500 hover:text-white transition-colors font-medium">{label}</a>
+              <a key={href} href={href} onMouseEnter={playRollover} className="text-sm text-gray-500 hover:text-white transition-colors font-medium">{label}</a>
             ))}
           </div>
           <div className="flex items-center gap-3">
-            <Link href="/login" className="text-sm text-gray-500 hover:text-white transition-colors font-medium">Sign in</Link>
-            <Link href="/signup" className="shimmer-btn px-4 py-2 text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-indigo-900/30 hover:shadow-indigo-900/60" style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}>
+            <Link href="/login" onMouseEnter={playRollover} className="text-sm text-gray-500 hover:text-white transition-colors font-medium">Sign in</Link>
+            <Link href="/signup" onMouseEnter={playRollover} onClick={playClick} className="shimmer-btn px-4 py-2 text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-indigo-900/30 hover:shadow-indigo-900/60" style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}>
               Start free
             </Link>
           </div>
@@ -248,6 +256,8 @@ export default function LandingPage() {
             <div className="flex flex-col sm:flex-row items-start gap-4 animate-fade-up delay-300">
               <Link
                 href="/signup"
+                onMouseEnter={playRollover}
+                onClick={playClick}
                 className="shimmer-btn px-8 py-3.5 text-white font-bold rounded-xl transition-all text-base shadow-2xl shadow-indigo-900/50 hover:shadow-indigo-900/70 hover:-translate-y-0.5"
                 style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}
               >
@@ -255,6 +265,7 @@ export default function LandingPage() {
               </Link>
               <a
                 href="#how-it-works"
+                onMouseEnter={playRollover}
                 className="border-btn px-8 py-3.5 border border-white/10 hover:border-white/20 text-gray-300 hover:text-white font-semibold rounded-xl transition-colors text-base"
               >
                 <span className="btn-border-top" /><span className="btn-border-bottom" /><span className="btn-border-left" /><span className="btn-border-right" />

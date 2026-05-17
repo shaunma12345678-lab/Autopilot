@@ -94,15 +94,45 @@ export class AutoPilotAudio {
     this.ambientGain.gain.linearRampToValueAtTime(0.14, t + 3.5)
   }
 
-  /** Play a cinematic "activation" sound for the given story beat index (0–4) */
+  /** Short hover tick — call on mouseenter for interactive elements */
+  playRollover() {
+    if (!this.ctx || this._muted) return
+    const ctx = this.ctx, now = ctx.currentTime
+    const osc = ctx.createOscillator()
+    const env = ctx.createGain()
+    osc.type = 'triangle'
+    osc.frequency.setValueAtTime(1600, now)
+    osc.frequency.exponentialRampToValueAtTime(1100, now + 0.07)
+    env.gain.setValueAtTime(0.028, now)
+    env.gain.exponentialRampToValueAtTime(0.001, now + 0.09)
+    osc.connect(env); env.connect(ctx.destination)
+    osc.start(now); osc.stop(now + 0.09)
+  }
+
+  /** Short click confirm sound */
+  playClick() {
+    if (!this.ctx || this._muted) return
+    const ctx = this.ctx, now = ctx.currentTime
+    const osc = ctx.createOscillator()
+    const env = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(880, now)
+    osc.frequency.exponentialRampToValueAtTime(440, now + 0.12)
+    env.gain.setValueAtTime(0.06, now)
+    env.gain.exponentialRampToValueAtTime(0.001, now + 0.18)
+    osc.connect(env); env.connect(ctx.destination)
+    osc.start(now); osc.stop(now + 0.18)
+  }
+
+  /** Play a cinematic "activation" sound for the given story beat index (0–7) */
   playBeat(beatIndex: number) {
     if (!this.ctx || this._muted) return
     const ctx = this.ctx
     const now = ctx.currentTime
 
-    // Per-beat pitch map (Hz)
-    const pitches = [660, 528, 880, 440, 990]
-    const freq = pitches[beatIndex % pitches.length]
+    // 8 unique pitches — one per chapter, musically related (A minor pentatonic + extensions)
+    const pitches = [220, 330, 495, 660, 528, 792, 440, 880]
+    const freq = pitches[Math.min(beatIndex, pitches.length - 1)]
 
     // --- Tonal ping ---
     const pingOsc = ctx.createOscillator()
