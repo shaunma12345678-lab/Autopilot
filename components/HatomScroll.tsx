@@ -4,6 +4,9 @@ import { useRef, useMemo, useEffect, useState, useCallback } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Stars, Sparkles } from "@react-three/drei"
 import * as THREE from "three"
+import { EffectComposer, Bloom, ChromaticAberration } from "@react-three/postprocessing"
+import { BlendFunction } from "postprocessing"
+import { gsap } from "gsap"
 
 /* ─── Scene narrative ──────────────────────────────────────── */
 const SCENES = [
@@ -1109,6 +1112,80 @@ function JourneyScene() {
    HATOMSCROLL — Hatom-style full-screen experience
 ═══════════════════════════════════════════════════════════ */
 
+/* ─── Film grain overlay ────────────────────────────────────── */
+function FilmGrain() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    canvas.width  = 256
+    canvas.height = 256
+    const ctx = canvas.getContext("2d")!
+    let raf: number, last = 0
+    const draw = (now: number) => {
+      raf = requestAnimationFrame(draw)
+      if (now - last < 55) return   // ~18fps — imperceptible flicker rate
+      last = now
+      const img = ctx.createImageData(256, 256)
+      const buf = img.data
+      for (let i = 0; i < buf.length; i += 4) {
+        const v = (Math.random() * 255) | 0
+        buf[i] = buf[i + 1] = buf[i + 2] = v
+        buf[i + 3] = 22
+      }
+      ctx.putImageData(img, 0, 0)
+    }
+    raf = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        position:       "fixed",
+        inset:          0,
+        zIndex:         8,
+        width:          "100vw",
+        height:         "100vh",
+        pointerEvents:  "none",
+        mixBlendMode:   "screen",
+        opacity:        0.038,
+        imageRendering: "pixelated",
+      } as React.CSSProperties}
+    />
+  )
+}
+
+/* ─── Magnetic CTA wrapper ──────────────────────────────────── */
+function MagneticCTA({ href, children, style }: { href: string; children: React.ReactNode; style?: React.CSSProperties }) {
+  const ref = useRef<HTMLAnchorElement>(null)
+
+  const onMove = (e: React.MouseEvent) => {
+    const el = ref.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const dx   = e.clientX - (rect.left + rect.width  / 2)
+    const dy   = e.clientY - (rect.top  + rect.height / 2)
+    gsap.to(el, { x: dx * 0.32, y: dy * 0.32, duration: 0.35, ease: "power2.out" })
+  }
+
+  const onLeave = () => {
+    gsap.to(ref.current, { x: 0, y: 0, duration: 0.65, ease: "elastic.out(1, 0.45)" })
+  }
+
+  return (
+    <a
+      ref={ref}
+      href={href}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+      style={{ display: "inline-block", willChange: "transform", ...style }}
+    >
+      {children}
+    </a>
+  )
+}
+
 export default function HatomScroll() {
   const scrollRef   = useRef<HTMLDivElement>(null)
   const lastIdxRef  = useRef(-1)
@@ -1118,6 +1195,11 @@ export default function HatomScroll() {
   const [dismissed, setDismissed] = useState(false)
   const [hidden, setHidden]       = useState(false)
   const [muted, setMuted]         = useState(false)
+
+  /* ── Per-section text refs for GSAP entrance animations ── */
+  const titleRefs = useRef<(HTMLHeadingElement | null)[]>([])
+  const bodyRefs  = useRef<(HTMLParagraphElement | null)[]>([])
+  const badgeRefs = useRef<(HTMLDivElement | null)[]>([])
 
   useEffect(() => {
     document.documentElement.style.overflow = "hidden"
@@ -1154,6 +1236,27 @@ export default function HatomScroll() {
     const t = setTimeout(dismiss, 700)
     return () => clearTimeout(t)
   }, [loaded, dismiss])
+
+  /* ── GSAP text entrance on chapter change ── */
+  useEffect(() => {
+    const title = titleRefs.current[sceneIdx]
+    const body  = bodyRefs.current[sceneIdx]
+    const badge = badgeRefs.current[sceneIdx]
+    if (!title) return
+    gsap.killTweensOf([title, body, badge].filter(Boolean))
+    gsap.fromTo(badge,
+      { opacity: 0, y: 7 },
+      { opacity: 1, y: 0, duration: 0.42, ease: "power3.out" }
+    )
+    gsap.fromTo(title,
+      { opacity: 0, y: 20, filter: "blur(5px)" },
+      { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.65, ease: "power3.out", delay: 0.07 }
+    )
+    gsap.fromTo(body,
+      { opacity: 0, y: 10 },
+      { opacity: 1, y: 0, duration: 0.65, ease: "power3.out", delay: 0.2 }
+    )
+  }, [sceneIdx])
 
   useEffect(() => {
     const container = scrollRef.current
@@ -1275,6 +1378,19 @@ export default function HatomScroll() {
           style={{ width: "100%", height: "100%" }}
         >
           <JourneyScene />
+          <EffectComposer multisampling={0}>
+            <Bloom
+              luminanceThreshold={0.14}
+              luminanceSmoothing={0.82}
+              intensity={2.4}
+              mipmapBlur
+              blendFunction={BlendFunction.ADD}
+            />
+            <ChromaticAberration
+              offset={[0.0005, 0.0005] as unknown as THREE.Vector2}
+              blendFunction={BlendFunction.NORMAL}
+            />
+          </EffectComposer>
         </Canvas>
       </div>
 
@@ -1295,7 +1411,7 @@ export default function HatomScroll() {
           fontSize: "clamp(0.9rem, 1.2vw, 1.5rem)",
           color: "#fff", letterSpacing: "0.12em", textTransform: "uppercase",
         }}>AutoPilot</span>
-        <a href="/signup" style={{
+        <MagneticCTA href="/signup" style={{
           pointerEvents: "auto",
           fontFamily: "'OCMikola', sans-serif",
           fontSize: "clamp(0.5rem, 0.7vw, 0.75rem)",
@@ -1304,7 +1420,7 @@ export default function HatomScroll() {
           paddingBottom: "0.15em",
         }}>
           Start Free →
-        </a>
+        </MagneticCTA>
       </header>
 
       {/* ══ PAGINATION DOTS — 2px, top center ══ */}
@@ -1361,42 +1477,51 @@ export default function HatomScroll() {
                 maxWidth: "34vw", pointerEvents: "auto",
               }}>
                 {/* Phase caption badge */}
-                <div style={{
-                  display: "inline-block",
-                  background: col, color: "#000",
-                  fontFamily: "'OCMikola', sans-serif",
-                  fontSize: "clamp(0.5rem, 0.65vw, 0.72rem)",
-                  fontWeight: 700, letterSpacing: "0.28em",
-                  textTransform: "uppercase",
-                  padding: "0.45em 1.15em 0.38em",
-                  marginBottom: "2vw",
-                }}>
+                <div
+                  ref={(el) => { badgeRefs.current[i] = el }}
+                  style={{
+                    display: "inline-block",
+                    background: col, color: "#000",
+                    fontFamily: "'OCMikola', sans-serif",
+                    fontSize: "clamp(0.5rem, 0.65vw, 0.72rem)",
+                    fontWeight: 700, letterSpacing: "0.28em",
+                    textTransform: "uppercase",
+                    padding: "0.45em 1.15em 0.38em",
+                    marginBottom: "2vw",
+                  }}
+                >
                   {caption}
                 </div>
 
                 {/* Title */}
-                <h2 style={{
-                  fontFamily: "'OCMikola', sans-serif",
-                  fontSize: "clamp(1.6rem, 2.9166vw, 4.2rem)",
-                  textTransform: "uppercase",
-                  letterSpacing: "-0.025em", lineHeight: 0.92,
-                  color: "#fff", margin: "0 0 1.8vw 0", whiteSpace: "pre-line",
-                }}>
+                <h2
+                  ref={(el) => { titleRefs.current[i] = el }}
+                  style={{
+                    fontFamily: "'OCMikola', sans-serif",
+                    fontSize: "clamp(1.6rem, 2.9166vw, 4.2rem)",
+                    textTransform: "uppercase",
+                    letterSpacing: "-0.025em", lineHeight: 0.92,
+                    color: "#fff", margin: "0 0 1.8vw 0", whiteSpace: "pre-line",
+                  }}
+                >
                   {s.title.toUpperCase()}
                 </h2>
 
                 {/* Body */}
-                <p style={{
-                  fontSize: "clamp(0.72rem, 0.9722vw, 1rem)",
-                  color: "rgba(255,255,255,0.45)", lineHeight: 1.75, margin: 0,
-                  ...(isLeft ? {} : { textAlign: "right" as const }),
-                }}>
+                <p
+                  ref={(el) => { bodyRefs.current[i] = el }}
+                  style={{
+                    fontSize: "clamp(0.72rem, 0.9722vw, 1rem)",
+                    color: "rgba(255,255,255,0.45)", lineHeight: 1.75, margin: 0,
+                    ...(isLeft ? {} : { textAlign: "right" as const }),
+                  }}
+                >
                   {s.body}
                 </p>
 
                 {i === SCENES.length - 1 && (
-                  <a href="/signup" style={{
-                    display: "inline-block", marginTop: "2.8vw",
+                  <MagneticCTA href="/signup" style={{
+                    marginTop: "2.8vw",
                     padding: "1.1em 3.2em",
                     background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
                     color: "#fff", fontFamily: "'OCMikola', sans-serif",
@@ -1406,7 +1531,7 @@ export default function HatomScroll() {
                     boxShadow: "0 0 40px rgba(124,58,237,0.42)",
                   }}>
                     Start Free
-                  </a>
+                  </MagneticCTA>
                 )}
               </div>
 
@@ -1483,6 +1608,9 @@ export default function HatomScroll() {
         )}
         {muted ? "Muted" : "Sound"}
       </button>
+
+      {/* ══ FILM GRAIN ══ */}
+      <FilmGrain />
     </div>
   )
 }
