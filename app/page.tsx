@@ -215,112 +215,98 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* ══ Hero ══ */}
+      {/* ══ Hero — full-screen cinematic ══ */}
       <section className="relative overflow-hidden" style={{ height: "100svh", minHeight: "600px" }}>
 
-        {/* Ambient WebGL background — fills full section */}
+        {/* Layer 1: HeroGL nebula — deepest background */}
         <div className="absolute inset-0 pointer-events-none">
           <HeroGL />
-          <div className="absolute top-1/4 left-[8%] w-[500px] h-[500px] bg-violet-600/[0.05] rounded-full blur-[140px] animate-orb-drift" />
-          <div className="absolute top-1/3 right-[8%] w-[420px] h-[420px] bg-cyan-600/[0.04] rounded-full blur-[140px] animate-orb-drift" style={{ animationDelay: "-9s" }} />
         </div>
 
-        {/* ── Hatom-style split layout: text left · 3D right ── */}
-        <div className="relative h-full max-w-7xl mx-auto px-6 flex flex-col md:grid md:grid-cols-[1fr_1fr] md:items-center gap-0">
+        {/* Layer 2: AICore3D — fills full viewport */}
+        <div className="absolute inset-0">
+          <AICore3D />
+        </div>
 
-          {/* ── Left: Text stack ── */}
-          <div className="relative z-10 flex flex-col justify-center pt-28 pb-8 md:pt-0 md:pb-0 md:pr-8">
+        {/* Layer 3: Atmospheric gradient masks — make text legible without hiding the orb */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ background: "radial-gradient(ellipse 65% 55% at 50% 48%, transparent 18%, rgba(5,8,16,0.52) 65%, rgba(5,8,16,0.90) 100%)" }}
+        />
+        <div className="absolute bottom-0 left-0 right-0 h-48 pointer-events-none" style={{ background: "linear-gradient(to top, rgba(5,8,16,1) 0%, transparent 100%)" }} />
+        <div className="absolute top-0 left-0 right-0 h-28 pointer-events-none" style={{ background: "linear-gradient(to bottom, rgba(5,8,16,0.5) 0%, transparent 100%)" }} />
 
-            <div className="inline-flex items-center gap-2.5 bg-indigo-950/70 border border-indigo-800/50 text-indigo-300 text-xs font-semibold px-4 py-1.5 rounded-full mb-8 w-fit tracking-widest uppercase animate-fade-up">
-              <GlowDot color="glow-dot-indigo" />
-              AI Business Operating System — 8 agents
-            </div>
+        {/* Ambient color orbs */}
+        <div className="absolute top-1/4 left-[8%] w-[500px] h-[500px] bg-violet-600/[0.05] rounded-full blur-[140px] animate-orb-drift pointer-events-none" />
+        <div className="absolute top-1/3 right-[8%] w-[420px] h-[420px] bg-cyan-600/[0.04] rounded-full blur-[140px] animate-orb-drift pointer-events-none" style={{ animationDelay: "-9s" }} />
 
-            <h1
-              className="font-extrabold leading-[0.9] tracking-tight mb-7 animate-fade-up delay-100"
-              style={{
-                fontSize: "clamp(2.4rem, 5.5vw, 4.5rem)",
-                fontFamily: "'OCMikola', sans-serif",
-              }}
-            >
-              Stop paying<br />
-              $3,000/mo for an<br />
-              agency.<br />
-              <span className="gradient-text">Pay $99.</span>
-            </h1>
+        {/* Layer 4: Centered story text */}
+        <div className="relative z-10 h-full flex flex-col items-center justify-center text-center px-6 pt-16">
 
-            <p className="text-lg text-gray-400 max-w-lg mb-10 leading-relaxed animate-fade-up delay-200">
-              8 AI agents that handle content, reputation, lead gen, SEO, sales, and support — automatically, every single day.
-            </p>
-
-            <div className="flex flex-col sm:flex-row items-start gap-4 animate-fade-up delay-300">
-              <Link
-                href="/signup"
-                onMouseEnter={playRollover}
-                onClick={playClick}
-                className="shimmer-btn px-8 py-3.5 text-white font-bold rounded-xl transition-all text-base shadow-2xl shadow-indigo-900/50 hover:shadow-indigo-900/70 hover:-translate-y-0.5"
-                style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}
-              >
-                Start free — no card required
-              </Link>
-              <a
-                href="#how-it-works"
-                onMouseEnter={playRollover}
-                className="border-btn px-8 py-3.5 border border-white/10 hover:border-white/20 text-gray-300 hover:text-white font-semibold rounded-xl transition-colors text-base"
-              >
-                <span className="btn-border-top" /><span className="btn-border-bottom" /><span className="btn-border-left" /><span className="btn-border-right" />
-                Build an agency →
-              </a>
-            </div>
-
-            <p className="mt-4 text-sm text-gray-700 animate-fade-up delay-400">Setup takes 5 minutes. First results in under 24 hours.</p>
-
-            {/* ── Mini stats row ── */}
-            <div className="mt-10 grid grid-cols-2 gap-4 animate-fade-up delay-500">
-              {STATS.slice(0, 4).map((s) => (
-                <div key={s.label} className="flex flex-col">
-                  <span
-                    className="font-extrabold text-white leading-none"
-                    style={{ fontSize: "clamp(1.4rem, 2.5vw, 2rem)", fontFamily: "'OCMikola', sans-serif" }}
-                  >
-                    {s.value}
-                  </span>
-                  <span className="text-xs text-gray-600 mt-0.5 leading-snug">{s.label}</span>
-                </div>
-              ))}
-            </div>
+          <div className="inline-flex items-center gap-2.5 bg-indigo-950/70 border border-indigo-800/50 text-indigo-300 text-xs font-semibold px-4 py-1.5 rounded-full mb-8 tracking-widest uppercase animate-fade-up">
+            <GlowDot color="glow-dot-indigo" />
+            AI Business Operating System — 8 agents
           </div>
 
-          {/* ── Right: 3D AI Core scene ── */}
-          <div
-            className="relative pointer-events-none md:pointer-events-auto animate-fade-up delay-200"
-            style={{ height: "clamp(320px, 55vw, 700px)" }}
+          <h1
+            className="font-extrabold leading-[0.88] tracking-tight mb-7 animate-fade-up delay-100"
+            style={{
+              fontSize: "clamp(3.2rem, 8.5vw, 7.5rem)",
+              fontFamily: "'OCMikola', sans-serif",
+            }}
           >
-            <AICore3D />
+            Stop paying<br />
+            <span className="gradient-text">$3,000/mo</span><br />
+            for an agency.
+          </h1>
 
-            {/* Floating agent-activity badge — positioned over the 3D scene */}
-            <div
-              className="absolute bottom-8 left-4 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl pointer-events-none animate-float"
-              style={{ background: "rgba(10,12,24,0.95)", backdropFilter: "blur(20px)" }}
-            >
-              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-              <div>
-                <p className="text-xs font-semibold text-white leading-tight">All 8 agents running</p>
-                <p className="text-xs text-gray-500">47 posts · 23 reviews · 12 leads</p>
-              </div>
-            </div>
+          <p className="text-lg text-gray-400 max-w-xl mb-10 leading-relaxed animate-fade-up delay-200">
+            8 AI agents handle content, reputation, lead gen, SEO, sales, and support — automatically, every single day.
+          </p>
 
-            {/* Floating review badge */}
-            <div
-              className="absolute top-8 right-4 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl pointer-events-none animate-float"
-              style={{ background: "rgba(10,12,24,0.95)", backdropFilter: "blur(20px)", animationDelay: "-3s" }}
+          <div className="flex flex-col sm:flex-row items-center gap-4 animate-fade-up delay-300">
+            <Link
+              href="/signup"
+              onMouseEnter={playRollover}
+              onClick={playClick}
+              className="shimmer-btn px-8 py-3.5 text-white font-bold rounded-xl transition-all text-base shadow-2xl shadow-indigo-900/50 hover:shadow-indigo-900/70 hover:-translate-y-0.5"
+              style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)" }}
             >
-              <span className="text-amber-400 text-sm font-bold shrink-0">★</span>
-              <div>
-                <p className="text-xs font-semibold text-white leading-tight">New 5★ review</p>
-                <p className="text-xs text-gray-500">Responded in 4 minutes</p>
-              </div>
-            </div>
+              Start free — no card required
+            </Link>
+            <a
+              href="#how-it-works"
+              onMouseEnter={playRollover}
+              className="border-btn px-8 py-3.5 border border-white/10 hover:border-white/20 text-gray-300 hover:text-white font-semibold rounded-xl transition-colors text-base"
+            >
+              <span className="btn-border-top" /><span className="btn-border-bottom" /><span className="btn-border-left" /><span className="btn-border-right" />
+              Build an agency →
+            </a>
+          </div>
+
+          <p className="mt-4 text-sm text-gray-700 animate-fade-up delay-400">Setup takes 5 minutes. First results in under 24 hours.</p>
+        </div>
+
+        {/* Layer 5: Floating status badges — bottom corners */}
+        <div
+          className="absolute bottom-16 left-8 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl z-10 animate-float pointer-events-none"
+          style={{ background: "rgba(10,12,24,0.90)", backdropFilter: "blur(20px)" }}
+        >
+          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          <div>
+            <p className="text-xs font-semibold text-white leading-tight">All 8 agents running</p>
+            <p className="text-xs text-gray-500">47 posts · 23 reviews · 12 leads</p>
+          </div>
+        </div>
+
+        <div
+          className="absolute bottom-16 right-8 hidden md:flex items-center gap-3 rounded-2xl border border-white/[0.08] px-4 py-3 shadow-2xl z-10 animate-float pointer-events-none"
+          style={{ background: "rgba(10,12,24,0.90)", backdropFilter: "blur(20px)", animationDelay: "-3s" }}
+        >
+          <span className="text-amber-400 text-sm font-bold shrink-0">★</span>
+          <div>
+            <p className="text-xs font-semibold text-white leading-tight">New 5★ review</p>
+            <p className="text-xs text-gray-500">Responded in 4 minutes</p>
           </div>
         </div>
 

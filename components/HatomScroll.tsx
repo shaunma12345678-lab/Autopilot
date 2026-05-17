@@ -75,10 +75,10 @@ const CAM_POS = [
   new THREE.Vector3(0,    0,    13.5),  // S0: dormant — far
   new THREE.Vector3(0,    0.5,   9.5),  // S1: signal — approaching
   new THREE.Vector3(0,    0,     5.0),  // S2: ignition — burst close
-  new THREE.Vector3(2.5,  2.0,   9.5),  // S3: content — elevated, city appears
-  new THREE.Vector3(-2.5, 3.0,  10.0),  // S4: growth — opposite side, more city
-  new THREE.Vector3(0,    4.5,  11.0),  // S5: revenue — top-down, full city
-  new THREE.Vector3(1.5,  1.5,   7.5),  // S6: intelligence — low angle
+  new THREE.Vector3(2.5,  1.5,   9.0),  // S3: content — low angle, city visible
+  new THREE.Vector3(-2.5, 2.5,   9.5),  // S4: growth — opposite side, more city
+  new THREE.Vector3(0,    3.5,  10.5),  // S5: revenue — elevated, full city spread
+  new THREE.Vector3(1.5,  1.0,   7.0),  // S6: intelligence — street level
   new THREE.Vector3(0,    1.5,  16.0),  // S7: autopilot — cosmic pull-back
 ]
 
@@ -213,7 +213,7 @@ const CITY_FRAG = /* glsl */`
   uniform float uFade;
 
   void main() {
-    vec2 uvScaled = vUv * 16.0;
+    vec2 uvScaled = vUv * 24.0;
     vec2 g = fract(uvScaled);
     float d = min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y));
     float line = 1.0 - smoothstep(0.0, 0.048, d);
@@ -444,9 +444,9 @@ function SceneBackground() {
    CITY COMPONENT
 ═══════════════════════════════════════════════════════════ */
 
-const CITY_SIZE  = 16
-const CITY_SPACE = 1.15
-const CITY_Y     = -5.2
+const CITY_SIZE  = 24
+const CITY_SPACE = 1.05
+const CITY_Y     = -5.0
 const CITY_COUNT = CITY_SIZE * CITY_SIZE
 
 function CityScene() {
@@ -468,6 +468,7 @@ function CityScene() {
     const colA    = new THREE.Color("#4f46e5")
     const colB    = new THREE.Color("#818cf8")
     const colC    = new THREE.Color("#06b6d4")
+    const colD    = new THREE.Color("#7c3aed")
     const colDark = new THREE.Color("#0c0b22")
     for (let row = 0; row < CITY_SIZE; row++) {
       for (let col = 0; col < CITY_SIZE; col++) {
@@ -477,10 +478,10 @@ function CityScene() {
         const boost = Math.max(0, 1 - dist * 0.75)
         const isTall = Math.random() > 0.78
         const h = isTall
-          ? 0.6 + boost * 2.0 + Math.random() * 0.9
+          ? 0.6 + boost * 3.2 + Math.random() * 1.0
           : 0.04 + Math.random() * 0.22
-        const t    = Math.min(1, h / 2.8)
-        const base = colDark.clone().lerp([colA, colB, colC][Math.floor(Math.random() * 3)], t * 0.9 + 0.1)
+        const t    = Math.min(1, h / 4.2)
+        const base = colDark.clone().lerp([colA, colB, colC, colD][Math.floor(Math.random() * 4)], t * 0.9 + 0.1)
         out.push({ h, color: base })
       }
     }
@@ -523,11 +524,11 @@ function CityScene() {
 
   useFrame(({ clock }) => {
     const t    = clock.getElapsedTime()
-    const fade = THREE.MathUtils.smoothstep(_prog.current, 0.14, 0.42)
+    const fade = THREE.MathUtils.smoothstep(_prog.current, 0.06, 0.22)
     cityShader.uniforms.uTime.value = t
     cityShader.uniforms.uFade.value = fade
-    if (buildMatRef.current) buildMatRef.current.opacity = fade * 0.80
-    if (gridMatRef.current)  gridMatRef.current.opacity  = fade * 0.16 * (0.7 + 0.3 * Math.sin(t * 0.55))
+    if (buildMatRef.current) buildMatRef.current.opacity = fade * 0.88
+    if (gridMatRef.current)  gridMatRef.current.opacity  = fade * 0.25 * (0.7 + 0.3 * Math.sin(t * 0.55))
   })
 
   return (
@@ -544,6 +545,71 @@ function CityScene() {
         <meshBasicMaterial ref={buildMatRef} transparent opacity={0} vertexColors />
       </instancedMesh>
     </>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════
+   WINDOW LIGHTS — glowing dots on building faces
+═══════════════════════════════════════════════════════════ */
+
+function WindowLights() {
+  const matRef = useRef<THREE.PointsMaterial>(null)
+
+  const geo = useMemo(() => {
+    const count     = 900
+    const positions = new Float32Array(count * 3)
+    const colors    = new Float32Array(count * 3)
+
+    for (let i = 0; i < count; i++) {
+      const row  = Math.floor(Math.random() * CITY_SIZE)
+      const col  = Math.floor(Math.random() * CITY_SIZE)
+      const x    = (col - CITY_SIZE / 2) * CITY_SPACE
+      const z    = (row - CITY_SIZE / 2) * CITY_SPACE
+      const h    = Math.random() * 4.5 * (0.3 + 0.7 * Math.random())
+      const off  = 0.21
+      const side = Math.floor(Math.random() * 4)
+
+      positions[i*3]   = x + (side === 0 ? off : side === 1 ? -off : (Math.random()-0.5)*0.40)
+      positions[i*3+1] = CITY_Y + h
+      positions[i*3+2] = z + (side === 2 ? off : side === 3 ? -off : (Math.random()-0.5)*0.40)
+
+      const t = Math.random()
+      if (t < 0.55) {
+        colors[i*3] = 0.98; colors[i*3+1] = 0.88; colors[i*3+2] = 0.60 // warm amber
+      } else if (t < 0.80) {
+        colors[i*3] = 0.75; colors[i*3+1] = 0.85; colors[i*3+2] = 1.00 // cool blue
+      } else {
+        colors[i*3] = 0.65; colors[i*3+1] = 0.50; colors[i*3+2] = 1.00 // indigo
+      }
+    }
+
+    const g = new THREE.BufferGeometry()
+    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+    g.setAttribute("color",    new THREE.Float32BufferAttribute(colors,    3))
+    return g
+  }, [])
+
+  useEffect(() => () => { geo.dispose() }, [geo])
+
+  useFrame(({ clock }) => {
+    if (!matRef.current) return
+    const fade = THREE.MathUtils.smoothstep(_prog.current, 0.06, 0.22)
+    matRef.current.opacity = fade * 0.70 * (0.88 + 0.12 * Math.sin(clock.getElapsedTime() * 1.1))
+  })
+
+  return (
+    <points geometry={geo}>
+      <pointsMaterial
+        ref={matRef}
+        size={0.09}
+        vertexColors
+        transparent
+        opacity={0}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+        sizeAttenuation
+      />
+    </points>
   )
 }
 
@@ -747,6 +813,7 @@ function JourneyScene() {
       <HelixStreams />
 
       <CityScene />
+      <WindowLights />
 
       {/* Central orb */}
       <mesh ref={orbRef}>

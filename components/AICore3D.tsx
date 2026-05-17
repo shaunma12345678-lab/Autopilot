@@ -183,10 +183,10 @@ function SceneContents() {
   return (
     <>
       {/* ── Starfield ── */}
-      <Stars radius={55} depth={40} count={2200} factor={3.5} saturation={0.5} fade speed={0.6} />
+      <Stars radius={55} depth={40} count={2800} factor={3.5} saturation={0.5} fade speed={0.6} />
 
       {/* ── Sparkles halo around orb ── */}
-      <Sparkles count={110} size={1.4} scale={4.5} speed={0.22} color="#818cf8" noise={0.9} />
+      <Sparkles count={180} size={1.4} scale={5.5} speed={0.22} color="#818cf8" noise={0.9} />
 
       {/* ── Floating central orb ── */}
       <Float speed={1.8} rotationIntensity={0.25} floatIntensity={0.45}>
@@ -257,7 +257,7 @@ function SceneContents() {
 export default function AICore3D() {
   return (
     <Canvas
-      camera={{ position: [0, 0, 7], fov: 46 }}
+      camera={{ position: [0, 0, 10], fov: 55 }}
       gl={{ antialias: true, alpha: true }}
       style={{ width: "100%", height: "100%", display: "block" }}
     >
