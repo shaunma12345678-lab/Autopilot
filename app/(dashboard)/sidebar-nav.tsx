@@ -4,13 +4,14 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: "▦" },
-  { href: "/content", label: "Content", icon: "✎" },
-  { href: "/reputation", label: "Reputation", icon: "★" },
-  { href: "/leads", label: "Leads", icon: "◎" },
-  { href: "/reports", label: "Reports", icon: "▤" },
-  { href: "/settings", label: "Settings", icon: "⚙" },
-  { href: "/billing", label: "Billing", icon: "◈" },
+  { href: "/dashboard",  label: "Dashboard",       icon: "▦" },
+  { href: "/content",    label: "Content",          icon: "✎" },
+  { href: "/reputation", label: "Reputation",       icon: "★" },
+  { href: "/leads",      label: "Leads",            icon: "◎" },
+  { href: "/website",    label: "Website Builder",  icon: "◻" },
+  { href: "/reports",    label: "Reports",          icon: "▤" },
+  { href: "/settings",   label: "Settings",         icon: "⚙" },
+  { href: "/billing",    label: "Billing",          icon: "◈" },
 ]
 
 export function SidebarNav() {
