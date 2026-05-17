@@ -4,10 +4,6 @@ import { useRef, useMemo, useEffect, useState, useCallback } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Stars, Sparkles } from "@react-three/drei"
 import * as THREE from "three"
-import gsap from "gsap"
-import { ScrollTrigger } from "gsap/ScrollTrigger"
-
-gsap.registerPlugin(ScrollTrigger)
 
 /* ─── Scene narrative ──────────────────────────────────────── */
 const SCENES = [
@@ -59,27 +55,16 @@ const AGENT_COLORS = [
   "#f59e0b", "#ec4899", "#f97316", "#14b8a6",
 ]
 
-const AGENT_INFO = [
-  { name: "Content Agent",    stat: "47 posts/month",   desc: "Instagram · Facebook · LinkedIn · Google" },
-  { name: "Reputation Agent", stat: "< 5 min response", desc: "Every review answered automatically"      },
-  { name: "Lead Gen Agent",   stat: "50 sequences/mo",  desc: "Cold email + LinkedIn outreach"           },
-  { name: "SEO Agent",        stat: "4 posts/month",    desc: "Local keywords that actually rank"        },
-  { name: "Sales Agent",      stat: "60-sec toolkit",   desc: "Scripts · objections · proposals"        },
-  { name: "Support Agent",    stat: "24/7 replies",     desc: "Answers from your FAQ, auto-escalates"   },
-  { name: "Financial Agent",  stat: "Monthly P&L",      desc: "Plain English with 3 action items"       },
-  { name: "Brand Voice",      stat: "All 8 agents",     desc: "Custom AI profile for each client"       },
-]
-
-/* ─── Camera positions — aerial descent into city then pullback ─── */
+/* ─── Camera positions ─────────────────────────────────────── */
 const CAM_POS = [
-  new THREE.Vector3(0,     10.5, 24.0),  // S0: aerial overview — full city spread below
-  new THREE.Vector3(0,      5.5, 17.5),  // S1: descending — towers rise on horizon
-  new THREE.Vector3(0,      0.5,  7.5),  // S2: street level — orb ignites, buildings surround
-  new THREE.Vector3( 4.8,   2.0,  9.5),  // S3: right district — city lit on that side
-  new THREE.Vector3(-4.8,   2.0, 10.0),  // S4: left district — opposite tower spread
-  new THREE.Vector3(0,      6.0, 13.0),  // S5: elevated vista — full skyline visible
-  new THREE.Vector3( 1.8,   0.5,  6.0),  // S6: close street — intelligence at eye level
-  new THREE.Vector3(0,      3.0, 26.0),  // S7: cosmic pullback — city fades to stars
+  new THREE.Vector3(0,     10.5, 24.0),
+  new THREE.Vector3(0,      5.5, 17.5),
+  new THREE.Vector3(0,      0.5,  7.5),
+  new THREE.Vector3( 4.8,   2.0,  9.5),
+  new THREE.Vector3(-4.8,   2.0, 10.0),
+  new THREE.Vector3(0,      6.0, 13.0),
+  new THREE.Vector3( 1.8,   0.5,  6.0),
+  new THREE.Vector3(0,      3.0, 26.0),
 ]
 
 /* ─── Scene light colors ───────────────────────────────────── */
@@ -103,15 +88,14 @@ const SAT_POS: [number, number, number][] = AGENT_COLORS.map((_, i) => {
 
 /* ─── Ring configs ─────────────────────────────────────────── */
 const RINGS = [
-  { rotation: [Math.PI / 2, 0, 0] as [number, number, number],           r: 1.65, color: "#6366f1", speed:  0.42 },
-  { rotation: [Math.PI / 5, Math.PI / 3, 0] as [number, number, number], r: 2.05, color: "#8b5cf6", speed: -0.30 },
-  { rotation: [-Math.PI / 4, Math.PI / 4, 0] as [number, number, number],r: 2.40, color: "#06b6d4", speed:  0.54 },
+  { rotation: [Math.PI / 2, 0, 0] as [number, number, number],            r: 1.65, color: "#6366f1", speed:  0.42 },
+  { rotation: [Math.PI / 5, Math.PI / 3, 0] as [number, number, number],  r: 2.05, color: "#8b5cf6", speed: -0.30 },
+  { rotation: [-Math.PI / 4, Math.PI / 4, 0] as [number, number, number], r: 2.40, color: "#06b6d4", speed:  0.54 },
 ]
 
-/* ─── Agent reveal thresholds ──────────────────────────────── */
 const AGENT_REVEAL_P = AGENT_COLORS.map((_, i) => 0.22 + (i / 8) * 0.55)
 
-/* ─── Module-level mutable state (GSAP ↔ R3F bridge) ──────── */
+/* ─── Module-level mutable state (scroll ↔ R3F bridge) ─────── */
 const _prog   = { current: 0 }
 const _sceneI = { current: 0 }
 
@@ -228,13 +212,12 @@ const CITY_FRAG = /* glsl */`
 `
 
 /* ═══════════════════════════════════════════════════════════
-   HELIX DATA STREAMS — signature visual
-   Three interlocked helixes carrying "data pulses" around the orb
+   HELIX DATA STREAMS
 ═══════════════════════════════════════════════════════════ */
 
-const HELIX_COUNT  = 3
-const HELIX_PTS    = 300
-const HELIX_TOTAL  = HELIX_COUNT * HELIX_PTS
+const HELIX_COUNT = 3
+const HELIX_PTS   = 300
+const HELIX_TOTAL = HELIX_COUNT * HELIX_PTS
 
 const HELIX_VERT = /* glsl */`
   attribute vec3  aColor;
@@ -247,26 +230,18 @@ const HELIX_VERT = /* glsl */`
 
   void main() {
     vColor = aColor;
-
-    /* Travelling pulse along the helix */
     float travel = mod(aPhase - uTime * 1.3, 6.2832);
     float pulse  = 1.0 - smoothstep(0.0, 1.4, abs(travel - 3.14159));
-
-    /* Per-helix reveal threshold */
     float threshold = aHelixId * 0.055;
     float reveal    = smoothstep(threshold, threshold + 0.10, uProgress);
-
     vAlpha = (0.12 + pulse * 0.88) * reveal;
-
-    /* Rotate each helix at different speed/direction */
     float dir  = mod(aHelixId, 2.0) < 0.5 ? 1.0 : -1.0;
-    float rotY = uTime * 0.20 * dir + aHelixId * 2.0944; /* 120° apart */
+    float rotY = uTime * 0.20 * dir + aHelixId * 2.0944;
     float cosR = cos(rotY), sinR = sin(rotY);
     vec3  pos  = position;
     float nx   = pos.x * cosR - pos.z * sinR;
     float nz   = pos.x * sinR + pos.z * cosR;
     pos.x = nx; pos.z = nz;
-
     vec4  mvPos      = modelViewMatrix * vec4(pos, 1.0);
     gl_PointSize     = (1.6 + pulse * 4.5) * (240.0 / -mvPos.z);
     gl_Position      = projectionMatrix * mvPos;
@@ -284,9 +259,9 @@ const HELIX_FRAG = /* glsl */`
 `
 
 const HELIX_COLORS = [
-  new THREE.Color(AGENT_COLORS[0]), // indigo
-  new THREE.Color(AGENT_COLORS[2]), // violet
-  new THREE.Color(AGENT_COLORS[3]), // cyan
+  new THREE.Color(AGENT_COLORS[0]),
+  new THREE.Color(AGENT_COLORS[2]),
+  new THREE.Color(AGENT_COLORS[3]),
 ]
 
 function HelixStreams() {
@@ -304,16 +279,13 @@ function HelixStreams() {
         const angle  = t * Math.PI * 8
         const radius = 1.70 + Math.sin(t * Math.PI) * 0.20
         const y      = (t - 0.5) * 4.0
-
         positions[idx*3  ] = Math.cos(angle) * radius
         positions[idx*3+1] = y
         positions[idx*3+2] = Math.sin(angle) * radius
-
         const bright = 0.65 + 0.35 * Math.sin(t * Math.PI)
         colors[idx*3  ] = col.r * bright
         colors[idx*3+1] = col.g * bright
         colors[idx*3+2] = col.b * bright
-
         phases[idx] = t * Math.PI * 2
         ids[idx]    = h
       }
@@ -328,10 +300,7 @@ function HelixStreams() {
     const m = new THREE.ShaderMaterial({
       vertexShader:   HELIX_VERT,
       fragmentShader: HELIX_FRAG,
-      uniforms: {
-        uTime:     { value: 0 },
-        uProgress: { value: 0 },
-      },
+      uniforms: { uTime: { value: 0 }, uProgress: { value: 0 } },
       transparent: true,
       depthWrite:  false,
       blending:    THREE.AdditiveBlending,
@@ -351,7 +320,7 @@ function HelixStreams() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   SCENE BACKGROUND — per-scene atmospheric color shader
+   SCENE BACKGROUND
 ═══════════════════════════════════════════════════════════ */
 
 const BG_VERT = /* glsl */`
@@ -365,7 +334,6 @@ const BG_FRAG = /* glsl */`
   uniform float uTime;
   uniform vec3  uColorA;
   uniform vec3  uColorB;
-  uniform float uBlend;
 
   float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
   float noise(vec2 p){
@@ -385,16 +353,15 @@ const BG_FRAG = /* glsl */`
   }
 `
 
-/* Per-scene palette pairs [dark, accent] */
 const BG_PALETTES: Array<[THREE.Color, THREE.Color]> = [
-  [new THREE.Color(0x010110), new THREE.Color(0x1a1055)], // 0 dormant
-  [new THREE.Color(0x010115), new THREE.Color(0x2d1a7a)], // 1 signal
-  [new THREE.Color(0x050210), new THREE.Color(0x5a1a8a)], // 2 ignition
-  [new THREE.Color(0x010112), new THREE.Color(0x1a2880)], // 3 content
-  [new THREE.Color(0x010112), new THREE.Color(0x2a1870)], // 4 growth
-  [new THREE.Color(0x010213), new THREE.Color(0x083060)], // 5 revenue
-  [new THREE.Color(0x020111), new THREE.Color(0x3a1040)], // 6 intelligence
-  [new THREE.Color(0x010112), new THREE.Color(0x0e0e55)], // 7 autopilot
+  [new THREE.Color(0x010110), new THREE.Color(0x1a1055)],
+  [new THREE.Color(0x010115), new THREE.Color(0x2d1a7a)],
+  [new THREE.Color(0x050210), new THREE.Color(0x5a1a8a)],
+  [new THREE.Color(0x010112), new THREE.Color(0x1a2880)],
+  [new THREE.Color(0x010112), new THREE.Color(0x2a1870)],
+  [new THREE.Color(0x010213), new THREE.Color(0x083060)],
+  [new THREE.Color(0x020111), new THREE.Color(0x3a1040)],
+  [new THREE.Color(0x010112), new THREE.Color(0x0e0e55)],
 ]
 
 function SceneBackground() {
@@ -409,7 +376,6 @@ function SceneBackground() {
       uTime:   { value: 0 },
       uColorA: { value: new THREE.Color(0x010110) },
       uColorB: { value: new THREE.Color(0x1a1055) },
-      uBlend:  { value: 0 },
     },
     depthWrite: false,
     depthTest:  false,
@@ -421,12 +387,10 @@ function SceneBackground() {
   useFrame(({ clock }) => {
     if (!matRef.current) return
     bgMat.uniforms.uTime.value = clock.getElapsedTime()
-
     const si  = _sceneI.current
     const [a0, b0] = BG_PALETTES[si]
     const [a1, b1] = BG_PALETTES[Math.min(si + 1, BG_PALETTES.length - 1)]
     const frac = THREE.MathUtils.clamp(_prog.current * SCENES.length - si, 0, 1)
-
     colA.current.lerpColors(a0, a1, frac)
     colB.current.lerpColors(b0, b1, frac)
     bgMat.uniforms.uColorA.value.lerp(colA.current, 0.04)
@@ -442,7 +406,7 @@ function SceneBackground() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   CITY COMPONENT — 32×32 grid, camera weaves through at street level
+   CITY — 32×32 grid
 ═══════════════════════════════════════════════════════════ */
 
 const CITY_SIZE  = 32
@@ -465,19 +429,15 @@ function CityScene() {
   }), [])
 
   const buildData = useMemo(() => {
-    const out: { h: number; color: THREE.Color }[] = []
-    // Deep cyberpunk palette — very dark purples, occasional violet
     const palette = [
-      new THREE.Color("#0c0730"),
-      new THREE.Color("#18094c"),
-      new THREE.Color("#220c60"),
-      new THREE.Color("#0a0528"),
-      new THREE.Color("#2e1275"),
-      new THREE.Color("#050318"),
+      new THREE.Color("#0c0730"), new THREE.Color("#18094c"),
+      new THREE.Color("#220c60"), new THREE.Color("#0a0528"),
+      new THREE.Color("#2e1275"), new THREE.Color("#050318"),
     ]
     const accentCyan   = new THREE.Color("#062845")
     const accentViolet = new THREE.Color("#1a0858")
-    const base = new THREE.Color("#030112")
+    const base         = new THREE.Color("#030112")
+    const out: { h: number; color: THREE.Color }[] = []
 
     for (let row = 0; row < CITY_SIZE; row++) {
       for (let col = 0; col < CITY_SIZE; col++) {
@@ -486,21 +446,11 @@ function CityScene() {
         const dist = Math.sqrt(dx * dx + dz * dz)
         const boost = Math.max(0, 1 - dist * 0.55)
         const isTall = Math.random() > 0.72
-        const h = isTall
-          ? 0.6 + boost * 5.0 + Math.random() * 2.5
-          : 0.04 + Math.random() * 0.22
+        const h = isTall ? 0.6 + boost * 5.0 + Math.random() * 2.5 : 0.04 + Math.random() * 0.22
         const t = Math.min(1, h / 8.0)
-        const randPalette = Math.random()
-        let target: THREE.Color
-        if (randPalette < 0.08) {
-          target = accentCyan
-        } else if (randPalette < 0.15) {
-          target = accentViolet
-        } else {
-          target = palette[Math.floor(Math.random() * palette.length)]
-        }
-        const c = base.clone().lerp(target, t * 0.92 + 0.08)
-        out.push({ h, color: c })
+        const r = Math.random()
+        const target = r < 0.08 ? accentCyan : r < 0.15 ? accentViolet : palette[Math.floor(Math.random() * palette.length)]
+        out.push({ h, color: base.clone().lerp(target, t * 0.92 + 0.08) })
       }
     }
     return out
@@ -526,9 +476,7 @@ function CityScene() {
     buildData.forEach((d, i) => {
       const row = Math.floor(i / CITY_SIZE)
       const col = i % CITY_SIZE
-      const x   = (col - CITY_SIZE / 2) * CITY_SPACE
-      const z   = (row - CITY_SIZE / 2) * CITY_SPACE
-      dummy.position.set(x, CITY_Y + d.h / 2, z)
+      dummy.position.set((col - CITY_SIZE / 2) * CITY_SPACE, CITY_Y + d.h / 2, (row - CITY_SIZE / 2) * CITY_SPACE)
       dummy.scale.set(0.40, d.h, 0.40)
       dummy.updateMatrix()
       mesh.setMatrixAt(i, dummy.matrix)
@@ -567,7 +515,7 @@ function CityScene() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   WINDOW LIGHTS — 1200 neon glow dots on building faces
+   WINDOW LIGHTS
 ═══════════════════════════════════════════════════════════ */
 
 function WindowLights() {
@@ -577,34 +525,23 @@ function WindowLights() {
     const count     = 1200
     const positions = new Float32Array(count * 3)
     const colors    = new Float32Array(count * 3)
-
     for (let i = 0; i < count; i++) {
       const row  = Math.floor(Math.random() * CITY_SIZE)
       const col  = Math.floor(Math.random() * CITY_SIZE)
       const x    = (col - CITY_SIZE / 2) * CITY_SPACE
       const z    = (row - CITY_SIZE / 2) * CITY_SPACE
-      // Height matches taller buildings
       const h    = Math.random() * 8.5 * (0.2 + 0.8 * Math.random())
       const off  = 0.20
       const side = Math.floor(Math.random() * 4)
-
       positions[i*3]   = x + (side === 0 ? off : side === 1 ? -off : (Math.random()-0.5)*0.38)
       positions[i*3+1] = CITY_Y + h
       positions[i*3+2] = z + (side === 2 ? off : side === 3 ? -off : (Math.random()-0.5)*0.38)
-
-      // Neon cyberpunk window colors — heavy violet/cyan bias
       const t = Math.random()
-      if (t < 0.40) {
-        colors[i*3] = 0.90; colors[i*3+1] = 0.78; colors[i*3+2] = 1.00 // soft violet-white
-      } else if (t < 0.65) {
-        colors[i*3] = 0.55; colors[i*3+1] = 0.20; colors[i*3+2] = 1.00 // deep violet
-      } else if (t < 0.82) {
-        colors[i*3] = 0.06; colors[i*3+1] = 0.80; colors[i*3+2] = 1.00 // cyan
-      } else {
-        colors[i*3] = 1.00; colors[i*3+1] = 0.12; colors[i*3+2] = 0.88 // hot pink
-      }
+      if (t < 0.40)      { colors[i*3] = 0.90; colors[i*3+1] = 0.78; colors[i*3+2] = 1.00 }
+      else if (t < 0.65) { colors[i*3] = 0.55; colors[i*3+1] = 0.20; colors[i*3+2] = 1.00 }
+      else if (t < 0.82) { colors[i*3] = 0.06; colors[i*3+1] = 0.80; colors[i*3+2] = 1.00 }
+      else               { colors[i*3] = 1.00; colors[i*3+1] = 0.12; colors[i*3+2] = 0.88 }
     }
-
     const g = new THREE.BufferGeometry()
     g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
     g.setAttribute("color",    new THREE.Float32BufferAttribute(colors,    3))
@@ -752,14 +689,12 @@ function JourneyScene() {
     orbMat.uniforms.uCamPos.value.copy(camera.position)
     partMat.uniforms.uTime.value = t
 
-    /* Camera path — smooth interpolation through CAM_POS waypoints */
     const rawIdx = p * (CAM_POS.length - 1)
     const idx0   = Math.floor(rawIdx)
     const idx1   = Math.min(idx0 + 1, CAM_POS.length - 1)
     tempCam.current.lerpVectors(CAM_POS[idx0], CAM_POS[idx1], rawIdx - idx0)
     camera.position.lerp(tempCam.current, 0.055)
 
-    /* LookAt: starts looking down into city (aerial), transitions to orb as camera descends */
     let lookY: number
     if (p < 0.20) {
       lookY = THREE.MathUtils.lerp(-3.0, 0.0, p / 0.20)
@@ -769,10 +704,7 @@ function JourneyScene() {
     lookTarget.current.set(0, lookY, 0)
     camera.lookAt(lookTarget.current)
 
-    /* Burst spike at scene 2 (p ≈ 0.25) — orb ignition moment */
-    const burstFac = Math.max(0, 1.0 - Math.abs(p - 0.25) * 38)
-
-    /* Orb */
+    const burstFac   = Math.max(0, 1.0 - Math.abs(p - 0.25) * 38)
     const baseOpacity = THREE.MathUtils.smoothstep(p, 0.05, 0.28)
     const orbOpacity  = Math.max(baseOpacity, burstFac)
     orbMat.uniforms.uOpacity.value = orbOpacity
@@ -788,7 +720,6 @@ function JourneyScene() {
 
     partMat.uniforms.uProgress.value = THREE.MathUtils.smoothstep(p, 0.05, 0.55)
 
-    /* Agent satellites — per-agent reveal + active spotlight */
     const activeAgentIdx = si >= 2 ? (si === 7 ? -2 : si - 2) : -1
     if (satGroupRef.current) {
       satGroupRef.current.rotation.y = t * 0.065
@@ -805,11 +736,8 @@ function JourneyScene() {
       })
     }
 
-    /* Connection lines */
-    const lineBase = THREE.MathUtils.smoothstep(p, 0.50, 0.66) * 0.22
-    lineMat.opacity = lineBase * (0.65 + 0.35 * Math.sin(t * 1.6))
+    lineMat.opacity = THREE.MathUtils.smoothstep(p, 0.50, 0.66) * 0.22 * (0.65 + 0.35 * Math.sin(t * 1.6))
 
-    /* Rings progressive reveal */
     const ringThresholds = [0.375, 0.50, 0.625]
     ringRefs.forEach((ref, i) => {
       if (!ref.current) return
@@ -818,7 +746,6 @@ function JourneyScene() {
         THREE.MathUtils.smoothstep(p, ringThresholds[i], ringThresholds[i] + 0.04) * 0.40
     })
 
-    /* Scene lighting */
     if (ptLight.current) {
       const c0   = LIGHT_COLORS[si] ?? LIGHT_COLORS[0]
       const c1   = LIGHT_COLORS[Math.min(si + 1, LIGHT_COLORS.length - 1)]
@@ -828,8 +755,7 @@ function JourneyScene() {
     }
 
     if (accentLight.current && si >= 2) {
-      const idx = Math.min(si - 2, 7)
-      tempColor.current.set(AGENT_COLORS[idx])
+      tempColor.current.set(AGENT_COLORS[Math.min(si - 2, 7)])
       accentLight.current.color.lerp(tempColor.current, 0.06)
       accentLight.current.intensity = THREE.MathUtils.smoothstep(p, 0.28, 0.45) * 1.8
     }
@@ -841,22 +767,17 @@ function JourneyScene() {
       <Stars radius={65} depth={50} count={2200} factor={3.5} saturation={0.4} fade speed={0.4} />
       <Sparkles count={90} size={1.3} scale={6} speed={0.15} color="#818cf8" noise={0.9} />
       <HelixStreams />
-
       <CityScene />
       <WindowLights />
 
-      {/* Central orb */}
       <mesh ref={orbRef}>
         <sphereGeometry args={[1.2, 96, 96]} />
         <primitive object={orbMat} attach="material" />
       </mesh>
-
-      {/* Glow halo layers */}
       <mesh><sphereGeometry args={[1.55, 32, 32]} /><primitive object={halo0} attach="material" /></mesh>
       <mesh><sphereGeometry args={[2.10, 32, 32]} /><primitive object={halo1} attach="material" /></mesh>
       <mesh><sphereGeometry args={[3.00, 32, 32]} /><primitive object={halo2} attach="material" /></mesh>
 
-      {/* Orbital rings */}
       {RINGS.map((cfg, i) => (
         <mesh key={i} ref={ringRefs[i]} rotation={cfg.rotation}>
           <torusGeometry args={[cfg.r, 0.012, 16, 128]} />
@@ -866,7 +787,6 @@ function JourneyScene() {
 
       <points geometry={partGeo} material={partMat} />
 
-      {/* Agent satellite group */}
       <group ref={satGroupRef}>
         <lineSegments geometry={lineGeo} material={lineMat} />
         {SAT_POS.map((pos, i) => (
@@ -895,7 +815,6 @@ function JourneyScene() {
         ))}
       </group>
 
-      {/* Lighting */}
       <ambientLight intensity={0.07} />
       <pointLight ref={ptLight}     position={[4, 4, 4]}    intensity={2.2}  color="#818cf8" />
       <pointLight                   position={[-4, -3, -3]} intensity={0.75} color="#a78bfa" />
@@ -906,33 +825,88 @@ function JourneyScene() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   HATOMSCROLL — Root component
+   HATOMSCROLL — Hatom-style full-screen experience
+   Fixed WebGL background + fixed scroll container
 ═══════════════════════════════════════════════════════════ */
 
 export default function HatomScroll() {
-  const sectionRef  = useRef<HTMLDivElement>(null)
-  const lastBeatRef = useRef(-1)
-  const [sceneIdx, setSceneIdx] = useState(0)
-  const [muted, setMuted]       = useState(false)
+  const scrollRef   = useRef<HTMLDivElement>(null)
+  const lastIdxRef  = useRef(-1)
+  const [sceneIdx, setSceneIdx]   = useState(0)
+  const [count, setCount]         = useState(0)
+  const [loaded, setLoaded]       = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const [hidden, setHidden]       = useState(false)
+  const [muted, setMuted]         = useState(false)
 
-  const toggleMute = () => {
-    import("@/lib/audio").then(({ audioEngine }) => {
-      if (!audioEngine) return
-      const nowMuted = audioEngine.toggle()
-      setMuted(!nowMuted)
-    })
-  }
-
-  /* Jump to a specific chapter by computing its scroll position */
-  const jumpToChapter = useCallback((i: number) => {
-    const el = sectionRef.current
-    if (!el) return
-    const sectionTop  = el.getBoundingClientRect().top + window.scrollY
-    const scrollRange = el.offsetHeight - window.innerHeight
-    window.scrollTo({ top: sectionTop + (i / SCENES.length) * scrollRange, behavior: "smooth" })
+  /* Lock body scroll — we handle it ourselves */
+  useEffect(() => {
+    document.documentElement.style.overflow = "hidden"
+    document.body.style.overflow = "hidden"
+    return () => {
+      document.documentElement.style.overflow = ""
+      document.body.style.overflow = ""
+    }
   }, [])
 
-  /* Keyboard navigation — Arrow keys jump chapters */
+  /* Loader counter */
+  useEffect(() => {
+    let n = 0
+    const id = setInterval(() => {
+      n += Math.random() * 5 + 2
+      if (n >= 100) { n = 100; clearInterval(id); setLoaded(true) }
+      setCount(Math.floor(n))
+    }, 55)
+    return () => clearInterval(id)
+  }, [])
+
+  /* Dismiss loader with fade */
+  const dismiss = useCallback(() => {
+    if (!loaded || dismissed) return
+    setDismissed(true)
+    setTimeout(() => setHidden(true), 680)
+    import("@/lib/audio").then(({ audioEngine }) => {
+      if (!audioEngine) return
+      audioEngine.init()
+      audioEngine.startAmbient()
+    })
+  }, [loaded, dismissed])
+
+  useEffect(() => {
+    if (!loaded) return
+    const t = setTimeout(dismiss, 700)
+    return () => clearTimeout(t)
+  }, [loaded, dismiss])
+
+  /* Scroll tracking on fixed container */
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    const onScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container
+      const p = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0
+      _prog.current = p
+      const idx = Math.min(Math.floor(p * SCENES.length), SCENES.length - 1)
+      _sceneI.current = idx
+      if (idx !== lastIdxRef.current) {
+        lastIdxRef.current = idx
+        setSceneIdx(idx)
+        import("@/lib/audio").then(({ audioEngine }) => audioEngine?.playBeat(idx))
+      }
+    }
+    container.addEventListener("scroll", onScroll, { passive: true })
+    return () => container.removeEventListener("scroll", onScroll)
+  }, [])
+
+  /* Jump to chapter */
+  const jumpToChapter = useCallback((i: number) => {
+    const container = scrollRef.current
+    if (!container) return
+    const total = container.scrollHeight - container.clientHeight
+    container.scrollTo({ top: (i / SCENES.length) * total, behavior: "smooth" })
+  }, [])
+
+  /* Keyboard navigation */
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowDown" || e.key === "ArrowRight") {
@@ -947,310 +921,360 @@ export default function HatomScroll() {
     return () => window.removeEventListener("keydown", handleKey)
   }, [jumpToChapter])
 
-  /* GSAP ScrollTrigger */
-  useEffect(() => {
-    const el = sectionRef.current
-    if (!el) return
-    const trigger = ScrollTrigger.create({
-      trigger: el,
-      start: "top top",
-      end: "bottom bottom",
-      scrub: 1.5,
-      onUpdate: (self) => {
-        const p = self.progress
-        _prog.current = p
-        const idx = Math.min(Math.floor(p * SCENES.length), SCENES.length - 1)
-        _sceneI.current = idx
-        if (idx !== lastBeatRef.current) {
-          lastBeatRef.current = idx
-          setSceneIdx(idx)
-          import("@/lib/audio").then(({ audioEngine }) => audioEngine?.playBeat(idx))
-        }
-      },
+  /* Mute toggle */
+  const toggleMute = useCallback(() => {
+    import("@/lib/audio").then(({ audioEngine }) => {
+      if (!audioEngine) return
+      const nowMuted = audioEngine.toggle()
+      setMuted(!nowMuted)
     })
-    return () => trigger.kill()
   }, [])
 
-  const scene        = SCENES[sceneIdx]
-  const activeAgentI = sceneIdx >= 2 ? Math.min(sceneIdx - 2, 7) : -1
-  const activeAgent  = activeAgentI >= 0 ? AGENT_INFO[activeAgentI] : null
-  const activeColor  = activeAgentI >= 0 ? AGENT_COLORS[activeAgentI] : "#6366f1"
-
   return (
-    <section ref={sectionRef} id="journey" style={{ height: "800vh" }}>
-      <div className="sticky top-0 h-screen overflow-hidden" style={{ background: "#030712" }}>
+    <div style={{ position: "fixed", inset: 0, background: "#000" }}>
 
-        {/* Canvas */}
-        <div className="absolute inset-0">
-          <Canvas
-            camera={{ position: [0, 10.5, 24.0], fov: 50 }}
-            gl={{ antialias: true, alpha: false }}
-            style={{ width: "100%", height: "100%" }}
-          >
-            <JourneyScene />
-          </Canvas>
-        </div>
+      {/* ── Global styles ── */}
+      <style>{`
+        html, body { overflow: hidden !important; margin: 0; padding: 0; }
+        @keyframes ap-blink { 0%,100%{opacity:.22} 50%{opacity:.65} }
+        #ap-scroll::-webkit-scrollbar { display: none; }
+      `}</style>
 
-        {/* Vignette */}
+      {/* ══ LOADER ══ */}
+      {!hidden && (
         <div
-          className="absolute inset-0 pointer-events-none z-10"
-          style={{ background: "radial-gradient(ellipse 75% 75% at 50% 50%, transparent 30%, rgba(3,7,18,0.72) 100%)" }}
-        />
-
-        {/* ══ TOP CENTER: Hatom-style horizontal chapter navigation ══ */}
-        <div
-          className="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-full"
+          onClick={dismiss}
           style={{
-            top: "76px",
-            background:    "rgba(0,0,0,0.60)",
-            backdropFilter: "blur(20px)",
-            border:        "1px solid rgba(255,255,255,0.07)",
-            padding:       "6px 8px",
+            position: "absolute", inset: 0, zIndex: 9999,
+            background: "#000",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            cursor: loaded ? "pointer" : "default",
+            opacity: dismissed ? 0 : 1,
+            transition: "opacity 0.65s ease",
+            pointerEvents: dismissed ? "none" : "auto",
           }}
         >
-          {SCENES.map((s, i) => {
-            const col      = AGENT_COLORS[i] ?? "#6366f1"
-            const isActive = i === sceneIdx
-            const isPast   = i < sceneIdx
-            const shortName = s.label.split(" — ")[1]
-            return (
-              <button
-                key={i}
-                onClick={() => jumpToChapter(i)}
-                aria-label={s.label}
-                className="relative flex items-center gap-1.5 cursor-pointer rounded-full bg-transparent border-0 p-0 transition-all"
-                style={{
-                  padding:    isActive ? "4px 10px 4px 7px" : "4px 7px",
-                  background: isActive ? `${col}22` : "transparent",
-                  border:     isActive ? `1px solid ${col}55` : "1px solid transparent",
-                  transition: "all 0.45s cubic-bezier(0.34,1.56,0.64,1)",
-                }}
-              >
-                <div
-                  style={{
-                    width:      isActive ? "7px" : "5px",
-                    height:     isActive ? "7px" : "5px",
-                    borderRadius: "50%",
-                    flexShrink: 0,
-                    background: isActive ? col : isPast ? `${col}80` : "rgba(255,255,255,0.18)",
-                    boxShadow:  isActive ? `0 0 8px ${col}, 0 0 18px ${col}55` : "none",
-                    transition: "all 0.4s",
-                  }}
-                />
-                {isActive && (
-                  <span
-                    style={{
-                      fontSize:      "9px",
-                      fontWeight:    700,
-                      letterSpacing: "0.14em",
-                      color:         col,
-                      textTransform: "uppercase",
-                      whiteSpace:    "nowrap",
-                    }}
-                  >
-                    {shortName}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* ── TOP LEFT: Active agent name ── */}
-        {activeAgent && (
-          <div
-            key={`ag${sceneIdx}`}
-            className="absolute z-20 flex items-center gap-2 animate-fade-up"
-            style={{ top: "76px", left: "2rem" }}
-          >
-            <div
-              className="w-1.5 h-1.5 rounded-full animate-pulse shrink-0"
-              style={{ background: activeColor, boxShadow: `0 0 5px ${activeColor}` }}
-            />
-            <p
-              className="text-xs font-bold tracking-widest uppercase"
-              style={{ color: activeColor }}
-            >
-              {activeAgent.name} — {activeAgent.stat}
-            </p>
+          {/* Ghost counter */}
+          <div style={{
+            position: "absolute", inset: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(8rem, 28vw, 26rem)",
+            color: "rgba(255,255,255,0.04)",
+            lineHeight: 1, userSelect: "none", pointerEvents: "none",
+          }}>
+            {count}
           </div>
-        )}
 
-        {/* ── RIGHT: Chapter navigation dots (secondary, vertical) ── */}
-        <div className="absolute right-5 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-4">
-          {SCENES.map((s, i) => {
-            const col      = AGENT_COLORS[i] ?? "#6366f1"
-            const isActive = i === sceneIdx
-            const isPast   = i < sceneIdx
-            return (
-              <button
-                key={i}
-                onClick={() => jumpToChapter(i)}
-                aria-label={s.label}
-                className="relative flex items-center justify-end gap-2.5 group bg-transparent border-0 p-0 cursor-pointer"
-              >
-                {/* Hover tooltip */}
-                <span
-                  className="absolute right-6 text-[10px] font-bold tracking-widest uppercase whitespace-nowrap px-2 py-1 rounded pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-200"
-                  style={{
-                    color:          col,
-                    background:     "rgba(0,0,0,0.80)",
-                    border:         `1px solid ${col}30`,
-                    backdropFilter: "blur(8px)",
-                  }}
-                >
-                  {s.label.split(" — ")[1]}
-                </span>
-                {/* Dot */}
-                <div
-                  className="rounded-full shrink-0 transition-all duration-500"
-                  style={{
-                    width:      isActive ? "11px" : "7px",
-                    height:     isActive ? "11px" : "7px",
-                    background: isActive
-                      ? col
-                      : isPast
-                        ? `${col}60`
-                        : "rgba(255,255,255,0.12)",
-                    boxShadow: isActive ? `0 0 10px ${col}, 0 0 22px ${col}44` : "none",
-                  }}
-                />
-              </button>
-            )
-          })}
+          {/* Top label */}
+          <p style={{
+            position: "absolute", top: "3.8194vw", left: "50%", transform: "translateX(-50%)",
+            margin: 0,
+            fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(0.55rem, 0.85vw, 0.9rem)",
+            color: "rgba(255,255,255,0.2)",
+            letterSpacing: "0.32em", textTransform: "uppercase", whiteSpace: "nowrap",
+          }}>
+            Loading {SCENES.length} chapters
+          </p>
+
+          {/* Brand */}
+          <p style={{
+            margin: 0, position: "relative", zIndex: 1,
+            fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(1.2rem, 3vw, 3.5rem)",
+            color: loaded ? "#7c3aed" : "rgba(255,255,255,0.38)",
+            letterSpacing: "0.18em", textTransform: "uppercase",
+            transition: "color 0.9s",
+          }}>
+            AutoPilot
+          </p>
+
+          {/* Bottom hint */}
+          <p style={{
+            position: "absolute", bottom: "3.8194vw", left: "50%", transform: "translateX(-50%)",
+            margin: 0,
+            fontSize: "clamp(0.45rem, 0.62vw, 0.68rem)",
+            color: loaded ? "rgba(255,255,255,0.22)" : "transparent",
+            letterSpacing: "0.32em", textTransform: "uppercase", whiteSpace: "nowrap",
+            transition: "color 0.6s",
+          }}>
+            AI Business Operating System
+          </p>
         </div>
+      )}
 
-        {/* ── BOTTOM LEFT: Story text ── */}
-        <div className="absolute bottom-20 left-8 md:left-14 z-20 max-w-lg pointer-events-none">
-          <p
-            key={`ch${sceneIdx}`}
-            className="text-xs font-bold tracking-[0.28em] uppercase mb-3 animate-fade-up"
-            style={{ color: "rgba(124,58,237,0.65)" }}
-          >
-            {scene.label}
-          </p>
-          <h2
-            key={`t${sceneIdx}`}
-            className="font-extrabold leading-[0.88] mb-5 animate-fade-up"
-            style={{
-              fontSize:      "clamp(2.4rem, 5vw, 4.5rem)",
-              fontFamily:    "'OCMikola', sans-serif",
-              whiteSpace:    "pre-line",
-              letterSpacing: "-0.025em",
-            }}
-          >
-            {scene.title}
-          </h2>
-          <p
-            key={`b${sceneIdx}`}
-            className="text-gray-400 leading-relaxed animate-fade-up"
-            style={{ animationDelay: "80ms", fontSize: "clamp(0.875rem, 1.35vw, 1rem)", maxWidth: "360px" }}
-          >
-            {scene.body}
-          </p>
+      {/* ══ WEBGL — fixed full-screen background ══ */}
+      <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
+        <Canvas
+          camera={{ position: [0, 10.5, 24.0], fov: 50 }}
+          gl={{ antialias: true, alpha: false }}
+          style={{ width: "100%", height: "100%" }}
+        >
+          <JourneyScene />
+        </Canvas>
+      </div>
 
-          {/* Agent stat pill */}
-          {activeAgent && sceneIdx >= 2 && (
-            <div
-              key={`stat${sceneIdx}`}
-              className="mt-5 inline-flex items-center gap-3 animate-fade-up"
-              style={{ animationDelay: "130ms" }}
-            >
-              <div
-                className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
-                style={{ background: activeColor, boxShadow: `0 0 6px ${activeColor}` }}
-              />
-              <span className="font-mono font-bold text-sm" style={{ color: activeColor }}>
-                {activeAgent.stat}
-              </span>
-              <span className="text-xs" style={{ color: "rgba(255,255,255,0.28)" }}>
-                · {activeAgent.desc}
-              </span>
-            </div>
-          )}
+      {/* Vignette */}
+      <div style={{
+        position: "absolute", inset: 0, zIndex: 1, pointerEvents: "none",
+        background: "radial-gradient(ellipse 75% 75% at 50% 50%, transparent 30%, rgba(0,0,0,0.62) 100%)",
+      }} />
 
-          {sceneIdx === SCENES.length - 1 && (
-            <a
-              href="/signup"
-              className="inline-flex items-center gap-3 mt-8 px-7 py-3.5 rounded-xl text-white font-bold text-sm hover:-translate-y-0.5 transition-transform animate-fade-up pointer-events-auto"
+      {/* ══ HEADER ══ */}
+      <header style={{
+        position: "absolute", top: 0, left: 0, right: 0, zIndex: 20,
+        display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+        padding: "3.8194vw",
+        pointerEvents: "none",
+      }}>
+        <span style={{
+          fontFamily: "'OCMikola', sans-serif",
+          fontSize: "clamp(0.9rem, 1.2vw, 1.5rem)",
+          color: "#fff", letterSpacing: "0.12em", textTransform: "uppercase",
+        }}>
+          AutoPilot
+        </span>
+        <a
+          href="/signup"
+          style={{
+            pointerEvents: "auto",
+            fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(0.5rem, 0.7vw, 0.75rem)",
+            color: "#7c3aed", letterSpacing: "0.28em", textTransform: "uppercase",
+            textDecoration: "none",
+            borderBottom: "1px solid rgba(124,58,237,0.35)",
+            paddingBottom: "0.15em",
+          }}
+        >
+          Start Free →
+        </a>
+      </header>
+
+      {/* ══ PAGINATION DOTS — hatom-style 2px, top center ══ */}
+      <div style={{
+        position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)",
+        zIndex: 20,
+        display: "flex", alignItems: "flex-start",
+        paddingTop: "3.8194vw",
+      }}>
+        {SCENES.map((s, i) => {
+          const isActive = i === sceneIdx
+          return (
+            <button
+              key={i}
+              onClick={() => jumpToChapter(i)}
+              aria-label={s.label}
+              title={s.label.split(" — ")[1]}
               style={{
-                background:     "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                boxShadow:      "0 0 40px rgba(124,58,237,0.45)",
-                animationDelay: "180ms",
+                width: "52px", height: "52px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: "transparent", border: "none", cursor: "pointer", padding: 0,
               }}
             >
-              Start free — no card required
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M2 7h10M7.5 2.5l4.5 4.5-4.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </a>
-          )}
-        </div>
-
-        {/* ── BOTTOM RIGHT: Mute toggle ── */}
-        <button
-          onClick={toggleMute}
-          className="absolute bottom-24 right-8 md:right-14 z-30 flex items-center gap-2 text-[10px] tracking-[0.25em] uppercase transition-opacity hover:opacity-100"
-          style={{ color: muted ? "rgba(255,255,255,0.20)" : "rgba(124,58,237,0.65)" }}
-          title={muted ? "Unmute" : "Mute"}
-        >
-          {muted ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-            </svg>
-          )}
-          {muted ? "muted" : "sound on"}
-        </button>
-
-        {/* Large ghosted chapter number */}
-        <div className="absolute bottom-16 right-8 md:right-14 z-20 pointer-events-none select-none">
-          <p
-            key={`n${sceneIdx}`}
-            className="font-extrabold animate-fade-up"
-            style={{
-              fontSize:      "clamp(5rem, 14vw, 11rem)",
-              fontFamily:    "'OCMikola', sans-serif",
-              lineHeight:    1,
-              color:         "rgba(255,255,255,0.04)",
-              letterSpacing: "-0.04em",
-            }}
-          >
-            0{sceneIdx + 1}
-          </p>
-        </div>
-
-        {/* Keyboard hint — only show at beginning */}
-        {sceneIdx === 0 && (
-          <div
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 pointer-events-none animate-fade-up"
-            style={{ color: "rgba(255,255,255,0.20)", animationDelay: "1s" }}
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1"/>
-              <path d="M6 4v4M4 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <span style={{ fontSize: "9px", letterSpacing: "0.2em", textTransform: "uppercase", fontWeight: 600 }}>
-              arrow keys or scroll
-            </span>
-          </div>
-        )}
-
-        {/* Progress bar */}
-        <div className="absolute bottom-0 left-0 right-0 h-px z-20" style={{ background: "rgba(124,58,237,0.12)" }}>
-          <div
-            className="h-full transition-all duration-700"
-            style={{
-              width:     `${((sceneIdx + 1) / SCENES.length) * 100}%`,
-              background: `linear-gradient(90deg, #4f46e5, ${AGENT_COLORS[Math.min(sceneIdx, 7)]})`,
-              boxShadow:  `0 0 8px ${AGENT_COLORS[Math.min(sceneIdx, 7)]}`,
-            }}
-          />
-        </div>
+              <div style={{
+                width: "2px", height: "2px", borderRadius: "50%", flexShrink: 0,
+                background: isActive ? "#7c3aed" : "rgba(255,255,255,0.28)",
+                boxShadow: isActive ? "0 0 8px #7c3aed, 0 0 20px rgba(124,58,237,0.55)" : "none",
+                transition: "background 0.4s, box-shadow 0.4s",
+              }} />
+            </button>
+          )
+        })}
       </div>
-    </section>
+
+      {/* ══ FIXED SCROLL CONTAINER ══ */}
+      <div
+        id="ap-scroll"
+        ref={scrollRef}
+        style={{
+          position: "absolute", inset: 0,
+          overflowY: "scroll", overflowX: "hidden",
+          zIndex: 2,
+          scrollbarWidth: "none",
+        } as React.CSSProperties}
+      >
+        {SCENES.map((s, i) => {
+          const isLeft  = i % 2 === 0
+          const col     = AGENT_COLORS[i] ?? "#7c3aed"
+          const caption = s.label.split(" — ")[1]
+
+          return (
+            <section key={i} style={{ height: "100vh", position: "relative", pointerEvents: "none" }}>
+
+              {/* ── Text content — alternating left / right ── */}
+              <div style={{
+                position: "absolute",
+                top: "50%", transform: "translateY(-50%)",
+                ...(isLeft ? { left: "10.625vw" } : { right: "8.1944vw" }),
+                maxWidth: "34vw",
+                pointerEvents: "auto",
+              }}>
+                {/* Phase caption badge */}
+                <div style={{
+                  display: "inline-block",
+                  background: col,
+                  color: "#000",
+                  fontFamily: "'OCMikola', sans-serif",
+                  fontSize: "clamp(0.5rem, 0.65vw, 0.72rem)",
+                  fontWeight: 700,
+                  letterSpacing: "0.28em",
+                  textTransform: "uppercase",
+                  padding: "0.45em 1.15em 0.38em",
+                  marginBottom: "2vw",
+                }}>
+                  {caption}
+                </div>
+
+                {/* Title */}
+                <h2 style={{
+                  fontFamily: "'OCMikola', sans-serif",
+                  fontSize: "clamp(1.6rem, 2.9166vw, 4.2rem)",
+                  textTransform: "uppercase",
+                  letterSpacing: "-0.025em",
+                  lineHeight: 0.92,
+                  color: "#fff",
+                  margin: "0 0 1.8vw 0",
+                  whiteSpace: "pre-line",
+                }}>
+                  {s.title.toUpperCase()}
+                </h2>
+
+                {/* Body */}
+                <p style={{
+                  fontSize: "clamp(0.72rem, 0.9722vw, 1rem)",
+                  color: "rgba(255,255,255,0.45)",
+                  lineHeight: 1.75,
+                  margin: 0,
+                  ...(isLeft ? {} : { textAlign: "right" as const }),
+                }}>
+                  {s.body}
+                </p>
+
+                {/* CTA on final chapter */}
+                {i === SCENES.length - 1 && (
+                  <a
+                    href="/signup"
+                    style={{
+                      display: "inline-block", marginTop: "2.8vw",
+                      padding: "1.1em 3.2em",
+                      background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                      color: "#fff",
+                      fontFamily: "'OCMikola', sans-serif",
+                      fontSize: "clamp(0.55rem, 0.75vw, 0.82rem)",
+                      letterSpacing: "0.28em", textTransform: "uppercase",
+                      textDecoration: "none",
+                      boxShadow: "0 0 40px rgba(124,58,237,0.42)",
+                    }}
+                  >
+                    Start Free
+                  </a>
+                )}
+              </div>
+
+              {/* Ghosted chapter number */}
+              <div style={{
+                position: "absolute",
+                bottom: "4.5vw",
+                ...(isLeft ? { right: "8.1944vw" } : { left: "10.625vw" }),
+                fontFamily: "'OCMikola', sans-serif",
+                fontSize: "clamp(5rem, 12vw, 13rem)",
+                color: "rgba(255,255,255,0.03)",
+                lineHeight: 1, letterSpacing: "-0.04em",
+                userSelect: "none", pointerEvents: "none",
+              }}>
+                0{i + 1}
+              </div>
+
+              {/* Scroll prompt — first section only */}
+              {i === 0 && (
+                <div style={{
+                  position: "absolute", bottom: "3.8194vw", left: "50%", transform: "translateX(-50%)",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: "0.7vw",
+                  pointerEvents: "none",
+                }}>
+                  <p style={{
+                    margin: 0, fontSize: "clamp(0.45rem, 0.58vw, 0.62rem)",
+                    letterSpacing: "0.35em", textTransform: "uppercase",
+                    color: "rgba(255,255,255,0.25)",
+                  }}>
+                    Scroll to discover
+                  </p>
+                  <svg
+                    width="8" height="13" viewBox="0 0 8 13" fill="none"
+                    style={{ animation: "ap-blink 1.8s ease-in-out infinite" }}
+                  >
+                    <path d="M4 0v9M1 6.5L4 10l3-3.5" stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              )}
+            </section>
+          )
+        })}
+      </div>
+
+      {/* ══ PROGRESS BAR ══ */}
+      <div style={{
+        position: "absolute", bottom: 0, left: 0, right: 0, height: "1px", zIndex: 20,
+        background: "rgba(124,58,237,0.1)",
+      }}>
+        <div style={{
+          height: "100%",
+          width: `${((sceneIdx + 1) / SCENES.length) * 100}%`,
+          background: `linear-gradient(90deg, #4f46e5, ${AGENT_COLORS[Math.min(sceneIdx, 7)]})`,
+          boxShadow: `0 0 6px ${AGENT_COLORS[Math.min(sceneIdx, 7)]}`,
+          transition: "width 0.7s ease",
+        }} />
+      </div>
+
+      {/* ══ MUTE BUTTON ══ */}
+      <button
+        onClick={toggleMute}
+        style={{
+          position: "absolute", bottom: "3.8194vw", right: "3.8194vw",
+          zIndex: 20,
+          background: "transparent", border: "none", cursor: "pointer",
+          display: "flex", alignItems: "center", gap: "0.6vw",
+          color: muted ? "rgba(255,255,255,0.18)" : "rgba(124,58,237,0.6)",
+          fontSize: "clamp(0.45rem, 0.58vw, 0.62rem)",
+          letterSpacing: "0.25em", textTransform: "uppercase",
+          fontFamily: "'OCMikola', sans-serif",
+          transition: "color 0.3s",
+        }}
+      >
+        {muted ? (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M11 5L6 9H2v6h4l5 4V5z" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" />
+          </svg>
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+          </svg>
+        )}
+        {muted ? "Muted" : "Sound"}
+      </button>
+
+      {/* ══ KEYBOARD HINT — first chapter ══ */}
+      {sceneIdx === 0 && !dismissed && (
+        <div style={{
+          position: "absolute", bottom: "calc(3.8194vw + 2rem)", left: "50%", transform: "translateX(-50%)",
+          zIndex: 20, pointerEvents: "none",
+          display: "flex", alignItems: "center", gap: "0.5vw",
+          color: "rgba(255,255,255,0.18)",
+          fontSize: "clamp(0.4rem, 0.52vw, 0.58rem)",
+          letterSpacing: "0.22em", textTransform: "uppercase",
+          fontFamily: "'OCMikola', sans-serif",
+        }}>
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+            <rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1" />
+            <path d="M6 4v4M4 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Arrow keys or scroll
+        </div>
+      )}
+    </div>
   )
 }
