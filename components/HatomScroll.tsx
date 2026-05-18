@@ -11,25 +11,29 @@ import { gsap } from "gsap"
 /* ─── WebGL Error Boundary — prevents tab crash on GPU OOM ── */
 class WebGLErrorBoundary extends React.Component<
   { children: React.ReactNode },
-  { crashed: boolean }
+  { crashed: boolean; errorMsg: string }
 > {
   constructor(props: { children: React.ReactNode }) {
     super(props)
-    this.state = { crashed: false }
+    this.state = { crashed: false, errorMsg: "" }
   }
-  static getDerivedStateFromError() { return { crashed: true } }
+  static getDerivedStateFromError(error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error)
+    return { crashed: true, errorMsg: msg }
+  }
   render() {
     if (this.state.crashed) {
       return (
         <div style={{
-          position: "absolute", inset: 0, display: "flex",
+          position: "absolute", inset: 0, display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center",
           background: "#0a0118", color: "#9d72ff",
-          fontFamily: "sans-serif", fontSize: "1rem",
+          fontFamily: "monospace", fontSize: "0.8rem", padding: "2rem",
         }}>
-          <p style={{ textAlign: "center", opacity: 0.6 }}>
-            WebGL unavailable on this device
-          </p>
+          <p style={{ opacity: 0.5, marginBottom: "0.5rem" }}>Scene error — please screenshot and report:</p>
+          <pre style={{ color: "#ff6b6b", whiteSpace: "pre-wrap", maxWidth: "80vw", textAlign: "left", opacity: 0.9 }}>
+            {this.state.errorMsg || "Unknown error"}
+          </pre>
         </div>
       )
     }
@@ -1056,7 +1060,7 @@ function MountainTerrain() {
   const mistMeshRef    = useRef<THREE.Mesh>(null)
 
   const geo = useMemo(() => {
-    const W = 380, D = 200, segW = 120, segD = 80
+    const W = 380, D = 200, segW = 64, segD = 40
     const vc = (segW + 1) * (segD + 1)
     const pos = new Float32Array(vc * 3)
     const uvs = new Float32Array(vc * 2)
@@ -1297,7 +1301,7 @@ function WindowLights() {
   const matRef = useRef<THREE.PointsMaterial>(null)
 
   const geo = useMemo(() => {
-    const count     = 3200
+    const count     = 1200
     const positions = new Float32Array(count * 3)
     const colors    = new Float32Array(count * 3)
     for (let i = 0; i < count; i++) {
@@ -1422,7 +1426,7 @@ function ReflectionPlane() {
    JOURNEY SCENE — Crystalline Consciousness at center
 ═══════════════════════════════════════════════════════════ */
 
-const PARTICLE_COUNT = 1200
+const PARTICLE_COUNT = 600
 
 function JourneyScene() {
   const { camera, scene } = useThree()
@@ -1605,16 +1609,19 @@ function JourneyScene() {
 
   const glowTex = useMemo(() => {
     if (typeof window === "undefined") return null
-    const c   = document.createElement("canvas")
-    c.width   = c.height = 64
-    const ctx = c.getContext("2d")!
-    const grd = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
-    grd.addColorStop(0,   "rgba(255,255,255,1)")
-    grd.addColorStop(0.4, "rgba(200,160,255,0.5)")
-    grd.addColorStop(1,   "rgba(140,80,255,0)")
-    ctx.fillStyle = grd
-    ctx.fillRect(0, 0, 64, 64)
-    return new THREE.CanvasTexture(c)
+    try {
+      const c = document.createElement("canvas")
+      c.width = c.height = 64
+      const ctx = c.getContext("2d")
+      if (!ctx) return null
+      const grd = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+      grd.addColorStop(0,   "rgba(255,255,255,1)")
+      grd.addColorStop(0.4, "rgba(200,160,255,0.5)")
+      grd.addColorStop(1,   "rgba(140,80,255,0)")
+      ctx.fillStyle = grd
+      ctx.fillRect(0, 0, 64, 64)
+      return new THREE.CanvasTexture(c)
+    } catch { return null }
   }, [])
 
   const { partGeo, partMat } = useMemo(() => {
@@ -1866,7 +1873,7 @@ function JourneyScene() {
   return (
     <>
       <SceneBackground />
-      <Stars radius={65} depth={50} count={3200} factor={4.2} saturation={0.6} fade speed={0.28} />
+      <Stars radius={65} depth={50} count={1500} factor={4.2} saturation={0.6} fade speed={0.28} />
       <Sparkles count={120} size={1.5} scale={8} speed={0.12} color="#a855f7" noise={1.0} />
       <HelixStreams />
       <MountainTerrain />
@@ -1982,7 +1989,6 @@ function DynamicPostFX() {
         luminanceThreshold={0.14}
         luminanceSmoothing={0.82}
         intensity={2.4}
-        mipmapBlur
         blendFunction={BlendFunction.ADD}
       />
       <ChromaticAberration
@@ -2331,8 +2337,8 @@ export default function HatomScroll() {
         <WebGLErrorBoundary>
           <Canvas
             camera={{ position: [0, 15.5, 28.0], fov: 50 }}
-            dpr={[1, 1.5]}
-            gl={{ antialias: false, alpha: false, powerPreference: "high-performance", toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.15 }}
+            dpr={[0.75, 1.25]}
+            gl={{ antialias: false, alpha: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.15 }}
             style={{ width: "100%", height: "100%" }}
           >
             <JourneyScene />
