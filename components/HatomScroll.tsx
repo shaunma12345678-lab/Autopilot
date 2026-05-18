@@ -58,16 +58,16 @@ const AGENT_COLORS = [
   "#f59e0b", "#ec4899", "#f97316", "#14b8a6",
 ]
 
-/* ─── Camera waypoints — elevated so city stays at bottom ─── */
+/* ─── Camera waypoints — starts high so mountains fill backdrop ─── */
 const CAM_POS = [
-  new THREE.Vector3(0,    13.0, 26.0),
-  new THREE.Vector3(0,     9.0, 20.0),
-  new THREE.Vector3(0,     6.5, 14.0),
-  new THREE.Vector3( 4.8,  5.5, 12.0),
-  new THREE.Vector3(-4.8,  5.5, 12.0),
-  new THREE.Vector3(0,     8.5, 16.0),
-  new THREE.Vector3( 1.8,  5.0,  9.5),
-  new THREE.Vector3(0,     7.0, 28.0),
+  new THREE.Vector3(0,    15.5, 28.0),  // Ch1 — high vista, full mountain range
+  new THREE.Vector3(2.2,  11.5, 22.5),  // Ch2 — drifting right, descending
+  new THREE.Vector3(0,     8.0, 16.5),  // Ch3 — valley level, mountains fading
+  new THREE.Vector3( 4.8,  5.5, 12.0),  // Ch4 — right angle, city + crystal
+  new THREE.Vector3(-4.8,  5.5, 12.0),  // Ch5 — left angle
+  new THREE.Vector3(0,     8.5, 16.0),  // Ch6 — backed up, panoramic
+  new THREE.Vector3( 1.8,  5.0,  9.5),  // Ch7 — close crystal, city surrounds
+  new THREE.Vector3(0,     7.0, 28.0),  // Ch8 — final wide panorama
 ]
 
 /* ─── Per-chapter light colors ─────────────────────────────── */
@@ -107,6 +107,7 @@ const _holdInt  = { current: 0 }  // 0=scrolling, 1=fully paused
 /* pointer hold: ramps to 1.0 when mouse/touch held, back to 0 on release */
 const _pointerHeld    = { current: false }
 const _pointerHoldInt = { current: 0 }
+const _mountainBlend  = { current: 1.0 }  // 1=mountains visible, 0=faded out
 
 /* ═══════════════════════════════════════════════════════════
    CRYSTALLINE CONSCIOUSNESS SHADERS
@@ -124,39 +125,35 @@ const CRYSTAL_VERT = /* glsl */`
   varying vec3  vNormal;
   varying vec3  vWorldPosition;
   varying float vRand;
+  varying float vFacetId;
 
   void main() {
-    vNormal = normalize(normalMatrix * normal);
-    vRand   = aRand;
+    vNormal   = normalize(normalMatrix * normal);
+    vRand     = aRand;
+    vFacetId  = floor(dot(normalize(position), vec3(0.577, 0.577, 0.577)) * 4.0) / 4.0;
 
     /* ── Stage weights ── */
-    float scatterFac = 1.0 - smoothstep(0.02, 0.30, uProgress);
-    float crystalFac = smoothstep(0.18, 0.44, uProgress) * (1.0 - smoothstep(0.72, 0.92, uProgress));
-    float netFac     = smoothstep(0.44, 0.60, uProgress) * (1.0 - smoothstep(0.80, 0.96, uProgress));
-    float blazeFac   = smoothstep(0.82, 1.00, uProgress);
+    float scatterFac = 1.0 - smoothstep(0.02, 0.28, uProgress);
+    float crystalFac = smoothstep(0.16, 0.42, uProgress);
+    float blazeFac   = smoothstep(0.84, 1.00, uProgress);
 
-    /* ── Hold: breathe when scroll pauses ── */
-    float holdPulse = sin(uTime * 2.1 + aRand * 6.2832) * uHold * 0.14;
+    /* ── Hold: facets crack open — spread outward 14% on full hold ── */
+    float crackOpen = uHold * 0.14 * aRand;
 
     vec3 pos = position;
 
-    /* SCATTER — fragments fly in random directions */
-    pos += aScatterDir * aRand * 7.5 * scatterFac;
+    /* SCATTER */
+    pos += aScatterDir * aRand * 8.0 * scatterFac;
 
-    /* CRYSTAL FACETS — quantized displacement creates angular planes */
-    float facetGroup = floor(dot(normalize(position), vec3(0.577, 0.577, 0.577)) * 3.0) / 3.0;
-    float facetWave  = sin(facetGroup * 9.42 + uTime * 0.55) * 0.5 + 0.5;
-    pos += normal * facetWave * 0.34 * crystalFac;
+    /* SHARP FACET DISPLACEMENT — angular planes, not smooth */
+    float facetWave = sin(vFacetId * 12.56 + uTime * 0.42) * 0.5 + 0.5;
+    pos += normal * facetWave * 0.28 * crystalFac;
 
-    /* NETWORK — each vertex pulses at its own frequency */
-    float netPulse = sin(aRand * 18.85 + uTime * 1.9) * 0.22;
-    pos += normal * netPulse * netFac;
+    /* BLAZE */
+    pos += normalize(position) * aRand * 5.0 * blazeFac;
 
-    /* BLAZE — radial burst outward */
-    pos += normalize(position) * aRand * 4.0 * blazeFac;
-
-    /* HOLD BREATH */
-    pos += normal * holdPulse;
+    /* CRACK OPEN on hold */
+    pos += normalize(position) * crackOpen;
 
     vWorldPosition = (modelMatrix * vec4(pos, 1.0)).xyz;
     gl_Position    = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -168,97 +165,85 @@ const CRYSTAL_FRAG = /* glsl */`
   varying vec3  vNormal;
   varying vec3  vWorldPosition;
   varying float vRand;
+  varying float vFacetId;
   uniform float uTime;
   uniform vec3  uCamPos;
   uniform float uOpacity;
   uniform float uProgress;
   uniform float uHold;
+  uniform vec3  uHoldColor;   /* chapter accent color injected on hold */
 
   void main() {
     vec3  viewDir = normalize(uCamPos - vWorldPosition);
     vec3  N       = normalize(vNormal);
     float NdotV   = max(0.0, dot(N, viewDir));
 
-    /* Physical glass Fresnel (IOR ~1.5, R0 = ((1.5-1)/(1.5+1))^2 = 0.04) */
-    float R0      = 0.04;
-    float fresnel = R0 + (1.0 - R0) * pow(1.0 - NdotV, 5.0);
+    /* ── Obsidian mirror base — almost pure black face-on ── */
+    float blackFace = pow(NdotV, 1.8);
+    vec3  mirrorBase = vec3(0.012, 0.008, 0.025) * (1.0 - blackFace * 0.85);
 
-    /* Chromatic dispersion: R / G / B split at slightly different angles */
-    float frR = R0 + (1.0 - R0) * pow(1.0 - max(0.0, NdotV - 0.025), 5.0);
-    float frB = R0 + (1.0 - R0) * pow(1.0 - min(1.0, NdotV + 0.025), 5.0);
+    /* ── Physical metal-like Fresnel edge glow ── */
+    float fresnel = pow(1.0 - NdotV, 4.2);
 
-    /* Stage palette (subtle tint — glass picks up scene color) */
-    vec3 c0 = vec3(0.04, 0.00, 0.18);
-    vec3 c1 = vec3(0.12, 0.04, 0.55);
-    vec3 c2 = vec3(0.03, 0.35, 0.90);
-    vec3 c3 = vec3(0.70, 0.55, 1.00);
-    vec3 base;
-    if      (uProgress < 0.33) base = mix(c0, c1, smoothstep(0.00, 0.33, uProgress));
-    else if (uProgress < 0.66) base = mix(c1, c2, smoothstep(0.33, 0.66, uProgress));
-    else                       base = mix(c2, c3, smoothstep(0.66, 1.00, uProgress));
+    /* ── Per-chapter edge color ── */
+    vec3 c0 = vec3(0.20, 0.04, 0.85);   /* Ch1 — indigo */
+    vec3 c1 = vec3(0.04, 0.55, 1.00);   /* Ch2-3 — electric blue */
+    vec3 c2 = vec3(0.00, 0.95, 0.75);   /* Ch4-5 — cyan-teal */
+    vec3 c3 = vec3(0.95, 0.55, 0.05);   /* Ch6-7 — amber */
+    vec3 c4 = vec3(0.75, 0.10, 1.00);   /* Ch8 — violet */
+    vec3 edgeCol;
+    if      (uProgress < 0.25) edgeCol = mix(c0, c1, smoothstep(0.00, 0.25, uProgress));
+    else if (uProgress < 0.50) edgeCol = mix(c1, c2, smoothstep(0.25, 0.50, uProgress));
+    else if (uProgress < 0.75) edgeCol = mix(c2, c3, smoothstep(0.50, 0.75, uProgress));
+    else                       edgeCol = mix(c3, c4, smoothstep(0.75, 1.00, uProgress));
 
-    /* Thin-film iridescence (angle + time → rainbow at facet edges) */
-    float iriPhase = NdotV * 5.5 + uTime * 0.14;
-    vec3  iriColor = 0.5 + 0.5 * cos(6.28318 * (vec3(0.0, 0.333, 0.666) + iriPhase * 0.55));
-    float iriMix   = pow(1.0 - NdotV, 2.5) * 0.85 * smoothstep(0.12, 0.48, uProgress);
-    base           = mix(base, iriColor, iriMix);
+    /* ── Iridescent thin-film at edges — rainbow shimmer ── */
+    float iriPhase = NdotV * 6.0 + uTime * 0.16;
+    vec3  iriCol   = 0.5 + 0.5 * cos(6.28318*(vec3(0.0,0.333,0.666)+iriPhase*0.6));
+    float iriMix   = pow(1.0 - NdotV, 3.0) * 0.7;
+    edgeCol        = mix(edgeCol, iriCol, iriMix * smoothstep(0.12, 0.45, uProgress));
 
-    /* Multi-octave caustic interference bands */
-    float ca = sin(vWorldPosition.x * 4.1 + uTime * 0.58) *
-               sin(vWorldPosition.y * 3.7 - uTime * 0.41) *
-               sin(vWorldPosition.z * 3.4 + uTime * 0.49);
-    float cb = sin(vWorldPosition.x * 7.2 - uTime * 0.76) *
-               cos(vWorldPosition.z * 6.1 + uTime * 0.33);
-    float cc = cos(vWorldPosition.y * 5.6 + uTime * 0.62) *
-               sin(vWorldPosition.x * 4.8 - uTime * 0.54);
-    float caustic  = pow(max(0.0, ca), 2.2) * 0.55
-                   + pow(max(0.0, cb), 2.2) * 0.35
-                   + pow(max(0.0, cc), 2.8) * 0.20;
-    vec3  cCol     = mix(vec3(0.45, 0.15, 1.0), vec3(0.15, 0.85, 1.0), ca * 0.5 + 0.5);
-    base          += cCol * caustic * smoothstep(0.18, 0.52, uProgress) * 1.8;
+    /* ── Facet energy cracks — bright lines between facet groups ── */
+    float crackSharp = abs(sin(vFacetId * 31.4 + uTime * 0.8));
+    float crackLine  = pow(crackSharp, 18.0);  /* very sharp bright lines at facet edges */
+    vec3  crackCol   = edgeCol * 2.8;
 
-    /* Subsurface scattering (backlit inner glow transmission) */
-    float sss    = pow(1.0 - NdotV, 4.0) * smoothstep(0.16, 0.50, uProgress);
-    vec3  sssCol = mix(vec3(0.60, 0.06, 1.00), vec3(0.12, 0.70, 1.00), uProgress);
-    base        += sssCol * sss * 1.0;
+    /* ── Hard specular glints — like light catching a diamond face ── */
+    vec3  l1  = normalize(vec3(2.0, 3.5, 4.0));
+    float sp1 = pow(max(dot(N, normalize(l1+viewDir)),0.0), 420.0);
+    vec3  l2  = normalize(vec3(-3.0, 2.0, 1.5));
+    float sp2 = pow(max(dot(N, normalize(l2+viewDir)),0.0), 320.0);
+    vec3  l3  = normalize(vec3(0.0, -2.0, 3.5));
+    float sp3 = pow(max(dot(N, normalize(l3+viewDir)),0.0), 280.0);
 
-    /* Hard specular at facet angles (micro-glints that look like light bouncing inside) */
-    vec3  lDir    = normalize(vec3(2.0, 3.5, 4.0));
-    vec3  hDir    = normalize(lDir + viewDir);
-    float spec    = pow(max(dot(N, hDir), 0.0), 280.0);
-    float spec2   = pow(max(dot(N, normalize(vec3(-3.0, 2.0, 1.5) + viewDir)), 0.0), 180.0);
-    base         += vec3(1.0, 0.94, 1.0) * (spec + spec2 * 0.55) * 1.6;
+    /* ── Caustic interior light leaking through facets ── */
+    float ca = sin(vWorldPosition.x*5.2+uTime*0.62)*sin(vWorldPosition.y*4.8-uTime*0.44)*sin(vWorldPosition.z*5.0+uTime*0.52);
+    float caustic = pow(max(0.0,ca), 2.4) * 1.2 * smoothstep(0.20, 0.50, uProgress);
 
-    /* Secondary micro-refraction glints (hexagonal shimmer) */
-    float rx = sin(vWorldPosition.x * 12.2 - uTime * 1.15);
-    float ry = sin(vWorldPosition.y * 10.4 + uTime * 0.85);
-    float rz = sin(vWorldPosition.z * 11.1 - uTime * 0.95);
-    float rGlint = pow(max(0.0, rx * ry * rz), 7.0);
-    base        += vec3(0.88, 0.93, 1.0) * rGlint * 2.0 * smoothstep(0.28, 0.58, uProgress);
+    /* ── HOLD: color universe shift + crack blaze ── */
+    float holdPulse = 0.5 + 0.5*sin(uTime*6.0 + vRand*6.28);
+    /* Edge blazes with the hold color (chapter accent) */
+    edgeCol = mix(edgeCol, uHoldColor, uHold * 0.72);
+    /* Cracks ignite */
+    crackCol += uHoldColor * uHold * holdPulse * 4.0;
+    /* Caustic beams fire */
+    float holdCaustic = caustic + pow(max(0.0,ca),1.8)*uHold*2.5;
 
-    /* Hold activation surge: inner core light breaks through the shell */
-    float holdPulse = 0.5 + 0.5 * sin(uTime * 5.0 + vRand * 6.28);
-    base += vec3(0.60, 0.25, 1.0) * uHold * (1.0 - NdotV) * 1.4 * (0.7 + holdPulse * 0.3);
-    base += vec3(0.25, 0.70, 1.0) * uHold * fresnel * 1.0;
-    base += iriColor * uHold * pow(1.0 - NdotV, 2.5) * 0.8;
-    /* Caustic beams ignite on hold */
-    base += cCol * caustic * uHold * 2.5;
+    /* ── Compose ── */
+    vec3 col = mirrorBase;
+    col += edgeCol   * fresnel * 2.4;
+    col += crackCol  * crackLine * smoothstep(0.14, 0.40, uProgress);
+    col += edgeCol   * holdCaustic;
+    col += vec3(1.0) * (sp1*1.8 + sp2*1.2 + sp3*0.9);
+    col += uHoldColor * uHold * fresnel * 1.6;
 
-    /* Chromatic dispersion color (R/G/B shift at edges) */
-    vec3 col = vec3(
-      base.r + iriColor.r * (frR - fresnel) * 0.5,
-      base.g,
-      base.b + iriColor.b * (frB - fresnel) * 0.5
-    );
-
-    /* KEY TRANSPARENCY FIX — glass-like alpha, face is nearly invisible
-       Face-on (NdotV≈1): alpha ≈ 0.07  (transparent glass face)
-       Edge-on (NdotV≈0): alpha ≈ 1.5+  (bright opaque edge like real crystal) */
-    float faceBase  = 0.07 * smoothstep(0.14, 0.42, uProgress);
-    float edgeAlpha = pow(fresnel, 1.15) * 1.6;
-    float specAlpha = (spec + spec2 * 0.4) * 0.8;
-    float alpha     = (faceBase + edgeAlpha + specAlpha) * uOpacity;
-    alpha           = clamp(alpha + uHold * (fresnel * 0.55 + 0.04), 0.0, 0.98);
+    /* ── Alpha — opaque facets, blazing edges ── */
+    float faceAlpha  = 0.82 * smoothstep(0.12, 0.38, uProgress);
+    float edgeAlpha  = fresnel * 0.18;
+    float crackAlpha = crackLine * 0.25 * smoothstep(0.14,0.40,uProgress);
+    float specAlpha  = (sp1 + sp2*0.6 + sp3*0.4) * 0.5;
+    float alpha      = (faceAlpha + edgeAlpha + crackAlpha + specAlpha) * uOpacity;
+    alpha            = clamp(alpha + uHold*0.08, 0.0, 1.0);
 
     gl_FragColor = vec4(col, alpha);
   }
@@ -496,6 +481,211 @@ const AURORA_FRAG = /* glsl */`
   }
 `
 
+/* ═══════════════════════════════════════════════════════════
+   SHOCKWAVE RING — emits outward from crystal on hold
+═══════════════════════════════════════════════════════════ */
+
+const SHOCK_VERT = /* glsl */`
+  varying vec2 vUv;
+  uniform float uScale;
+  void main(){
+    vUv = uv;
+    vec3 pos = position * uScale;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`
+const SHOCK_FRAG = /* glsl */`
+  precision mediump float;
+  varying vec2  vUv;
+  uniform float uHold;
+  uniform float uWave;   /* 0→1 wave front expansion */
+  uniform vec3  uColor;
+
+  void main(){
+    vec2  uv   = vUv - 0.5;
+    float dist = length(uv) * 2.0;   /* 0 at center, 1 at ring edge */
+    /* Ring: bright at the wave front, fades behind it */
+    float ring = smoothstep(uWave - 0.08, uWave, dist)
+               * smoothstep(uWave + 0.06, uWave, dist);
+    float alpha = ring * uHold * 0.85;
+    gl_FragColor = vec4(uColor + 0.4, alpha);
+  }
+`
+
+/* ─── God ray shaft shader ─────────────────────────────── */
+const GODRAY_FRAG = /* glsl */`
+  precision mediump float;
+  varying vec2  vUv;
+  uniform float uTime;
+  uniform float uIntensity;
+  uniform vec3  uColor;
+
+  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  float noise(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);
+  }
+
+  void main(){
+    /* Radial god rays from center-top */
+    vec2  center = vec2(0.5, 0.0);
+    vec2  dir    = vUv - center;
+    float angle  = atan(dir.x, dir.y);
+    float dist   = length(dir);
+
+    /* Ray shafts via angular noise */
+    float rays = noise(vec2(angle * 4.0 + uTime * 0.12, dist * 3.0));
+    rays = pow(rays, 2.5);
+
+    /* Fade: bright near center, invisible at edges */
+    float radFade = smoothstep(0.9, 0.0, dist);
+    float topFade = smoothstep(0.0, 0.35, 1.0 - vUv.y);  /* only upward shafts */
+
+    float alpha = rays * radFade * topFade * uIntensity * 0.38;
+    gl_FragColor = vec4(uColor * 1.6, alpha);
+  }
+`
+
+/* ═══════════════════════════════════════════════════════════
+   MOUNTAIN TERRAIN SHADERS
+   Ridged FBM terrain — dark silhouette peaks with atmospheric
+   rim glow that transitions to city as progress increases.
+   Geometry: custom BufferGeometry (x/z=terrain, y displaced in shader)
+   Valley corridor carved at |x|<85 and z>-120 for city/crystal zone.
+═══════════════════════════════════════════════════════════ */
+
+const MOUNTAIN_VERT = /* glsl */`
+  varying vec3  vWorldPos;
+  varying vec3  vNormal;
+  varying float vHeight;
+  varying float vSlope;
+  uniform float uTime;
+
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);
+  }
+  float ridge(float n){ return 1.0-abs(n*2.0-1.0); }
+  float ridgedFBM(vec2 p){
+    float v=0.0,a=0.55,prev=1.0;
+    for(int i=0;i<4;i++){float n=ridge(noise(p));v+=a*n*prev;prev=n;p=p*2.18+vec2(1.7,9.2);a*=0.5;}
+    return v;
+  }
+  float fbm(vec2 p){
+    float v=0.0,a=0.5;
+    for(int i=0;i<3;i++){v+=a*noise(p);p=p*2.1+vec2(3.2,7.4);a*=0.5;}
+    return v;
+  }
+  float heightAt(vec2 xz){
+    /* Normalize terrain coords [-190..190, -220..-20] → [0..1] */
+    vec2 p = (xz + vec2(190.0, 220.0)) / vec2(380.0, 200.0);
+    float h = ridgedFBM(p * 3.8) * 48.0
+            + fbm(p * 8.5 + vec2(2.3, 1.1)) * 12.0
+            + fbm(p * 22.0 + vec2(5.1)) * 3.0;
+    /* Valley: flat near city (|x|<85 and z>-120), mountains elsewhere */
+    float valleyX = smoothstep(0.0, 85.0, abs(xz.x));
+    float valleyZ = 1.0 - smoothstep(-120.0, -20.0, xz.z);
+    h *= mix(0.03, 1.0, max(valleyX, valleyZ));
+    return max(0.0, h);
+  }
+
+  void main(){
+    float h = heightAt(position.xz);
+    vHeight  = h;
+    vec3 disp = position + vec3(0.0, h, 0.0);
+    vWorldPos = (modelMatrix * vec4(disp, 1.0)).xyz;
+
+    /* Finite-difference normals for accurate lighting */
+    float eps = 3.5;
+    float hL = heightAt(position.xz + vec2(-eps, 0.0));
+    float hR = heightAt(position.xz + vec2( eps, 0.0));
+    float hD = heightAt(position.xz + vec2(0.0,-eps));
+    float hU = heightAt(position.xz + vec2(0.0, eps));
+    vec3  n   = normalize(vec3(hL-hR, 2.0*eps, hD-hU));
+    vNormal   = normalize(normalMatrix * n);
+    vSlope    = 1.0 - n.y;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(disp, 1.0);
+  }
+`
+
+const MOUNTAIN_FRAG = /* glsl */`
+  precision highp float;
+  varying vec3  vWorldPos;
+  varying vec3  vNormal;
+  varying float vHeight;
+  varying float vSlope;
+  uniform float uTime;
+  uniform float uFade;
+  uniform vec3  uAtmColor;
+
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+
+  void main(){
+    vec3 N = normalize(vNormal);
+
+    /* Base rock: near-black deep purple stone */
+    vec3 rockBase = mix(vec3(0.02,0.01,0.06), vec3(0.07,0.04,0.16), smoothstep(0.0,22.0,vHeight));
+    vec3 rockHigh = mix(rockBase, vec3(0.12,0.07,0.24), smoothstep(22.0,44.0,vHeight));
+    vec3 col = rockHigh;
+
+    /* Snow — high peaks with low slope */
+    float snowFac = smoothstep(26.0, 36.0, vHeight) * smoothstep(0.52, 0.22, vSlope);
+    col = mix(col, vec3(0.80, 0.86, 1.00), snowFac * 0.72);
+
+    /* Atmospheric rim glow — edge where terrain meets sky */
+    float rimFac = pow(max(0.0, 1.0 - abs(dot(N, vec3(0.0,1.0,0.0)))), 3.0);
+    col += uAtmColor * rimFac * 1.8;
+
+    /* Snow shimmer — occasional star-like specular on peaks */
+    float shimmerSeed = hash(floor(vWorldPos.xz * 0.1));
+    float shimmer = step(0.96, shimmerSeed) * snowFac * (0.5 + 0.5*sin(uTime*2.5+shimmerSeed*12.0));
+    col += vec3(0.75, 0.88, 1.0) * shimmer * 0.9;
+
+    /* Depth atmospheric haze */
+    float dist    = length(vWorldPos.xz);
+    float hazeFac = smoothstep(60.0, 210.0, dist);
+    col = mix(col, uAtmColor * 0.28, hazeFac * 0.7);
+
+    /* Subtle directional light from above-right */
+    float diffuse = max(0.0, dot(N, normalize(vec3(1.0, 2.5, 1.5))));
+    col += uAtmColor * 0.18 * diffuse;
+
+    float alpha = uFade * (1.0 - hazeFac * 0.45);
+    gl_FragColor = vec4(col, alpha);
+  }
+`
+
+/* Atmospheric mist — drifting fog between mountain peaks */
+const MIST_FRAG = /* glsl */`
+  precision mediump float;
+  varying vec2  vUv;
+  uniform float uTime;
+  uniform float uFade;
+  uniform vec3  uColor;
+
+  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  float noise(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);
+  }
+  float fbm(vec2 p){float v=0.0,a=0.5;for(int i=0;i<3;i++){v+=a*noise(p);p=p*2.1+vec2(1.7,9.2);a*=0.5;}return v;}
+
+  void main(){
+    float n1  = fbm(vUv * 2.6 + vec2(uTime*0.05, uTime*0.03));
+    float n2  = fbm(vUv * 5.2 - vec2(uTime*0.04, 0.0));
+    float mist = n1 * 0.62 + n2 * 0.38;
+
+    float ex = smoothstep(0.0,0.14,vUv.x)*smoothstep(1.0,0.86,vUv.x);
+    float ey = smoothstep(0.0,0.10,vUv.y)*smoothstep(1.0,0.90,vUv.y);
+    float depth = smoothstep(0.0, 0.4, vUv.y);  // denser deeper in the range
+
+    float alpha = mist * ex * ey * depth * uFade * 0.28;
+    gl_FragColor = vec4(uColor, alpha);
+  }
+`
+
 /* ─── Remaining shaders (unchanged) ───────────────────────── */
 
 const PART_VERT = /* glsl */`
@@ -657,6 +847,8 @@ const BG_FRAG = /* glsl */`
   uniform float uTime;
   uniform vec3  uColorA;
   uniform vec3  uColorB;
+  uniform float uMountainBlend;
+  uniform vec3  uAtmColor;
 
   float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
   float noise(vec2 p){
@@ -670,8 +862,35 @@ const BG_FRAG = /* glsl */`
     float n1  = fbm(vUv * 2.5 + vec2(t, t*0.7));
     float n2  = fbm(vUv * 4.5 - vec2(t*0.6, t));
     vec3  col = mix(uColorA, uColorA + uColorB * 0.65, n1 * 0.5 + n2 * 0.25);
+
+    /* ── Stars — visible in upper hemisphere during mountain phase ── */
+    float starHeight = smoothstep(0.44, 0.62, vUv.y);
+    vec2  starGrid   = vUv * 150.0;
+    float starSeed   = hash(floor(starGrid));
+    float twinkle    = 0.5 + 0.5 * sin(uTime * (2.0 + starSeed * 5.0) + starSeed * 6.283);
+    float starMask   = step(0.964, starSeed) * uMountainBlend * starHeight * twinkle;
+    col += vec3(0.80, 0.88, 1.00) * starMask * 0.95;
+
+    /* ── Shooting star — rare bright streak ── */
+    float ssSeed = hash(floor(vUv * 14.0 + vec2(uTime * 0.04)));
+    float ss = step(0.997, ssSeed) * uMountainBlend * starHeight;
+    col += vec3(0.90, 0.95, 1.0) * ss * 1.8;
+
+    /* ── Aurora curtains — animated during mountain phase ── */
+    float aur1 = sin(vUv.x * 8.5 + uTime * 0.38) * sin(vUv.y * 4.8 + uTime * 0.22);
+    float aur2 = sin(vUv.x * 5.8 - uTime * 0.30) * cos(vUv.y * 3.9 + uTime * 0.19);
+    vec3  aurHue = mix(vec3(0.14,0.03,0.70), vec3(0.04,0.48,0.88), vUv.y);
+    col += aurHue * max(0.0, aur1) * uMountainBlend * 0.11;
+    col += aurHue * max(0.0, aur2) * uMountainBlend * 0.07;
+
+    /* ── Horizon atmospheric glow ── */
+    float horizFac = pow(max(0.0, 1.0 - abs(vUv.y - 0.46) * 4.2), 2.5);
+    col += uAtmColor * horizFac * 0.22;
+
+    /* ── Radial center brightness ── */
     float rad = 1.0 - length(vUv - 0.5) * 1.55;
-    col      += uColorB * max(0.0, rad * rad) * 0.22;
+    col += uColorB * max(0.0, rad * rad) * 0.22;
+
     gl_FragColor = vec4(col, 1.0);
   }
 `
@@ -740,30 +959,33 @@ function HelixStreams() {
    SCENE BACKGROUND — vivid purple atmosphere
 ═══════════════════════════════════════════════════════════ */
 
-/* Deep purple palettes — richer than before */
+/* Per-chapter sky palettes — each chapter has a distinct dramatic color identity */
 const BG_PALETTES: Array<[THREE.Color, THREE.Color]> = [
-  [new THREE.Color(0x020008), new THREE.Color(0x220a60)],  // void + vivid violet
-  [new THREE.Color(0x030012), new THREE.Color(0x2d1275)],  // signal
-  [new THREE.Color(0x060010), new THREE.Color(0x5a189a)],  // activation — bright purple
-  [new THREE.Color(0x030012), new THREE.Color(0x1a2090)],  // content — violet-blue
-  [new THREE.Color(0x020014), new THREE.Color(0x2a1278)],  // growth
-  [new THREE.Color(0x020215), new THREE.Color(0x0840a8)],  // revenue — deep blue
-  [new THREE.Color(0x030110), new THREE.Color(0x4a0e9e)],  // intelligence — vivid
-  [new THREE.Color(0x010110), new THREE.Color(0x1a0858)],  // autopilot
+  [new THREE.Color(0x010008), new THREE.Color(0x0d0440)],  // Ch1 BEFORE — near void, hint of indigo
+  [new THREE.Color(0x020012), new THREE.Color(0x1e0c80)],  // Ch2 SIGNAL — deep indigo surge
+  [new THREE.Color(0x050010), new THREE.Color(0x5a189a)],  // Ch3 ACTIVATION — vivid violet explosion
+  [new THREE.Color(0x020012), new THREE.Color(0x1a2090)],  // Ch4 CONTENT — violet-blue
+  [new THREE.Color(0x010215), new THREE.Color(0x0a50b8)],  // Ch5 GROWTH — electric cyan-blue
+  [new THREE.Color(0x020015), new THREE.Color(0x0836a0)],  // Ch6 REVENUE — deep sapphire
+  [new THREE.Color(0x080005), new THREE.Color(0x6a1a80)],  // Ch7 INTELLIGENCE — warm purple-magenta
+  [new THREE.Color(0x010110), new THREE.Color(0x2d1075)],  // Ch8 AUTOPILOT — final deep violet
 ]
 
 function SceneBackground() {
   const matRef = useRef<THREE.ShaderMaterial | null>(null)
   const colA   = useRef(new THREE.Color())
   const colB   = useRef(new THREE.Color())
+  const atmRef = useRef(new THREE.Color())
 
   const bgMat = useMemo(() => new THREE.ShaderMaterial({
     vertexShader:   BG_VERT,
     fragmentShader: BG_FRAG,
     uniforms: {
-      uTime:   { value: 0 },
-      uColorA: { value: new THREE.Color(0x020008) },
-      uColorB: { value: new THREE.Color(0x220a60) },
+      uTime:          { value: 0 },
+      uColorA:        { value: new THREE.Color(0x010008) },
+      uColorB:        { value: new THREE.Color(0x0d0440) },
+      uMountainBlend: { value: 1.0 },
+      uAtmColor:      { value: new THREE.Color(0x0d0440) },
     },
     depthWrite: false, depthTest: false, side: THREE.BackSide,
   }), [])
@@ -772,15 +994,18 @@ function SceneBackground() {
 
   useFrame(({ clock }) => {
     if (!matRef.current) return
-    bgMat.uniforms.uTime.value = clock.getElapsedTime()
-    const si  = _sceneI.current
+    const si   = _sceneI.current
+    const frac = THREE.MathUtils.clamp(_prog.current * SCENES.length - si, 0, 1)
     const [a0, b0] = BG_PALETTES[si]
     const [a1, b1] = BG_PALETTES[Math.min(si + 1, BG_PALETTES.length - 1)]
-    const frac = THREE.MathUtils.clamp(_prog.current * SCENES.length - si, 0, 1)
     colA.current.lerpColors(a0, a1, frac)
     colB.current.lerpColors(b0, b1, frac)
+    atmRef.current.lerpColors(b0, b1, frac)
+    bgMat.uniforms.uTime.value             = clock.getElapsedTime()
+    bgMat.uniforms.uMountainBlend.value    = _mountainBlend.current
     bgMat.uniforms.uColorA.value.lerp(colA.current, 0.04)
     bgMat.uniforms.uColorB.value.lerp(colB.current, 0.04)
+    bgMat.uniforms.uAtmColor.value.lerp(atmRef.current, 0.04)
   })
 
   return (
@@ -788,6 +1013,110 @@ function SceneBackground() {
       <sphereGeometry args={[80, 32, 32]} />
       <primitive object={bgMat} attach="material" />
     </mesh>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOUNTAIN TERRAIN — dark ridged peaks behind the city
+   Fades from progress 0.28 → 0.62 as city takes over.
+═══════════════════════════════════════════════════════════ */
+
+function MountainTerrain() {
+  const atmBuf        = useRef(new THREE.Color())
+  const terrainMeshRef = useRef<THREE.Mesh>(null)
+  const mistMeshRef    = useRef<THREE.Mesh>(null)
+
+  const geo = useMemo(() => {
+    const W = 380, D = 200, segW = 120, segD = 80
+    const vc = (segW + 1) * (segD + 1)
+    const pos = new Float32Array(vc * 3)
+    const uvs = new Float32Array(vc * 2)
+    const idx: number[] = []
+    for (let iz = 0; iz <= segD; iz++) {
+      for (let ix = 0; ix <= segW; ix++) {
+        const vi = iz * (segW + 1) + ix
+        pos[vi*3  ] = (ix / segW - 0.5) * W
+        pos[vi*3+1] = 0
+        pos[vi*3+2] = (iz / segD - 0.5) * D - 120   // offset back: z ∈ [-220, -20]
+        uvs[vi*2  ] = ix / segW
+        uvs[vi*2+1] = iz / segD
+      }
+    }
+    for (let iz = 0; iz < segD; iz++) {
+      for (let ix = 0; ix < segW; ix++) {
+        const a = iz*(segW+1)+ix, b=a+1, c=a+(segW+1), d=c+1
+        idx.push(a,b,c, b,d,c)
+      }
+    }
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+    g.setAttribute('uv',       new THREE.Float32BufferAttribute(uvs, 2))
+    g.setIndex(idx)
+    return g
+  }, [])
+
+  const mistGeo = useMemo(() => new THREE.PlaneGeometry(380, 200), [])
+
+  const mat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   MOUNTAIN_VERT,
+    fragmentShader: MOUNTAIN_FRAG,
+    uniforms: {
+      uTime:     { value: 0 },
+      uFade:     { value: 1.0 },
+      uAtmColor: { value: new THREE.Color(0x0d0440) },
+    },
+    transparent: true,
+    side: THREE.FrontSide,
+  }), [])
+
+  const mistMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   BG_VERT,
+    fragmentShader: MIST_FRAG,
+    uniforms: {
+      uTime:  { value: 0 },
+      uFade:  { value: 1.0 },
+      uColor: { value: new THREE.Color(0x2d0c88) },
+    },
+    transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  }), [])
+
+  useEffect(() => () => { geo.dispose(); mat.dispose(); mistGeo.dispose(); mistMat.dispose() },
+    [geo, mat, mistGeo, mistMat])
+
+  useFrame(({ clock }) => {
+    const t    = clock.getElapsedTime()
+    const si   = _sceneI.current
+    const frac = THREE.MathUtils.clamp(_prog.current * SCENES.length - si, 0, 1)
+    const [, b0] = BG_PALETTES[si]
+    const [, b1] = BG_PALETTES[Math.min(si + 1, BG_PALETTES.length - 1)]
+    atmBuf.current.lerpColors(b0, b1, frac)
+
+    mat.uniforms.uTime.value  = t
+    mat.uniforms.uFade.value  = _mountainBlend.current
+    mat.uniforms.uAtmColor.value.lerp(atmBuf.current, 0.05)
+
+    mistMat.uniforms.uTime.value  = t
+    mistMat.uniforms.uFade.value  = _mountainBlend.current * 0.85
+    mistMat.uniforms.uColor.value.lerp(atmBuf.current, 0.04)
+
+    /* Mountains sink down as they fade out — dramatic descent */
+    const sinkY = -8 - (1.0 - _mountainBlend.current) * 16
+    if (terrainMeshRef.current) terrainMeshRef.current.position.y = sinkY
+    if (mistMeshRef.current)    mistMeshRef.current.position.y    = 14 - (1.0 - _mountainBlend.current) * 16
+  })
+
+  return (
+    <>
+      {/* Terrain mesh — base at y=-8, peaks up to y≈40 */}
+      <mesh ref={terrainMeshRef} geometry={geo} material={mat} position={[0, -8, 0]} />
+      {/* Mist layer — atmospheric haze between peaks at mid-height */}
+      <mesh
+        ref={mistMeshRef} geometry={mistGeo} material={mistMat}
+        position={[0, 14, -120]} rotation={[-Math.PI / 2, 0, 0]}
+      />
+    </>
   )
 }
 
@@ -985,6 +1314,82 @@ function WindowLights() {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   FLOOR REFLECTION — wet-mirror plane beneath the city
+═══════════════════════════════════════════════════════════ */
+
+const REFLECT_FRAG = /* glsl */`
+  precision highp float;
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform float uFade;
+
+  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  float noise(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);
+  }
+
+  void main(){
+    /* Wet floor warp — slight wavy distortion like puddled rain */
+    float warp  = (noise(vUv*7.5 + vec2(uTime*0.08, 0.0)) - 0.5) * 0.022;
+    float warp2 = (noise(vUv*12.0 - vec2(0.0, uTime*0.06)) - 0.5) * 0.012;
+    vec2 r = vec2(vUv.x + warp, 1.0 - vUv.y + warp2);  /* flip Y = reflection */
+
+    /* City grid lines */
+    vec2  grid = fract(r * 32.0);
+    float d    = min(min(grid.x,1.0-grid.x), min(grid.y,1.0-grid.y));
+    float line = 1.0 - smoothstep(0.0, 0.055, d);
+
+    /* Reflected window dots */
+    float wseed = hash(floor(r * 64.0) + vec2(13.7, 5.3));
+    float wh    = hash(floor(r * 64.0) + vec2(0.1, 22.4));
+    float win   = step(0.91, wseed);
+
+    /* Animated grid pulse — matches city shader */
+    float p1 = 0.55 + 0.45*sin(uTime*0.9  + r.x*14.0 - r.y*9.0);
+    float p2 = 0.50 + 0.50*sin(uTime*0.40 + r.y*6.0  + r.x*4.0);
+
+    vec3 gridCol = mix(vec3(0.62,0.18,1.00), vec3(0.88,0.48,1.00), p1);
+    vec3 winCol  = mix(vec3(0.78,0.65,1.00), vec3(0.55,0.22,1.00), wh);
+    vec3 col     = vec3(0.04,0.00,0.12);
+    col         += gridCol * line * 1.4 * p1;
+    col         += winCol  * win  * 0.9;
+    col         += vec3(0.18,0.03,0.48) * p2 * 0.18;
+
+    /* Radial fade — reflection strongest directly below crystal */
+    float dist    = length(vUv - 0.5);
+    float radFade = smoothstep(0.54, 0.0, dist);
+
+    float alpha = (0.04 + line*0.28 + win*0.20) * radFade * uFade;
+    gl_FragColor = vec4(col, alpha);
+  }
+`
+
+function ReflectionPlane() {
+  const mat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   CITY_VERT,
+    fragmentShader: REFLECT_FRAG,
+    uniforms: { uTime: { value: 0 }, uFade: { value: 0 } },
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  }), [])
+
+  useEffect(() => () => mat.dispose(), [mat])
+
+  useFrame(({ clock }) => {
+    mat.uniforms.uTime.value = clock.getElapsedTime()
+    mat.uniforms.uFade.value = THREE.MathUtils.smoothstep(_prog.current, 0.04, 0.20) * 0.68
+  })
+
+  return (
+    <mesh position={[0, CITY_Y - 0.14, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <planeGeometry args={[CITY_SIZE * CITY_SPACE + 14, CITY_SIZE * CITY_SPACE + 14]} />
+      <primitive object={mat} attach="material" />
+    </mesh>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════
    JOURNEY SCENE — Crystalline Consciousness at center
 ═══════════════════════════════════════════════════════════ */
 
@@ -999,11 +1404,16 @@ function JourneyScene() {
     return () => { scene.fog = null }
   }, [scene])
 
-  const crystalRef  = useRef<THREE.Mesh>(null)
-  const coreRef     = useRef<THREE.Mesh>(null)
-  const midRef      = useRef<THREE.Mesh>(null)
-  const wireRef     = useRef<THREE.LineSegments>(null)
-  const satGroupRef = useRef<THREE.Group>(null)
+  const crystalRef   = useRef<THREE.Mesh>(null)
+  const coreRef      = useRef<THREE.Mesh>(null)
+  const midRef       = useRef<THREE.Mesh>(null)
+  const wireRef      = useRef<THREE.LineSegments>(null)
+  const satGroupRef  = useRef<THREE.Group>(null)
+  const shockRef     = useRef<THREE.Mesh>(null)
+  const godRayRef    = useRef<THREE.Mesh>(null)
+  const cityRiseRef  = useRef<THREE.Group>(null)
+  const shockWave    = useRef(0)        /* 0→1 wave expansion progress */
+  const prevHold     = useRef(0)        /* detects hold rising edge */
   const satRefs    = useRef<THREE.Mesh[]>([])
   const satSprRefs = useRef<THREE.Sprite[]>([])
   const ring0      = useRef<THREE.Mesh>(null)
@@ -1014,12 +1424,13 @@ function JourneyScene() {
   const accentLight = useRef<THREE.PointLight>(null)
   const tempCam    = useRef(new THREE.Vector3())
   const tempColor  = useRef(new THREE.Color())
+  const fogColor   = useRef(new THREE.Color())
   const lookTarget = useRef(new THREE.Vector3())
 
   /* ── Crystalline Consciousness geometry ── */
   const crystalGeo = useMemo(() => {
-    /* Non-indexed → flat normals → visible crystalline facets */
-    const base = new THREE.IcosahedronGeometry(1.4, 2)
+    /* subdivision 1 = 80 large flat facets — angular black shard look */
+    const base = new THREE.IcosahedronGeometry(1.4, 1)
     const geo  = base.toNonIndexed()
     geo.computeVertexNormals()
     base.dispose()
@@ -1087,11 +1498,12 @@ function JourneyScene() {
     vertexShader:   CRYSTAL_VERT,
     fragmentShader: CRYSTAL_FRAG,
     uniforms: {
-      uTime:     { value: 0 },
-      uCamPos:   { value: new THREE.Vector3() },
-      uOpacity:  { value: 0 },
-      uProgress: { value: 0 },
-      uHold:     { value: 0 },
+      uTime:      { value: 0 },
+      uCamPos:    { value: new THREE.Vector3() },
+      uOpacity:   { value: 0 },
+      uProgress:  { value: 0 },
+      uHold:      { value: 0 },
+      uHoldColor: { value: new THREE.Color("#6366f1") },
     },
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
   }), [])
@@ -1133,6 +1545,33 @@ function JourneyScene() {
       uOpacity:  { value: 1 },
     },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }), [])
+
+  /* Shockwave ring — emits on hold rising edge */
+  const shockMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   SHOCK_VERT,
+    fragmentShader: SHOCK_FRAG,
+    uniforms: {
+      uHold:  { value: 0 },
+      uWave:  { value: 0 },
+      uScale: { value: 1.0 },
+      uColor: { value: new THREE.Color("#6366f1") },
+    },
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  }), [])
+
+  /* God ray cone above crystal */
+  const godRayMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   BG_VERT,
+    fragmentShader: GODRAY_FRAG,
+    uniforms: {
+      uTime:      { value: 0 },
+      uIntensity: { value: 0 },
+      uColor:     { value: new THREE.Color("#6366f1") },
+    },
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
   }), [])
 
   const glowTex = useMemo(() => {
@@ -1197,17 +1636,39 @@ function JourneyScene() {
     crystalGeo.dispose(); crystalMat.dispose()
     coreGeo.dispose();    coreMat.dispose()
     midGeo.dispose();     midMat.dispose()
-    wireGeo.dispose(); wireMat.dispose()
-    auroraGeo.dispose(); auroraMat.dispose()
-    partGeo.dispose(); partMat.dispose()
-    lineGeo.dispose(); lineMat.dispose()
+    wireGeo.dispose();    wireMat.dispose()
+    auroraGeo.dispose();  auroraMat.dispose()
+    partGeo.dispose();    partMat.dispose()
+    lineGeo.dispose();    lineMat.dispose()
+    shockMat.dispose();   godRayMat.dispose()
     glowTex?.dispose()
-  }, [crystalGeo, crystalMat, coreGeo, coreMat, midGeo, midMat, wireGeo, wireMat, auroraGeo, auroraMat, partGeo, partMat, lineGeo, lineMat, glowTex])
+  }, [crystalGeo, crystalMat, coreGeo, coreMat, midGeo, midMat, wireGeo, wireMat, auroraGeo, auroraMat, partGeo, partMat, lineGeo, lineMat, shockMat, godRayMat, glowTex])
 
   useFrame(({ clock }) => {
     const t  = clock.getElapsedTime()
     const p  = _prog.current
     const si = _sceneI.current
+
+    /* ── Mountain blend — fades out as city takes over ── */
+    const targetMB = 1.0 - THREE.MathUtils.smoothstep(p, 0.25, 0.62)
+    _mountainBlend.current = THREE.MathUtils.lerp(_mountainBlend.current, targetMB, 0.032)
+
+    /* ── City rise — buildings emerge from below as city fades in ── */
+    if (cityRiseRef.current) {
+      const rise = THREE.MathUtils.smoothstep(p, 0.01, 0.22)
+      cityRiseRef.current.position.y = THREE.MathUtils.lerp(cityRiseRef.current.position.y, -9 * (1.0 - rise), 0.06)
+    }
+
+    /* ── Fog color sync with BG palette ── */
+    if (scene.fog instanceof THREE.FogExp2) {
+      const [a0] = BG_PALETTES[si]
+      const [a1] = BG_PALETTES[Math.min(si + 1, BG_PALETTES.length - 1)]
+      const frac = THREE.MathUtils.clamp(p * SCENES.length - si, 0, 1)
+      fogColor.current.lerpColors(a0, a1, frac)
+      const fogTarget = fogColor.current
+      scene.fog.color.lerp(fogTarget, 0.03)
+      scene.fog.density = 0.015 + _mountainBlend.current * 0.007
+    }
 
     /* ── Hold detection: scroll velocity + pointer/touch hold ── */
     const progDelta  = Math.abs(p - _progLast.current)
@@ -1245,6 +1706,30 @@ function JourneyScene() {
     const crystalScale = 0.05 + baseOpacity * 1.15 + burstFac * 1.9
     const crystalRotY  = crystalRef.current ? crystalRef.current.rotation.y + 0.0045 : 0
     const crystalRotX  = Math.sin(t * 0.28) * 0.13
+
+    /* ── Hold color: cycles through chapter accent colors ── */
+    const holdColIdx = Math.floor(p * AGENT_COLORS.length) % AGENT_COLORS.length
+    tempColor.current.set(AGENT_COLORS[holdColIdx])
+    crystalMat.uniforms.uHoldColor.value.lerp(tempColor.current, 0.08)
+
+    /* ── Shockwave: fire on hold rising edge, expand to radius 3.5 ── */
+    if (combinedHold > 0.5 && prevHold.current < 0.5) {
+      shockWave.current = 0.01  /* trigger new wave */
+    }
+    prevHold.current = combinedHold
+    if (shockWave.current > 0) {
+      shockWave.current = Math.min(shockWave.current + 0.018, 1.2)
+    }
+    shockMat.uniforms.uHold.value  = combinedHold
+    shockMat.uniforms.uWave.value  = shockWave.current
+    shockMat.uniforms.uScale.value = 3.5 + shockWave.current * 0.5
+    shockMat.uniforms.uColor.value.lerp(tempColor.current, 0.12)
+
+    /* ── God rays: intensity ramps with hold and crystal opacity ── */
+    const godIntensity = crystalOp * (0.35 + combinedHold * 0.65)
+    godRayMat.uniforms.uTime.value      = t
+    godRayMat.uniforms.uIntensity.value = THREE.MathUtils.lerp(godRayMat.uniforms.uIntensity.value, godIntensity, 0.04)
+    godRayMat.uniforms.uColor.value.lerp(tempColor.current, 0.06)
 
     /* ── Outer glass shell ── */
     crystalMat.uniforms.uTime.value     = t
@@ -1352,11 +1837,16 @@ function JourneyScene() {
   return (
     <>
       <SceneBackground />
-      <Stars radius={65} depth={50} count={2500} factor={3.8} saturation={0.5} fade speed={0.35} />
-      <Sparkles count={100} size={1.4} scale={7} speed={0.14} color="#a855f7" noise={1.0} />
+      <Stars radius={65} depth={50} count={3200} factor={4.2} saturation={0.6} fade speed={0.28} />
+      <Sparkles count={120} size={1.5} scale={8} speed={0.12} color="#a855f7" noise={1.0} />
       <HelixStreams />
-      <CityScene />
-      <WindowLights />
+      <MountainTerrain />
+      {/* City group — rises from below as progress increases */}
+      <group ref={cityRiseRef}>
+        <CityScene />
+        <WindowLights />
+        <ReflectionPlane />
+      </group>
 
       {/* Purple city aurora — ceiling atmosphere */}
       <mesh geometry={auroraGeo} material={auroraMat} position={[0, 9, -4]} rotation={[Math.PI / 2, 0, 0]} />
@@ -1384,6 +1874,18 @@ function JourneyScene() {
         ))}
 
         <points geometry={partGeo} material={partMat} />
+
+        {/* Shockwave ring — horizontal plane, expands outward on hold rising edge */}
+        <mesh ref={shockRef} rotation={[-Math.PI / 2, 0, 0]} renderOrder={15}>
+          <planeGeometry args={[1, 1, 1, 1]} />
+          <primitive object={shockMat} attach="material" />
+        </mesh>
+
+        {/* God rays — vertical plane, volumetric shafts above crystal on hold */}
+        <mesh ref={godRayRef} position={[0, 5.5, -0.5]} scale={[18, 24, 1]} renderOrder={14}>
+          <planeGeometry args={[1, 1]} />
+          <primitive object={godRayMat} attach="material" />
+        </mesh>
 
         {/* Agent satellite group */}
         <group ref={satGroupRef}>
@@ -1432,6 +1934,47 @@ function JourneyScene() {
    HATOMSCROLL — Hatom-style full-screen experience
 ═══════════════════════════════════════════════════════════ */
 
+/* ─── Dynamic post-processing — bloom + CA spike on hold ──── */
+type BloomHandle = { luminanceMaterial: { threshold: number }; intensity: number }
+type CAHandle    = { offset: { set(x: number, y: number): void } }
+
+function DynamicPostFX() {
+  const bloomRef = useRef<BloomHandle>(null)
+  const caRef    = useRef<CAHandle>(null)
+
+  useFrame(() => {
+    const hold = Math.max(_holdInt.current, _pointerHoldInt.current)
+    if (bloomRef.current) {
+      bloomRef.current.luminanceMaterial.threshold = 0.14 - hold * 0.06
+      bloomRef.current.intensity = 2.4 + hold * 4.2
+    }
+    if (caRef.current) {
+      const off = 0.0005 + hold * 0.0072
+      caRef.current.offset.set(off, off)
+    }
+  })
+
+  return (
+    <EffectComposer multisampling={0}>
+      <DepthOfField focusDistance={0.025} focalLength={0.018} bokehScale={4.0} />
+      <Bloom
+        ref={bloomRef as React.Ref<BloomHandle>}
+        luminanceThreshold={0.14}
+        luminanceSmoothing={0.82}
+        intensity={2.4}
+        mipmapBlur
+        blendFunction={BlendFunction.ADD}
+      />
+      <ChromaticAberration
+        ref={caRef as React.Ref<CAHandle>}
+        offset={new THREE.Vector2(0.0005, 0.0005)}
+        blendFunction={BlendFunction.NORMAL}
+      />
+      <Vignette eskil={false} offset={0.12} darkness={0.95} />
+    </EffectComposer>
+  )
+}
+
 /* ─── Film grain overlay ────────────────────────────────────── */
 function FilmGrain() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -1477,7 +2020,7 @@ function FilmGrain() {
 }
 
 /* ─── Magnetic CTA wrapper ──────────────────────────────────── */
-function MagneticCTA({ href, children, style }: { href: string; children: React.ReactNode; style?: React.CSSProperties }) {
+function MagneticCTA({ href, children, style, className }: { href: string; children: React.ReactNode; style?: React.CSSProperties; className?: string }) {
   const ref = useRef<HTMLAnchorElement>(null)
 
   const onMove = (e: React.MouseEvent) => {
@@ -1499,6 +2042,7 @@ function MagneticCTA({ href, children, style }: { href: string; children: React.
       href={href}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
+      className={className}
       style={{ display: "inline-block", willChange: "transform", ...style }}
     >
       {children}
@@ -1506,15 +2050,34 @@ function MagneticCTA({ href, children, style }: { href: string; children: React.
   )
 }
 
+/* ─── Post-story data ───────────────────────────────────────── */
+const RESULT_STATS = [
+  { value: "4.2h",   label: "Saved every single day",  color: "#6366f1" },
+  { value: "3.8×",  label: "More reviews in 90 days", color: "#8b5cf6" },
+  { value: "$8,400", label: "Avg. monthly revenue",    color: "#06b6d4" },
+  { value: "500+",   label: "Businesses transformed",  color: "#10b981" },
+]
+const PRICING_PLANS = [
+  { name: "Starter",    price: "$297", features: ["3 AI Agents", "Content + Reputation", "Monthly Reports", "Email Support"],                                      color: "#6366f1", popular: false },
+  { name: "Growth",     price: "$597", features: ["6 AI Agents", "Full Suite + SEO", "Weekly Reports", "Priority Support", "Brand Voice Training"],               color: "#8b5cf6", popular: true  },
+  { name: "Enterprise", price: "$997", features: ["All 8 AI Agents", "Custom Brand Voice", "Daily Reports", "Dedicated Manager", "White Label"],                  color: "#06b6d4", popular: false },
+]
+
 export default function HatomScroll() {
-  const scrollRef   = useRef<HTMLDivElement>(null)
-  const lastIdxRef  = useRef(-1)
-  const [sceneIdx, setSceneIdx]   = useState(0)
-  const [count, setCount]         = useState(0)
-  const [loaded, setLoaded]       = useState(false)
-  const [dismissed, setDismissed] = useState(false)
-  const [hidden, setHidden]       = useState(false)
-  const [muted, setMuted]         = useState(false)
+  const scrollRef      = useRef<HTMLDivElement>(null)
+  const lastIdxRef     = useRef(-1)
+  const lastPostRef    = useRef(-1)
+  const postResultsRef = useRef<HTMLDivElement | null>(null)
+  const postPricingRef = useRef<HTMLDivElement | null>(null)
+  const postCtaRef     = useRef<HTMLDivElement | null>(null)
+
+  const [sceneIdx,    setSceneIdx]    = useState(0)
+  const [count,       setCount]       = useState(0)
+  const [loaded,      setLoaded]      = useState(false)
+  const [dismissed,   setDismissed]   = useState(false)
+  const [hidden,      setHidden]      = useState(false)
+  const [muted,       setMuted]       = useState(false)
+  const [postSection, setPostSection] = useState(-1)
 
   /* ── Per-section text refs for GSAP entrance animations ── */
   const titleRefs = useRef<(HTMLHeadingElement | null)[]>([])
@@ -1600,15 +2163,29 @@ export default function HatomScroll() {
     const container = scrollRef.current
     if (!container) return
     const onScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container
-      const p = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0
-      _prog.current = p
+      const { scrollTop, clientHeight } = container
+      /* Story progress: 0→1 over the first (SCENES.length-1) screens */
+      const storyMax = (SCENES.length - 1) * clientHeight
+      const p   = storyMax > 0 ? Math.min(scrollTop / storyMax, 1.0) : 0
+      _prog.current   = p
       const idx = Math.min(Math.floor(p * SCENES.length), SCENES.length - 1)
       _sceneI.current = idx
       if (idx !== lastIdxRef.current) {
         lastIdxRef.current = idx
         setSceneIdx(idx)
         import("@/lib/audio").then(({ audioEngine }) => audioEngine?.playBeat(idx))
+      }
+      /* Post-story sections — track which panel is active */
+      const postStart = SCENES.length * clientHeight
+      if (scrollTop >= postStart) {
+        const pi = Math.min(Math.floor((scrollTop - postStart) / clientHeight), 2)
+        if (pi !== lastPostRef.current) {
+          lastPostRef.current = pi
+          setPostSection(pi)
+        }
+      } else if (lastPostRef.current !== -1) {
+        lastPostRef.current = -1
+        setPostSection(-1)
       }
     }
     container.addEventListener("scroll", onScroll, { passive: true })
@@ -1618,8 +2195,8 @@ export default function HatomScroll() {
   const jumpToChapter = useCallback((i: number) => {
     const container = scrollRef.current
     if (!container) return
-    const total = container.scrollHeight - container.clientHeight
-    container.scrollTo({ top: (i / SCENES.length) * total, behavior: "smooth" })
+    /* Each chapter starts at i * clientHeight */
+    container.scrollTo({ top: i * container.clientHeight, behavior: "smooth" })
   }, [])
 
   useEffect(() => {
@@ -1635,6 +2212,27 @@ export default function HatomScroll() {
     window.addEventListener("keydown", handleKey)
     return () => window.removeEventListener("keydown", handleKey)
   }, [jumpToChapter])
+
+  /* ── GSAP post-section entrance animations ── */
+  useEffect(() => {
+    if (postSection === 0 && postResultsRef.current) {
+      const cards = postResultsRef.current.querySelectorAll(".ap-stat")
+      gsap.fromTo(cards, { opacity: 0, y: 50, scale: 0.88 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.75, stagger: 0.11, ease: "power3.out" })
+      const h = postResultsRef.current.querySelector(".ap-post-h")
+      if (h) gsap.fromTo(h, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.7, ease: "power3.out" })
+    }
+    if (postSection === 1 && postPricingRef.current) {
+      const cards = postPricingRef.current.querySelectorAll(".ap-plan")
+      gsap.fromTo(cards, { opacity: 0, y: 60, scale: 0.92 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.8, stagger: 0.13, ease: "power3.out" })
+    }
+    if (postSection === 2 && postCtaRef.current) {
+      const els = postCtaRef.current.querySelectorAll(".ap-cta-el")
+      gsap.fromTo(els, { opacity: 0, y: 40 },
+        { opacity: 1, y: 0, duration: 0.75, stagger: 0.15, ease: "power3.out" })
+    }
+  }, [postSection])
 
   const toggleMute = useCallback(() => {
     import("@/lib/audio").then(({ audioEngine }) => {
@@ -1711,26 +2309,12 @@ export default function HatomScroll() {
       {/* ══ WEBGL ══ */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
         <Canvas
-          camera={{ position: [0, 13.0, 26.0], fov: 50 }}
+          camera={{ position: [0, 15.5, 28.0], fov: 50 }}
           gl={{ antialias: true, alpha: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.15 }}
           style={{ width: "100%", height: "100%" }}
         >
           <JourneyScene />
-          <EffectComposer multisampling={0}>
-            <DepthOfField focusDistance={0.025} focalLength={0.018} bokehScale={4.0} />
-            <Bloom
-              luminanceThreshold={0.14}
-              luminanceSmoothing={0.82}
-              intensity={2.4}
-              mipmapBlur
-              blendFunction={BlendFunction.ADD}
-            />
-            <ChromaticAberration
-              offset={[0.0005, 0.0005] as unknown as THREE.Vector2}
-              blendFunction={BlendFunction.NORMAL}
-            />
-            <Vignette eskil={false} offset={0.12} darkness={0.95} />
-          </EffectComposer>
+          <DynamicPostFX />
         </Canvas>
       </div>
 
@@ -1910,7 +2494,225 @@ export default function HatomScroll() {
             </section>
           )
         })}
+
+        {/* ══════════════════════════════════════════════════════
+            POST-STORY: RESULTS
+        ══════════════════════════════════════════════════════ */}
+        <section
+          ref={postResultsRef}
+          style={{
+            height: "100vh", position: "relative",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            padding: "0 8vw",
+            background: "linear-gradient(180deg, rgba(2,0,16,0) 0%, rgba(4,0,20,0.96) 18%, rgba(4,0,20,0.98) 100%)",
+          }}
+        >
+          <p className="ap-post-h" style={{
+            margin: "0 0 1.2vw", fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(0.5rem, 0.7vw, 0.78rem)", letterSpacing: "0.35em",
+            textTransform: "uppercase", color: "rgba(157,114,255,0.5)", opacity: 0,
+          }}>
+            The transformation — by the numbers
+          </p>
+          <h2 className="ap-post-h" style={{
+            margin: "0 0 5vw", fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(2rem, 4.5vw, 5.5rem)", textTransform: "uppercase",
+            letterSpacing: "-0.03em", lineHeight: 0.9, color: "#fff", opacity: 0,
+            textAlign: "center",
+          }}>
+            What happens after<br />
+            <span style={{ color: "#9d72ff" }}>AutoPilot.</span>
+          </h2>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(4,1fr)",
+            gap: "2vw", width: "100%", maxWidth: "1400px",
+          }}>
+            {RESULT_STATS.map((s, i) => (
+              <div key={i} className="ap-stat" style={{
+                opacity: 0,
+                padding: "3vw 2vw",
+                border: `1px solid ${s.color}22`,
+                background: `linear-gradient(135deg, ${s.color}0a 0%, transparent 60%)`,
+                display: "flex", flexDirection: "column", gap: "1vw",
+              }}>
+                <span style={{
+                  fontFamily: "'OCMikola', sans-serif",
+                  fontSize: "clamp(2.2rem, 4.8vw, 6rem)",
+                  color: s.color, lineHeight: 1,
+                  letterSpacing: "-0.04em",
+                  textShadow: `0 0 40px ${s.color}88`,
+                }}>{s.value}</span>
+                <span style={{
+                  fontSize: "clamp(0.62rem, 0.85vw, 0.95rem)",
+                  color: "rgba(255,255,255,0.42)", lineHeight: 1.5,
+                }}>{s.label}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ══════════════════════════════════════════════════════
+            POST-STORY: PRICING
+        ══════════════════════════════════════════════════════ */}
+        <section
+          ref={postPricingRef}
+          style={{
+            height: "100vh", position: "relative",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            padding: "0 8vw",
+            background: "rgba(4,0,20,0.98)",
+          }}
+        >
+          <p style={{
+            margin: "0 0 1.2vw", fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(0.5rem, 0.7vw, 0.78rem)", letterSpacing: "0.35em",
+            textTransform: "uppercase", color: "rgba(157,114,255,0.5)",
+          }}>
+            Choose your altitude
+          </p>
+          <h2 style={{
+            margin: "0 0 4vw", fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(1.8rem, 3.8vw, 4.5rem)", textTransform: "uppercase",
+            letterSpacing: "-0.03em", lineHeight: 0.9, color: "#fff",
+            textAlign: "center",
+          }}>
+            Simple pricing.<br />
+            <span style={{ color: "#9d72ff" }}>Extraordinary results.</span>
+          </h2>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(3,1fr)",
+            gap: "2vw", width: "100%", maxWidth: "1200px",
+          }}>
+            {PRICING_PLANS.map((plan, i) => (
+              <div key={i} className="ap-plan" style={{
+                opacity: 0,
+                padding: "3vw 2.2vw",
+                border: `1px solid ${plan.popular ? plan.color : plan.color + "33"}`,
+                background: plan.popular
+                  ? `linear-gradient(145deg, ${plan.color}18 0%, ${plan.color}08 100%)`
+                  : "linear-gradient(145deg, rgba(255,255,255,0.03) 0%, transparent 100%)",
+                position: "relative",
+              }}>
+                {plan.popular && (
+                  <div style={{
+                    position: "absolute", top: "-1px", left: "50%", transform: "translateX(-50%)",
+                    background: plan.color, color: "#000",
+                    fontFamily: "'OCMikola', sans-serif",
+                    fontSize: "clamp(0.42rem, 0.56vw, 0.62rem)",
+                    letterSpacing: "0.28em", textTransform: "uppercase",
+                    padding: "0.3em 1.2em", whiteSpace: "nowrap",
+                  }}>Most Popular</div>
+                )}
+                <p style={{
+                  margin: "0 0 0.8vw", fontFamily: "'OCMikola', sans-serif",
+                  fontSize: "clamp(0.62rem, 0.85vw, 0.95rem)", letterSpacing: "0.2em",
+                  textTransform: "uppercase", color: plan.color,
+                }}>{plan.name}</p>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "0.3em", marginBottom: "2vw" }}>
+                  <span style={{
+                    fontFamily: "'OCMikola', sans-serif",
+                    fontSize: "clamp(2rem, 3.8vw, 4.5rem)", color: "#fff",
+                    letterSpacing: "-0.04em", lineHeight: 1,
+                  }}>{plan.price}</span>
+                  <span style={{ fontSize: "clamp(0.7rem, 0.9vw, 1rem)", color: "rgba(255,255,255,0.3)" }}>/mo</span>
+                </div>
+                <ul style={{ listStyle: "none", padding: 0, margin: "0 0 2.5vw", display: "flex", flexDirection: "column", gap: "0.9vw" }}>
+                  {plan.features.map((f, fi) => (
+                    <li key={fi} style={{
+                      fontSize: "clamp(0.6rem, 0.8vw, 0.9rem)",
+                      color: "rgba(255,255,255,0.48)", display: "flex", gap: "0.7em",
+                    }}>
+                      <span style={{ color: plan.color, flexShrink: 0 }}>→</span>{f}
+                    </li>
+                  ))}
+                </ul>
+                <MagneticCTA href="/signup" style={{
+                  display: "block", textAlign: "center",
+                  padding: "0.9em 0",
+                  background: plan.popular ? plan.color : "transparent",
+                  border: `1px solid ${plan.color}`,
+                  color: plan.popular ? "#000" : plan.color,
+                  fontFamily: "'OCMikola', sans-serif",
+                  fontSize: "clamp(0.5rem, 0.68vw, 0.75rem)",
+                  letterSpacing: "0.25em", textTransform: "uppercase",
+                  textDecoration: "none",
+                }}>
+                  Start Free
+                </MagneticCTA>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ══════════════════════════════════════════════════════
+            POST-STORY: CTA
+        ══════════════════════════════════════════════════════ */}
+        <section
+          ref={postCtaRef}
+          style={{
+            height: "100vh", position: "relative",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            padding: "0 8vw",
+            background: "linear-gradient(180deg, rgba(4,0,20,0.98) 0%, rgba(1,0,8,1) 100%)",
+          }}
+        >
+          {/* Ambient glow rings */}
+          <div style={{
+            position: "absolute", inset: 0, pointerEvents: "none",
+            background: "radial-gradient(ellipse 55% 45% at 50% 50%, rgba(124,58,237,0.12) 0%, transparent 70%)",
+          }} />
+          <p className="ap-cta-el" style={{
+            opacity: 0, margin: "0 0 1.5vw",
+            fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(0.5rem, 0.7vw, 0.78rem)", letterSpacing: "0.35em",
+            textTransform: "uppercase", color: "rgba(157,114,255,0.5)",
+          }}>
+            500+ businesses already on autopilot
+          </p>
+          <h2 className="ap-cta-el" style={{
+            opacity: 0, margin: "0 0 2vw",
+            fontFamily: "'OCMikola', sans-serif",
+            fontSize: "clamp(2.5rem, 6.5vw, 8rem)", textTransform: "uppercase",
+            letterSpacing: "-0.04em", lineHeight: 0.88, color: "#fff",
+            textAlign: "center", whiteSpace: "pre-line",
+          }}>
+            {"Your autopilot\nis ready."}
+          </h2>
+          <p className="ap-cta-el" style={{
+            opacity: 0, margin: "0 0 4vw",
+            fontSize: "clamp(0.75rem, 1vw, 1.1rem)",
+            color: "rgba(255,255,255,0.38)", maxWidth: "420px",
+            textAlign: "center", lineHeight: 1.75,
+          }}>
+            Start free. See results in 7 days. No credit card required.
+          </p>
+          <MagneticCTA href="/signup" style={{ opacity: 0 }} className="ap-cta-el">
+            <div style={{
+              padding: "1.3em 4.5em",
+              background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #9d22e5 100%)",
+              color: "#fff", fontFamily: "'OCMikola', sans-serif",
+              fontSize: "clamp(0.6rem, 0.82vw, 0.9rem)",
+              letterSpacing: "0.28em", textTransform: "uppercase",
+              boxShadow: "0 0 60px rgba(124,58,237,0.55), 0 0 120px rgba(124,58,237,0.25)",
+              transition: "box-shadow 0.3s",
+            }}>
+              Start Free →
+            </div>
+          </MagneticCTA>
+        </section>
+
       </div>
+
+      {/* Post-story 3D dimmer — subtle backdrop so text stays readable */}
+      <div style={{
+        position: "absolute", inset: 0, zIndex: 1, pointerEvents: "none",
+        background: "rgba(0,0,0,0.55)",
+        opacity: postSection >= 0 ? 1 : 0,
+        transition: "opacity 1.0s ease",
+      }} />
 
       {/* ══ PROGRESS BAR ══ */}
       <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "1px", zIndex: 20, background: "rgba(157,114,255,0.1)" }}>
