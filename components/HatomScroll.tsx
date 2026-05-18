@@ -284,7 +284,47 @@ const CRYSTAL_FRAG = /* glsl */`
 
 /* ══════════════════════════════════════════════════════════
    INNER PLASMA CORE — visible glowing centre through the shell
+   UPGRADE: 3D simplex noise in world-space replaces 2D UV-space hash.
+   Result: truly volumetric plasma with no UV seams and organic depth.
+   Schlick Fresnel replaces the basic power approximation.
 ══════════════════════════════════════════════════════════ */
+
+/* Shared 3D simplex noise — used in both CORE_VERT and CORE_FRAG */
+const SIMPLEX3_GLSL = /* glsl */`
+  vec3 _s3mod289v3(vec3 x){return x-floor(x*(1./289.))*289.;}
+  vec4 _s3mod289v4(vec4 x){return x-floor(x*(1./289.))*289.;}
+  vec4 _s3permute(vec4 x){return _s3mod289v4((x*34.+1.)*x);}
+  vec4 _s3tiSqrt(vec4 r){return 1.79284291400159-.85373472095314*r;}
+  float snoise3(vec3 v){
+    const vec2 C=vec2(1./6.,1./3.);
+    vec3 i=floor(v+dot(v,C.yyy)),x0=v-i+dot(i,C.xxx);
+    vec3 g=step(x0.yzx,x0.xyz),l=1.-g;
+    vec3 i1=min(g.xyz,l.zxy),i2=max(g.xyz,l.zxy);
+    vec3 x1=x0-i1+C.xxx,x2=x0-i2+2.*C.xxx,x3=x0-.5+3.*C.xxx;
+    i=_s3mod289v3(i);
+    vec4 p=_s3permute(_s3permute(_s3permute(
+      i.z+vec4(0.,i1.z,i2.z,1.))+i.y+vec4(0.,i1.y,i2.y,1.))+i.x+vec4(0.,i1.x,i2.x,1.));
+    float n_=.142857142857;vec3 ns=n_*vec3(0.,2.,1.)-vec3(0.5,0.5,-0.5)*2.;
+    vec4 j=p-49.*floor(p*(ns.z*ns.z));
+    vec4 x_=floor(j*ns.z),y_=floor(j-7.*x_);
+    vec4 xs=x_*ns.x+ns.yyyy,ys=y_*ns.x+ns.yyyy,h=1.-abs(xs)-abs(ys);
+    vec4 b0=vec4(xs.xy,ys.xy),b1=vec4(xs.zw,ys.zw);
+    vec4 s0=floor(b0)*2.+1.,s1=floor(b1)*2.+1.;
+    vec4 sh=-step(h,vec4(0.));
+    vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy,a1=b1.xzyw+s1.xzyw*sh.zzww;
+    vec3 p0=vec3(a0.xy,h.x),p1v=vec3(a0.zw,h.y),p2v=vec3(a1.xy,h.z),p3v=vec3(a1.zw,h.w);
+    vec4 norm=_s3tiSqrt(vec4(dot(p0,p0),dot(p1v,p1v),dot(p2v,p2v),dot(p3v,p3v)));
+    p0*=norm.x;p1v*=norm.y;p2v*=norm.z;p3v*=norm.w;
+    vec4 m=max(.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.);
+    m*=m;return 42.*dot(m*m,vec4(dot(p0,x0),dot(p1v,x1),dot(p2v,x2),dot(p3v,x3)));
+  }
+  float fbm3(vec3 p){
+    float v=0.,a=.5;
+    for(int i=0;i<5;i++){v+=a*snoise3(p);p=p*2.1+vec3(1.7,9.2,4.1);a*=.5;}
+    return v;
+  }
+`
+
 const CORE_VERT = /* glsl */`
   varying vec3 vNormal;
   varying vec3 vWorldPos;
@@ -292,23 +332,17 @@ const CORE_VERT = /* glsl */`
   uniform float uTime;
   uniform float uHold;
 
-  float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
-  float n2d(vec2 p){
-    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
-    return mix(mix(hash2(i),hash2(i+vec2(1,0)),u.x),mix(hash2(i+vec2(0,1)),hash2(i+vec2(1,1)),u.x),u.y);
-  }
-  float fbm2(vec2 p){float v=0.0,a=0.5;for(int i=0;i<5;i++){v+=a*n2d(p);p=p*2.1+vec2(1.7,9.2);a*=0.5;}return v;}
+  ${SIMPLEX3_GLSL}
 
   void main() {
     vNormal   = normalize(normalMatrix * normal);
     vUv       = uv;
     vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
 
-    /* Plasma surface turbulence */
-    float d1 = (fbm2(vUv * 5.0 + vec2(uTime * 0.24, uTime * 0.18)) - 0.5) * 0.30;
-    float d2 = (fbm2(vUv * 9.5 - vec2(uTime * 0.34, uTime * 0.26)) - 0.5) * 0.14;
-    float d3 = (fbm2(vUv * 18.0 + vec2(uTime * 0.55)) - 0.5) * 0.06;
-    /* Hold amplifies plasma turbulence */
+    /* 3D world-space displacement — no UV seams, organic volume */
+    float d1 = snoise3(position * 2.2 + vec3(uTime * 0.22, uTime * 0.16, 0.0)) * 0.12;
+    float d2 = snoise3(position * 4.5 - vec3(0.0, uTime * 0.31, uTime * 0.24)) * 0.06;
+    float d3 = snoise3(position * 9.0 + vec3(uTime * 0.50)) * 0.03;
     float disp = (d1 + d2 + d3) * (1.0 + uHold * 0.55);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position + normal * disp, 1.0);
   }
@@ -325,23 +359,21 @@ const CORE_FRAG = /* glsl */`
   uniform float uProgress;
   uniform float uHold;
 
-  float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
-  float n2d(vec2 p){
-    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
-    return mix(mix(hash2(i),hash2(i+vec2(1,0)),u.x),mix(hash2(i+vec2(0,1)),hash2(i+vec2(1,1)),u.x),u.y);
-  }
-  float fbm2(vec2 p){float v=0.0,a=0.5;for(int i=0;i<5;i++){v+=a*n2d(p);p=p*2.1+vec2(1.7,9.2);a*=0.5;}return v;}
+  ${SIMPLEX3_GLSL}
 
   void main() {
-    vec3  viewDir = normalize(uCamPos - vWorldPos);
     vec3  N       = normalize(vNormal);
+    vec3  viewDir = normalize(uCamPos - vWorldPos);
     float NdotV   = max(0.0, dot(N, viewDir));
-    float fresnel = pow(1.0 - NdotV, 3.5);
 
-    /* Multi-octave plasma */
-    float p1 = fbm2(vUv * 6.0 + vec2(uTime * 0.22, uTime * 0.17));
-    float p2 = fbm2(vUv * 11.0 - vec2(uTime * 0.30, uTime * 0.25));
-    float p3 = fbm2(vUv * 22.0 + vec2(uTime * 0.48));
+    /* Schlick Fresnel — physically accurate glass edge glow */
+    float f0      = 0.04;
+    float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
+
+    /* 3D FBM in world space — volumetric, no UV seams */
+    float p1 = fbm3(vWorldPos * 1.0 + vec3(uTime * 0.22, uTime * 0.17, 0.0));
+    float p2 = fbm3(vWorldPos * 2.1 - vec3(0.0, uTime * 0.30, uTime * 0.25));
+    float p3 = fbm3(vWorldPos * 4.4 + vec3(uTime * 0.48));
     float plasma = p1 * 0.55 + p2 * 0.30 + p3 * 0.15;
 
     /* Stage-tracked core color: violet → cyan → electric pink on hold */
@@ -351,14 +383,20 @@ const CORE_FRAG = /* glsl */`
     float phase = sin(uTime * 0.6 + plasma * 3.14) * 0.5 + 0.5;
     vec3  core  = mix(mix(cv0, cv1, plasma), cv2, phase * 0.4 + uHold * 0.5);
 
-    /* Bright inner volume — forward-facing faces glow brighter */
+    /* Forward-facing glow — simulates light scattering through the volume */
     core += vec3(0.65, 0.55, 1.0) * (1.0 - NdotV * NdotV) * 0.9;
-    /* Rim light from edge */
-    core += vec3(0.40, 0.85, 1.0) * fresnel * 1.8;
-    /* Hotspot at centre */
-    core += vec3(1.0, 0.95, 1.0) * pow(1.0 - NdotV, 9.0) * 1.5;
 
-    /* Specular from key light */
+    /* Schlick rim — physically correct glass edge brightening */
+    core += vec3(0.40, 0.85, 1.0) * fresnel * 2.2;
+
+    /* Tight hotspot at grazing angle */
+    core += vec3(1.0, 0.95, 1.0) * pow(1.0 - NdotV, 9.0) * 1.8;
+
+    /* Energy filaments — bright veins through the plasma from noise cross-product */
+    float crack = pow(max(0.0, p2 * p3 * 3.0), 2.5);
+    core += mix(cv0, cv1, uProgress) * crack * 3.5;
+
+    /* Key light specular */
     vec3  lDir  = normalize(vec3(2.0, 3.5, 4.0));
     vec3  hDir  = normalize(lDir + viewDir);
     float spec  = pow(max(dot(N, hDir), 0.0), 220.0);
@@ -374,7 +412,6 @@ const CORE_FRAG = /* glsl */`
     float beat = 0.88 + sin(uTime * 2.4) * 0.12;
     core *= beat;
 
-    /* Core is mostly opaque (visible from outside through glass shell) */
     float alpha = (0.78 + fresnel * 0.22 + uHold * 0.18) * uOpacity;
     gl_FragColor = vec4(core, alpha);
   }
@@ -1455,6 +1492,7 @@ function JourneyScene() {
   const ringRefs   = [ring0, ring1, ring2]
   const ptLight    = useRef<THREE.PointLight>(null)
   const accentLight = useRef<THREE.PointLight>(null)
+  const orbitLight  = useRef<THREE.PointLight>(null)
   const tempCam    = useRef(new THREE.Vector3())
   const tempColor  = useRef(new THREE.Color())
   const fogColor   = useRef(new THREE.Color())
@@ -1868,6 +1906,17 @@ function JourneyScene() {
       accentLight.current.intensity = THREE.MathUtils.smoothstep(p, 0.28, 0.45) * 2.0
         + combinedHold * 2.5
     }
+
+    /* Orbiting key light — circles the crystal, sweeping specular across each facet */
+    if (orbitLight.current) {
+      const ot = t * 0.26
+      orbitLight.current.position.set(
+        Math.cos(ot) * 3.4,
+        3.5 + Math.sin(ot * 0.55) * 1.6,   // crystal center world y = 3.5
+        Math.sin(ot) * 3.4
+      )
+      orbitLight.current.intensity = crystalOp * (4.5 + Math.sin(ot * 2.8) * 1.8)
+    }
   })
 
   return (
@@ -1949,6 +1998,8 @@ function JourneyScene() {
       <pointLight                   position={[-4, -3, -3]}  intensity={0.80} color="#7c3aed" />
       <pointLight                   position={[0, 0, 6]}     intensity={0.28} color="#ffffff" />
       <pointLight ref={accentLight} position={[0, 3, 5]}     intensity={0}    color="#6366f1" />
+      {/* Orbiting white key light — creates traveling specular crown on crystal facets */}
+      <pointLight ref={orbitLight}  position={[3.4, 3.5, 0]} intensity={0}    color="#ffffff" distance={12} />
       {/* City outline lights — 2 floor + 2 mid (reduced from 11 for GPU budget) */}
       <pointLight position={[ 0, -5.0,-12]} intensity={4.8} color="#3010a8" distance={30} />
       <pointLight position={[ 9, -5.0,  9]} intensity={3.6} color="#6030d0" distance={24} />
@@ -1965,14 +2016,21 @@ function JourneyScene() {
 function DynamicPostFX() {
   return (
     <EffectComposer multisampling={0}>
+      {/* mipmapBlur: smoother, more cinematic bloom falloff with identical intensity */}
       <Bloom
         luminanceThreshold={0.14}
         luminanceSmoothing={0.82}
         intensity={2.8}
+        mipmapBlur
         blendFunction={BlendFunction.ADD}
       />
+      {/* offset makes prismatic glass edge-splitting visible (was zero = invisible) */}
+      {/* radialModulation: aberration strongest at screen edges, subtle at centre */}
       <ChromaticAberration
         blendFunction={BlendFunction.NORMAL}
+        offset={new THREE.Vector2(0.0022, 0.0022)}
+        radialModulation
+        modulationOffset={0.42}
       />
       <Vignette eskil={false} offset={0.12} darkness={0.95} />
     </EffectComposer>
