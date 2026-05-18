@@ -1962,38 +1962,16 @@ function JourneyScene() {
    HATOMSCROLL — Hatom-style full-screen experience
 ═══════════════════════════════════════════════════════════ */
 
-/* ─── Dynamic post-processing — bloom + CA spike on hold ──── */
-type BloomHandle = { luminanceMaterial: { threshold: number }; intensity: number }
-type CAHandle    = { offset: { set(x: number, y: number): void } }
-
 function DynamicPostFX() {
-  const bloomRef = useRef<BloomHandle>(null)
-  const caRef    = useRef<CAHandle>(null)
-
-  useFrame(() => {
-    const hold = Math.max(_holdInt.current, _pointerHoldInt.current)
-    if (bloomRef.current) {
-      bloomRef.current.luminanceMaterial.threshold = 0.14 - hold * 0.06
-      bloomRef.current.intensity = 2.4 + hold * 4.2
-    }
-    if (caRef.current) {
-      const off = 0.0005 + hold * 0.0072
-      caRef.current.offset.set(off, off)
-    }
-  })
-
   return (
     <EffectComposer multisampling={0}>
       <Bloom
-        ref={bloomRef as React.Ref<BloomHandle>}
         luminanceThreshold={0.14}
         luminanceSmoothing={0.82}
-        intensity={2.4}
+        intensity={2.8}
         blendFunction={BlendFunction.ADD}
       />
       <ChromaticAberration
-        ref={caRef as React.Ref<CAHandle>}
-        offset={new THREE.Vector2(0.0005, 0.0005)}
         blendFunction={BlendFunction.NORMAL}
       />
       <Vignette eskil={false} offset={0.12} darkness={0.95} />
