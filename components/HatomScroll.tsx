@@ -1,12 +1,41 @@
 "use client"
 
-import { useRef, useMemo, useEffect, useState, useCallback } from "react"
+import React, { useRef, useMemo, useEffect, useState, useCallback } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Stars, Sparkles } from "@react-three/drei"
 import * as THREE from "three"
-import { EffectComposer, Bloom, ChromaticAberration, DepthOfField, Vignette } from "@react-three/postprocessing"
+import { EffectComposer, Bloom, ChromaticAberration, Vignette } from "@react-three/postprocessing"
 import { BlendFunction } from "postprocessing"
 import { gsap } from "gsap"
+
+/* ─── WebGL Error Boundary — prevents tab crash on GPU OOM ── */
+class WebGLErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { crashed: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props)
+    this.state = { crashed: false }
+  }
+  static getDerivedStateFromError() { return { crashed: true } }
+  render() {
+    if (this.state.crashed) {
+      return (
+        <div style={{
+          position: "absolute", inset: 0, display: "flex",
+          alignItems: "center", justifyContent: "center",
+          background: "#0a0118", color: "#9d72ff",
+          fontFamily: "sans-serif", fontSize: "1rem",
+        }}>
+          <p style={{ textAlign: "center", opacity: 0.6 }}>
+            WebGL unavailable on this device
+          </p>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 /* ─── Scene narrative ──────────────────────────────────────── */
 const SCENES = [
@@ -1913,19 +1942,11 @@ function JourneyScene() {
       <pointLight                   position={[-4, -3, -3]}  intensity={0.80} color="#7c3aed" />
       <pointLight                   position={[0, 0, 6]}     intensity={0.28} color="#ffffff" />
       <pointLight ref={accentLight} position={[0, 3, 5]}     intensity={0}    color="#6366f1" />
-      {/* Floor-level purple outline lights (CITY_Y + 1.5 = -5.0) */}
-      <pointLight position={[-9, -5.0, -9]} intensity={3.2} color="#5020c0" distance={22} />
-      <pointLight position={[ 9, -5.0,  9]} intensity={2.8} color="#6030d0" distance={20} />
-      <pointLight position={[ 0, -5.0,-12]} intensity={4.0} color="#3010a8" distance={28} />
-      <pointLight position={[-10,-5.0,  6]} intensity={2.4} color="#7c3aed" distance={16} />
-      <pointLight position={[ 6, -5.0, -5]} intensity={2.2} color="#5825cc" distance={14} />
-      <pointLight position={[-4, -5.0,  8]} intensity={2.0} color="#6c28e8" distance={14} />
-      {/* Mid-building accent lights — illuminate building sides for visible purple on structures */}
-      <pointLight position={[-6, -3.0, -6]} intensity={2.8} color="#7030e0" distance={18} />
-      <pointLight position={[ 6, -3.0,  6]} intensity={2.6} color="#6828d8" distance={16} />
-      <pointLight position={[ 0, -3.0,-10]} intensity={3.2} color="#5520c8" distance={22} />
-      <pointLight position={[-8, -3.0,  4]} intensity={2.2} color="#8038f0" distance={14} />
-      <pointLight position={[ 4, -3.0, -8]} intensity={2.2} color="#6025d8" distance={14} />
+      {/* City outline lights — 2 floor + 2 mid (reduced from 11 for GPU budget) */}
+      <pointLight position={[ 0, -5.0,-12]} intensity={4.8} color="#3010a8" distance={30} />
+      <pointLight position={[ 9, -5.0,  9]} intensity={3.6} color="#6030d0" distance={24} />
+      <pointLight position={[ 0, -3.0,-10]} intensity={3.8} color="#5520c8" distance={26} />
+      <pointLight position={[ 6, -3.0,  6]} intensity={3.2} color="#6828d8" distance={20} />
     </>
   )
 }
@@ -1956,7 +1977,6 @@ function DynamicPostFX() {
 
   return (
     <EffectComposer multisampling={0}>
-      <DepthOfField focusDistance={0.025} focalLength={0.018} bokehScale={4.0} />
       <Bloom
         ref={bloomRef as React.Ref<BloomHandle>}
         luminanceThreshold={0.14}
@@ -2308,14 +2328,17 @@ export default function HatomScroll() {
 
       {/* ══ WEBGL ══ */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        <Canvas
-          camera={{ position: [0, 15.5, 28.0], fov: 50 }}
-          gl={{ antialias: true, alpha: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.15 }}
-          style={{ width: "100%", height: "100%" }}
-        >
-          <JourneyScene />
-          <DynamicPostFX />
-        </Canvas>
+        <WebGLErrorBoundary>
+          <Canvas
+            camera={{ position: [0, 15.5, 28.0], fov: 50 }}
+            dpr={[1, 1.5]}
+            gl={{ antialias: false, alpha: false, powerPreference: "high-performance", toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.15 }}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <JourneyScene />
+            <DynamicPostFX />
+          </Canvas>
+        </WebGLErrorBoundary>
       </div>
 
       {/* Softer vignette — let the purple city breathe at edges */}
