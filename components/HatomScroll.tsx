@@ -1060,7 +1060,7 @@ function MountainTerrain() {
   const mistMeshRef    = useRef<THREE.Mesh>(null)
 
   const geo = useMemo(() => {
-    const W = 380, D = 200, segW = 64, segD = 40
+    const W = 380, D = 200, segW = 96, segD = 60
     const vc = (segW + 1) * (segD + 1)
     const pos = new Float32Array(vc * 3)
     const uvs = new Float32Array(vc * 2)
@@ -1301,7 +1301,7 @@ function WindowLights() {
   const matRef = useRef<THREE.PointsMaterial>(null)
 
   const geo = useMemo(() => {
-    const count     = 1200
+    const count     = 2400
     const positions = new Float32Array(count * 3)
     const colors    = new Float32Array(count * 3)
     for (let i = 0; i < count; i++) {
@@ -1426,7 +1426,7 @@ function ReflectionPlane() {
    JOURNEY SCENE — Crystalline Consciousness at center
 ═══════════════════════════════════════════════════════════ */
 
-const PARTICLE_COUNT = 600
+const PARTICLE_COUNT = 900
 
 function JourneyScene() {
   const { camera, scene } = useThree()
@@ -1873,7 +1873,7 @@ function JourneyScene() {
   return (
     <>
       <SceneBackground />
-      <Stars radius={65} depth={50} count={1500} factor={4.2} saturation={0.6} fade speed={0.28} />
+      <Stars radius={65} depth={50} count={2500} factor={4.2} saturation={0.6} fade speed={0.28} />
       <Sparkles count={120} size={1.5} scale={8} speed={0.12} color="#a855f7" noise={1.0} />
       <HelixStreams />
       <MountainTerrain />
@@ -2315,7 +2315,7 @@ export default function HatomScroll() {
         <WebGLErrorBoundary>
           <Canvas
             camera={{ position: [0, 15.5, 28.0], fov: 50 }}
-            dpr={[0.75, 1.25]}
+            dpr={[1, 2]}
             gl={{ antialias: false, alpha: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.15 }}
             style={{ width: "100%", height: "100%" }}
           >
