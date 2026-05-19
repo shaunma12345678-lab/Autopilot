@@ -1,15 +1,16 @@
-"use client"
-
-import dynamic from "next/dynamic"
-
-const HatomScroll  = dynamic(() => import("@/components/HatomScroll"),  { ssr: false })
-const CustomCursor = dynamic(() => import("@/components/CustomCursor"), { ssr: false })
-
 export default function Page() {
   return (
-    <>
-      <CustomCursor />
-      <HatomScroll />
-    </>
+    <iframe
+      src="/experience.html"
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        border: "none",
+        display: "block",
+      }}
+      title="Autopilot"
+    />
   )
 }
