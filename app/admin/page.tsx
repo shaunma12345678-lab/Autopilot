@@ -1456,56 +1456,65 @@ function SitesPanel({ password }: { password: string }) {
   const [deleting, setDeleting] = useState<string | null>(null)
   const headers = { "x-admin-password": password }
 
-  // Builder form state
-  const [showBuilder, setShowBuilder] = useState(false)
-  const [generating, setGenerating]   = useState(false)
-  const [genError, setGenError]       = useState("")
-  const [progress, setProgress]       = useState(0)
-  const [form, setForm] = useState({
-    name: "", type: "Business", description: "", location: "",
-    phone: "", website: "", brandColor: "#6366f1",
-    tagline: "", services: "",
-  })
+  // Conversational builder state
+  const [showBuilder, setShowBuilder]   = useState(false)
+  const [generating, setGenerating]     = useState(false)
+  const [genError, setGenError]         = useState("")
+  const [progress, setProgress]         = useState(0)
+  const [prompt, setPrompt]             = useState("")
+  const [questions, setQuestions]       = useState<string[]>([])
+  const [chatHistory, setChatHistory]   = useState<Array<{ role: "user" | "ai"; text: string }>>([])
+  const promptRef                        = useRef<HTMLTextAreaElement>(null)
 
-  const PROGRESS_STEPS = [
-    { pct: 10, msg: "Analysing brand…" },
-    { pct: 25, msg: "Crafting hero section…" },
-    { pct: 40, msg: "Writing service cards…" },
-    { pct: 58, msg: "Building WebGL shader…" },
-    { pct: 72, msg: "Adding particle system…" },
-    { pct: 86, msg: "Optimising for mobile…" },
-    { pct: 94, msg: "Finalising…" },
+  const STEPS = [
+    { pct: 8,  msg: "Understanding your vision…" },
+    { pct: 20, msg: "Crafting hero section…" },
+    { pct: 36, msg: "Writing service cards…" },
+    { pct: 52, msg: "Building WebGL shader background…" },
+    { pct: 68, msg: "Adding 3D particle system…" },
+    { pct: 82, msg: "Optimising for mobile…" },
+    { pct: 93, msg: "Finalising…" },
   ]
 
-  async function generate() {
-    if (!form.name.trim()) { setGenError("Business name is required"); return }
-    setGenerating(true); setGenError(""); setProgress(0)
+  async function generate(userPrompt: string) {
+    if (!userPrompt.trim()) return
+    setGenerating(true); setGenError(""); setProgress(0); setQuestions([])
+    setChatHistory(prev => [...prev, { role: "user", text: userPrompt }])
     let step = 0
     const tick = setInterval(() => {
-      if (step < PROGRESS_STEPS.length) { setProgress(PROGRESS_STEPS[step].pct); step++ }
-    }, 2500)
+      if (step < STEPS.length) { setProgress(STEPS[step].pct); step++ }
+    }, 3000)
     try {
       const res = await fetch("/api/admin/generate-site", {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          services: form.services ? form.services.split(",").map(s => s.trim()).filter(Boolean) : [],
-          save: true,
-        }),
+        body: JSON.stringify({ prompt: userPrompt, save: true }),
       })
       clearInterval(tick); setProgress(100)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? "Generation failed")
-      // Show preview immediately
-      setPreview({ id: data.savedId ?? "preview", slug: data.slug, title: data.title, html: data.html, published: false, createdAt: new Date().toISOString(), business: { name: form.name, type: form.type, user: { email: "admin" } } })
-      setShowBuilder(false)
-      await load()
-    } catch (e) { setGenError(e instanceof Error ? e.message : "Failed") }
-    finally { clearInterval(tick); setGenerating(false); setTimeout(() => setProgress(0), 1000) }
+
+      if (data.needsMoreInfo) {
+        // AI needs more info — show clarifying questions
+        setQuestions(data.questions)
+        setChatHistory(prev => [...prev, { role: "ai", text: data.questions.join("\n") }])
+        setPrompt("")
+      } else {
+        // Site generated — show preview
+        setChatHistory(prev => [...prev, { role: "ai", text: `✓ "${data.title}" has been built! Preview loaded below.` }])
+        setPreview({ id: data.savedId ?? "preview", slug: data.slug, title: data.title, html: data.html, published: false, createdAt: new Date().toISOString(), business: { name: data.parsed?.name ?? "Site", type: data.parsed?.type ?? "Business", user: { email: "admin" } } })
+        setPrompt("")
+        await load()
+      }
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : "Failed")
+      setChatHistory(prev => [...prev, { role: "ai", text: "Something went wrong. Please try again." }])
+    } finally {
+      clearInterval(tick); setGenerating(false); setTimeout(() => setProgress(0), 1200)
+    }
   }
 
-  const progressMsg = PROGRESS_STEPS.slice().reverse().find(s => progress >= s.pct)?.msg ?? (progress === 100 ? "Done!" : "")
+  const progressMsg = STEPS.slice().reverse().find(s => progress >= s.pct)?.msg ?? (progress >= 100 ? "Done!" : "")
 
   const load = useCallback(async () => {
     try {
@@ -1585,100 +1594,125 @@ function SitesPanel({ password }: { password: string }) {
         </div>
       )}
 
-      {/* ── Inline website builder ── */}
+      {/* ── Conversational website builder ── */}
       {showBuilder && (
-        <div className="bg-gray-900/80 border border-indigo-800/30 rounded-2xl p-6 space-y-5">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-indigo-400 font-semibold text-sm">Build Your Website</span>
-            <span className="text-xs text-gray-600">— WebGL 3D effects, mobile-first, SEO-ready in ~60s</span>
+        <div className="bg-gray-950 border border-indigo-800/30 rounded-2xl overflow-hidden flex flex-col" style={{ minHeight: "480px" }}>
+          {/* Header */}
+          <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-800/80 bg-gray-900/60">
+            <div className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+            <span className="text-sm font-semibold text-white">Website Builder</span>
+            <span className="text-xs text-gray-600">Powered by Claude · WebGL 3D · Mobile-first · SEO-ready</span>
+            <button onClick={() => { setShowBuilder(false); setGenError(""); setChatHistory([]); setPrompt("") }} className="ml-auto text-gray-600 hover:text-white text-lg leading-none transition-colors">×</button>
           </div>
 
-          {/* Row 1 */}
-          <div className="grid sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Business Name *</label>
-              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Sunrise HVAC" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Business Type</label>
-              <input value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))} placeholder="e.g. HVAC Company" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Location</label>
-              <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. Austin, TX" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-            </div>
-          </div>
-
-          {/* Row 2 */}
-          <div className="grid sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Phone</label>
-              <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+1 (555) 000-0000" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Website URL</label>
-              <input value={form.website} onChange={e => setForm(f => ({ ...f, website: e.target.value }))} placeholder="https://yourbusiness.com" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Brand Color</label>
-              <div className="flex gap-2">
-                <input type="color" value={form.brandColor} onChange={e => setForm(f => ({ ...f, brandColor: e.target.value }))} className="w-10 h-10 rounded-lg border border-gray-700 cursor-pointer bg-transparent shrink-0" />
-                <input type="text" value={form.brandColor} onChange={e => setForm(f => ({ ...f, brandColor: e.target.value }))} className="flex-1 px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm font-mono focus:outline-none focus:border-indigo-500 transition-colors" />
+          {/* Chat area */}
+          <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4" style={{ minHeight: "280px" }}>
+            {/* Welcome message */}
+            <div className="flex gap-3">
+              <div className="w-7 h-7 rounded-lg bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center shrink-0">
+                <span className="text-xs text-indigo-400">AP</span>
+              </div>
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl rounded-bl-md px-4 py-3 max-w-lg">
+                <p className="text-sm text-gray-200 leading-relaxed">What do you want to build today?</p>
+                <p className="text-xs text-gray-500 mt-1.5">Tell me about the business — name, what they do, location, style. The more detail, the better the site. I&apos;ll ask if I need anything else.</p>
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  {[
+                    "A luxury roofing company in Miami called Elite Roofing",
+                    "Volleyball Collective — sports training academy in Houston",
+                    "A modern law firm specializing in personal injury",
+                  ].map(ex => (
+                    <button key={ex} onClick={() => { setPrompt(ex); setTimeout(() => promptRef.current?.focus(), 50) }}
+                      className="text-[10px] px-2.5 py-1 rounded-lg border border-gray-700/60 text-gray-500 hover:text-white hover:border-indigo-700/50 transition-colors">
+                      {ex.length > 40 ? ex.slice(0, 40) + "…" : ex}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Row 3 */}
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Tagline <span className="text-gray-600 font-normal normal-case">(optional — AI writes one if blank)</span></label>
-              <input value={form.tagline} onChange={e => setForm(f => ({ ...f, tagline: e.target.value }))} placeholder="e.g. Phoenix's most trusted HVAC team" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Services <span className="text-gray-600 font-normal normal-case">(comma-separated)</span></label>
-              <input value={form.services} onChange={e => setForm(f => ({ ...f, services: e.target.value }))} placeholder="AC Repair, Heating Install, Tune-Ups, Emergency Service" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-            </div>
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Business Description <span className="text-gray-600 font-normal normal-case">(optional)</span></label>
-            <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} placeholder="What makes your business different? Awards, years in business, specialty areas…" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 resize-none transition-colors" />
-          </div>
-
-          {/* Progress */}
-          {generating && (
-            <div>
-              <div className="flex justify-between text-xs mb-1.5">
-                <span className="text-indigo-400 font-medium">{progressMsg}</span>
-                <span className="text-gray-600">{progress}%</span>
+            {/* Chat history */}
+            {chatHistory.map((msg, i) => (
+              <div key={i} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                {msg.role === "ai" && (
+                  <div className="w-7 h-7 rounded-lg bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="text-xs text-indigo-400">AP</span>
+                  </div>
+                )}
+                <div className={`max-w-lg px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                  msg.role === "user"
+                    ? "text-white rounded-br-md"
+                    : "bg-gray-900 border border-gray-800 text-gray-200 rounded-bl-md"
+                }`} style={msg.role === "user" ? { background: "linear-gradient(135deg,#4f46e5,#6d28d9)" } : {}}>
+                  {msg.text}
+                </div>
+                {msg.role === "user" && (
+                  <div className="w-7 h-7 rounded-lg bg-gray-800 flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold text-gray-400">A</div>
+                )}
               </div>
-              <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                <div className="h-full rounded-full transition-all duration-700" style={{ width: `${progress}%`, background: "linear-gradient(90deg,#4f46e5,#7c3aed)" }} />
+            ))}
+
+            {/* Generating indicator */}
+            {generating && (
+              <div className="flex gap-3">
+                <div className="w-7 h-7 rounded-lg bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center shrink-0">
+                  <span className="text-xs text-indigo-400">AP</span>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl rounded-bl-md px-4 py-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="flex gap-1">
+                      {[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />)}
+                    </div>
+                    <span className="text-xs text-gray-400">{progressMsg || "Building your website…"}</span>
+                  </div>
+                  {progress > 0 && (
+                    <div className="w-48 h-1 bg-gray-800 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${progress}%`, background: "linear-gradient(90deg,#4f46e5,#7c3aed)" }} />
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {genError && <p className="text-red-400 text-sm">{genError}</p>}
-
-          <div className="flex gap-3">
-            <button onClick={() => { setShowBuilder(false); setGenError("") }} className="px-5 py-2.5 rounded-xl border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 transition-colors">Cancel</button>
-            <button
-              onClick={generate}
-              disabled={generating || !form.name.trim()}
-              className="flex-1 py-2.5 rounded-xl text-white text-sm font-bold disabled:opacity-40 transition-all hover:brightness-110 flex items-center justify-center gap-2"
-              style={{ background: "linear-gradient(135deg,#4f46e5,#7c3aed)" }}
-            >
-              {generating ? (
-                <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</>
-              ) : "Generate Website →"}
-            </button>
+            {genError && (
+              <div className="flex justify-center">
+                <div className="bg-red-950/20 border border-red-800/40 rounded-xl px-4 py-2.5 text-red-400 text-sm">
+                  {genError}
+                  <button onClick={() => setGenError("")} className="ml-3 text-red-700 hover:text-red-400">×</button>
+                </div>
+              </div>
+            )}
           </div>
-          <p className="text-xs text-gray-700 text-center -mt-2">WebGL 3D • Particle system • Scroll animations • Mobile-first • ~45–90 seconds</p>
+
+          {/* Input */}
+          <div className="border-t border-gray-800 px-4 py-3 bg-gray-900/40">
+            <div className="flex gap-2 items-end">
+              <textarea
+                ref={promptRef}
+                value={prompt}
+                onChange={e => { setPrompt(e.target.value); e.target.style.height = "auto"; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px` }}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generate(prompt) } }}
+                placeholder="Describe the website you want to build… e.g. 'A roofing company in Phoenix called Peak Roofing, blue color, services: Roof Repair, Installation, Inspection'"
+                rows={2}
+                disabled={generating}
+                className="flex-1 px-3 py-2.5 bg-gray-800 border border-gray-700/70 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-40 transition-all leading-relaxed"
+                style={{ maxHeight: "120px" }}
+                autoFocus
+              />
+              <button
+                onClick={() => generate(prompt)}
+                disabled={generating || !prompt.trim()}
+                className="px-4 py-2.5 rounded-xl text-white font-semibold text-sm disabled:opacity-40 transition-all hover:brightness-110 shrink-0"
+                style={{ background: "linear-gradient(135deg,#4f46e5,#7c3aed)" }}
+              >
+                {generating ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin block" /> : "→"}
+              </button>
+            </div>
+            <p className="text-[10px] text-gray-700 mt-1.5 px-1">Press Enter to send · Shift+Enter for newline · ~60–90 seconds to generate</p>
+          </div>
         </div>
       )}
 
-      {sites.length === 0 ? (
+      {sites.length === 0 && !showBuilder ? (
         <div className="text-center py-16">
           <div className="w-14 h-14 rounded-2xl border border-gray-800 flex items-center justify-center mx-auto mb-4 bg-gray-900">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-gray-700">
@@ -1686,8 +1720,8 @@ function SitesPanel({ password }: { password: string }) {
               <path d="M8 21h8M12 17v4" />
             </svg>
           </div>
-          <p className="text-gray-500 font-medium">No sites generated yet</p>
-          <p className="text-gray-700 text-sm mt-1">Sites appear here when users generate them from the Website Builder agent.</p>
+          <p className="text-gray-500 font-medium">No sites built yet</p>
+          <p className="text-gray-700 text-sm mt-1">Click &quot;+ Build New Site&quot; and describe what you want — AI handles the rest.</p>
         </div>
       ) : (
         <div className={`grid gap-5 ${preview ? "lg:grid-cols-[1fr_500px]" : ""}`}>
