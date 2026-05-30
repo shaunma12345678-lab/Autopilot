@@ -1467,13 +1467,15 @@ function SitesPanel({ password }: { password: string }) {
   const promptRef                        = useRef<HTMLTextAreaElement>(null)
 
   const STEPS = [
-    { pct: 8,  msg: "Understanding your vision…" },
-    { pct: 20, msg: "Crafting hero section…" },
-    { pct: 36, msg: "Writing service cards…" },
-    { pct: 52, msg: "Building WebGL shader background…" },
-    { pct: 68, msg: "Adding 3D particle system…" },
-    { pct: 82, msg: "Optimising for mobile…" },
-    { pct: 93, msg: "Finalising…" },
+    { pct: 5,  msg: "Parsing your description…" },
+    { pct: 14, msg: "Researching the business online…" },
+    { pct: 26, msg: "Scraping existing site (if linked)…" },
+    { pct: 38, msg: "Designing hero & WebGL shader…" },
+    { pct: 52, msg: "Building 9-section layout…" },
+    { pct: 66, msg: "Writing real marketing copy…" },
+    { pct: 78, msg: "Applying GSAP + text animations…" },
+    { pct: 88, msg: "Running quality evaluation…" },
+    { pct: 95, msg: "Applying improvement pass…" },
   ]
 
   async function generate(userPrompt: string) {
@@ -1483,26 +1485,43 @@ function SitesPanel({ password }: { password: string }) {
     let step = 0
     const tick = setInterval(() => {
       if (step < STEPS.length) { setProgress(STEPS[step].pct); step++ }
-    }, 3000)
+    }, 9000)
     try {
       const res = await fetch("/api/admin/generate-site", {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userPrompt, save: true }),
+        body: JSON.stringify({ prompt: userPrompt }),
       })
       clearInterval(tick); setProgress(100)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? "Generation failed")
 
       if (data.needsMoreInfo) {
-        // AI needs more info — show clarifying questions
         setQuestions(data.questions)
         setChatHistory(prev => [...prev, { role: "ai", text: data.questions.join("\n") }])
         setPrompt("")
       } else {
-        // Site generated — show preview
-        setChatHistory(prev => [...prev, { role: "ai", text: `✓ "${data.title}" has been built! Preview loaded below.` }])
-        setPreview({ id: data.savedId ?? "preview", slug: data.slug, title: data.title, html: data.html, published: false, createdAt: new Date().toISOString(), business: { name: data.parsed?.name ?? "Site", type: data.parsed?.type ?? "Business", user: { email: "admin" } } })
+        const score     = data.qualityScore ? ` · Quality: ${data.qualityScore.toFixed(1)}/10` : ""
+        const iters     = data.iterations > 1 ? ` · ${data.iterations} passes` : ""
+        const researched = [
+          data.research?.urlScraped  && "scraped existing site",
+          data.research?.tavilyUsed  && "live web research",
+        ].filter(Boolean).join(" + ")
+        const researchNote = researched ? ` · Used ${researched}` : ""
+
+        setChatHistory(prev => [...prev, {
+          role: "ai",
+          text: `✓ "${data.title}" built${score}${iters}${researchNote}\n\nPreview loaded below. Download or publish when ready.`,
+        }])
+        setPreview({
+          id: data.savedId ?? "preview",
+          slug: data.slug,
+          title: data.title,
+          html: data.html,
+          published: false,
+          createdAt: new Date().toISOString(),
+          business: { name: data.parsed?.name ?? "Site", type: data.parsed?.type ?? "Business", user: { email: "admin" } },
+        })
         setPrompt("")
         await load()
       }
@@ -1510,7 +1529,7 @@ function SitesPanel({ password }: { password: string }) {
       setGenError(e instanceof Error ? e.message : "Failed")
       setChatHistory(prev => [...prev, { role: "ai", text: "Something went wrong. Please try again." }])
     } finally {
-      clearInterval(tick); setGenerating(false); setTimeout(() => setProgress(0), 1200)
+      clearInterval(tick); setGenerating(false); setTimeout(() => setProgress(0), 1400)
     }
   }
 
@@ -1707,7 +1726,7 @@ function SitesPanel({ password }: { password: string }) {
                 {generating ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin block" /> : "→"}
               </button>
             </div>
-            <p className="text-[10px] text-gray-700 mt-1.5 px-1">Press Enter to send · Shift+Enter for newline · ~60–90 seconds to generate</p>
+            <p className="text-[10px] text-gray-700 mt-1.5 px-1">Press Enter to send · Paste a URL to scrape the existing site · ~90–120 seconds to generate</p>
           </div>
         </div>
       )}

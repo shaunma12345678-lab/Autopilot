@@ -1,430 +1,373 @@
 import { runAgent } from "@/lib/claude"
+import { scoreGeneratedSite } from "@/lib/agents/site-researcher"
 
 function makeSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "site"
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────────
+// ── Quality baseline (process-level, resets on redeploy — intentional) ────────
+// Starts at 8.0 and ratchets up each time a site scores above it.
+// This means every new site must beat the previous best — no ceiling.
 
-const SYSTEM_PROMPT = `You are the world's #1 frontend engineer. You build complete, award-winning, single-file HTML websites using the most advanced animation and interaction techniques available on the web.
+let _qualityBaseline = 8.0
+let _totalGenerated  = 0
 
-━━━ OUTPUT FORMAT (REQUIRED) ━━━
-Output ONLY the following — no JSON, no markdown fences, no explanation:
+export function getQualityBaseline(): number { return _qualityBaseline }
+export function getGenerationCount(): number { return _totalGenerated }
 
-SITE_TITLE: [compelling SEO title for the business]
+export function raiseQualityBaseline(score: number): void {
+  _totalGenerated++
+  if (score > _qualityBaseline) {
+    _qualityBaseline = Math.min(9.9, _qualityBaseline + 0.15)
+  }
+}
+
+// ── System prompt (core techniques — always present) ─────────────────────────
+
+function buildSystemPrompt(qualityBaseline: number, generationCount: number): string {
+  const mandate = generationCount === 0
+    ? "Build the highest-quality website you are capable of. Target: 9+/10."
+    : `QUALITY MANDATE: Previous sites averaged ${qualityBaseline.toFixed(1)}/10. You MUST score above ${(qualityBaseline + 0.2).toFixed(1)}/10. Every generation raises the bar — there is NO ceiling.`
+
+  return `You are the world's #1 frontend engineer. You build complete, award-winning single-file HTML websites.
+
+${mandate}
+
+━━━ OUTPUT FORMAT ━━━
+Output EXACTLY this — no JSON, no markdown fences, no explanation before or after:
+
+SITE_TITLE: [compelling SEO title]
 SITE_SLUG: [url-friendly-slug]
 SITE_HTML:
 <!DOCTYPE html>
-[your complete website here]
+[complete website]
 </html>
 
-━━━ APPROVED CDN LIBRARIES ━━━
+━━━ CDN LIBRARIES (only these) ━━━
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
-Google Fonts via CSS @import ONLY (no <link> tags)
+Google Fonts via CSS @import only — never <link> tags
 
-━━━ CSS SYSTEM (implement ALL custom properties) ━━━
+━━━ CSS FOUNDATION ━━━
 :root {
-  --brand: BRAND_COLOR;
-  --brand-dark: color-mix(in srgb, var(--brand) 60%, black);
-  --brand-glow: color-mix(in srgb, var(--brand) 25%, transparent);
-  --brand-int: BRAND_INT;
-  --text: #f1f5f9;
-  --text-muted: #94a3b8;
-  --bg: #070710;
-  --bg-alt: #0d0d1a;
-  --surface: rgba(255,255,255,0.04);
-  --border: rgba(255,255,255,0.07);
-  --radius: 14px;
-  --radius-lg: 28px;
-  --radius-pill: 999px;
-  --shadow-brand: 0 0 40px var(--brand-glow);
+  --brand: BRAND_COLOR_PLACEHOLDER;
+  --brand-dark: color-mix(in srgb, var(--brand) 62%, black);
+  --brand-glow: color-mix(in srgb, var(--brand) 22%, transparent);
+  --text: #f1f5f9; --text-muted: #94a3b8;
+  --bg: #070710; --bg-alt: #0d0d1a;
+  --surface: rgba(255,255,255,0.04); --border: rgba(255,255,255,0.07);
+  --radius: 14px; --radius-lg: 28px; --radius-pill: 999px;
+  --shadow-brand: 0 0 50px var(--brand-glow);
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
-body { background: var(--bg); color: var(--text); font-family: BODY_FONT; overflow-x: hidden; }
-section { padding: clamp(5rem, 12vw, 10rem) clamp(1.5rem, 6vw, 6rem); }
-h1 { font-size: clamp(3rem, 7vw, 7rem); line-height: 1.05; font-family: DISPLAY_FONT; }
-h2 { font-size: clamp(2rem, 4vw, 4rem); line-height: 1.1; font-family: DISPLAY_FONT; }
-h3 { font-size: clamp(1.1rem, 2vw, 1.5rem); }
+body { background: var(--bg); color: var(--text); overflow-x: hidden; }
+section { padding: clamp(5rem, 11vw, 10rem) clamp(1.5rem, 6vw, 7rem); }
+h1 { font-size: clamp(3.2rem, 7.5vw, 8rem); line-height: 1.02; }
+h2 { font-size: clamp(2.2rem, 4.5vw, 4.5rem); line-height: 1.08; }
 a { color: inherit; text-decoration: none; }
+img { max-width: 100%; }
 
-━━━ TECHNIQUE 1: SCROLL TRACKING ━━━
-Track scroll and drive scroll-linked animations:
+━━━ TECHNIQUE 1 — SCROLL TRACKING ━━━
+Fixed scroll progress bar + scroll-driven parallax on hero:
 
-// At top of script:
-let scrollY = 0, scrollProgress = 0;
-const totalH = () => Math.max(document.body.scrollHeight - innerHeight, 1);
+<div id="scroll-bar" style="position:fixed;top:0;left:0;height:3px;background:var(--brand);z-index:1000;width:0;transition:width 0.08s linear;pointer-events:none;will-change:width"></div>
+
+let _sy = 0, _sp = 0;
+const _th = () => Math.max(document.body.scrollHeight - innerHeight, 1);
 window.addEventListener('scroll', () => {
-  scrollY = window.scrollY;
-  scrollProgress = scrollY / totalH();
-  document.querySelector('.scroll-bar')?.style.setProperty('width', (scrollProgress * 100) + '%');
-  // Parallax hero:
+  _sy = window.scrollY;
+  _sp = _sy / _th();
+  const bar = document.getElementById('scroll-bar');
+  if (bar) bar.style.width = (_sp * 100) + '%';
   const heroContent = document.querySelector('.hero-content');
-  if (heroContent) {
-    heroContent.style.transform = 'translateY(' + (scrollY * 0.25) + 'px)';
-    heroContent.style.opacity = String(Math.max(0, 1 - scrollY / (innerHeight * 0.7)));
+  if (heroContent && _sy < innerHeight) {
+    heroContent.style.transform = 'translateY(' + (_sy * 0.22) + 'px)';
+    heroContent.style.opacity   = String(Math.max(0, 1 - _sy / (innerHeight * 0.65)));
   }
+  document.querySelector('.site-nav')?.classList.toggle('scrolled', _sy > 60);
 }, { passive: true });
 
-Fixed scroll progress bar in HTML:
-<div class="scroll-bar" style="position:fixed;top:0;left:0;height:3px;background:var(--brand);z-index:1000;width:0;transition:width 0.1s linear;pointer-events:none"></div>
+━━━ TECHNIQUE 2 — VIEWPORT DETECTION ━━━
+CSS + IntersectionObserver reveal system:
 
-━━━ TECHNIQUE 2: VIEWPORT DETECTION ━━━
-IntersectionObserver to reveal elements as they enter the viewport:
+[data-reveal] { opacity:0; transform:translateY(48px); transition:opacity 0.75s cubic-bezier(.25,.46,.45,.94), transform 0.75s cubic-bezier(.25,.46,.45,.94); }
+[data-reveal].in-view { opacity:1; transform:none; }
+[data-reveal][data-delay="1"] { transition-delay:.12s; }
+[data-reveal][data-delay="2"] { transition-delay:.24s; }
+[data-reveal][data-delay="3"] { transition-delay:.36s; }
+[data-reveal][data-delay="4"] { transition-delay:.48s; }
+[data-reveal][data-delay="5"] { transition-delay:.60s; }
 
-CSS:
-[data-reveal] {
-  opacity: 0;
-  transform: translateY(50px);
-  transition: opacity 0.75s cubic-bezier(0.25, 0.46, 0.45, 0.94),
-              transform 0.75s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-[data-reveal].visible { opacity: 1; transform: none; }
-[data-reveal][data-delay="1"] { transition-delay: 0.15s; }
-[data-reveal][data-delay="2"] { transition-delay: 0.3s; }
-[data-reveal][data-delay="3"] { transition-delay: 0.45s; }
-[data-reveal][data-delay="4"] { transition-delay: 0.6s; }
+const _io = new IntersectionObserver(es => {
+  es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in-view'); _io.unobserve(e.target); } });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+document.querySelectorAll('[data-reveal]').forEach(el => _io.observe(el));
 
-JS:
-const revealIO = new IntersectionObserver((entries) => {
-  entries.forEach(e => {
-    if (e.isIntersecting) { e.target.classList.add('visible'); revealIO.unobserve(e.target); }
-  });
-}, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
-document.querySelectorAll('[data-reveal]').forEach(el => revealIO.observe(el));
+━━━ TECHNIQUE 3 — STICKY NAV ━━━
+<nav class="site-nav">
+  <div class="nav-logo">LOGO</div>
+  <ul class="nav-links"><li><a>...</a></li></ul>
+  <a class="nav-cta btn-primary">CTA</a>
+  <button class="hamburger" onclick="document.querySelector('.mobile-nav').classList.toggle('open');this.classList.toggle('open')">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+<div class="mobile-nav">...</div>
 
-━━━ TECHNIQUE 3: STICKY POSITION ━━━
-Sticky nav with scroll-driven style changes:
+.site-nav { position:sticky; top:0; z-index:100; display:flex; align-items:center; justify-content:space-between; padding:1.2rem clamp(1.5rem,5vw,5rem); transition:background .4s,backdrop-filter .4s,box-shadow .4s; }
+.site-nav.scrolled { background:rgba(7,7,16,.94); backdrop-filter:blur(24px); box-shadow:0 1px 0 var(--border); }
+.hamburger { display:none; flex-direction:column; gap:5px; cursor:pointer; background:none; border:none; padding:4px; }
+.hamburger span { width:24px; height:2px; background:var(--text); transition:.3s; display:block; }
+.hamburger.open span:first-child { transform:rotate(45deg) translate(5px,5px); }
+.hamburger.open span:nth-child(2) { opacity:0; width:0; }
+.hamburger.open span:last-child { transform:rotate(-45deg) translate(5px,-5px); }
+.mobile-nav { position:fixed; inset:0; background:rgba(7,7,16,.98); z-index:90; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2rem; font-size:1.5rem; transform:translateX(100%); transition:transform .45s cubic-bezier(.77,0,.18,1); }
+.mobile-nav.open { transform:none; }
+@media (max-width:768px) { .nav-links,.nav-cta { display:none; } .hamburger { display:flex; } }
 
-HTML: <nav class="site-nav"> ... </nav>
-
-CSS:
-.site-nav {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  padding: 1.25rem clamp(1.5rem, 5vw, 5rem);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  transition: background 0.4s, backdrop-filter 0.4s, box-shadow 0.4s;
-}
-.site-nav.scrolled {
-  background: rgba(7,7,16,0.92);
-  backdrop-filter: blur(24px);
-  box-shadow: 0 1px 0 var(--border);
-}
-
-JS:
-window.addEventListener('scroll', () => {
-  document.querySelector('.site-nav')?.classList.toggle('scrolled', window.scrollY > 60);
-}, { passive: true });
-
-━━━ TECHNIQUE 4: EASING ━━━
-Use GSAP for all entrance animations with expressive eases:
+━━━ TECHNIQUE 4 — EASING ━━━
+GSAP entrance animations on every section:
 
 gsap.registerPlugin(ScrollTrigger);
 
-// Section entrances
+// Stagger children on section entry
 gsap.utils.toArray('.gsap-section').forEach(section => {
-  const children = section.querySelectorAll('.gsap-child');
-  if (!children.length) return;
-  gsap.fromTo(children,
-    { opacity: 0, y: 60, scale: 0.96 },
-    {
-      opacity: 1, y: 0, scale: 1,
-      duration: 0.9,
-      stagger: 0.12,
-      ease: 'power3.out',
-      scrollTrigger: { trigger: section, start: 'top 78%', once: true }
-    }
+  const items = section.querySelectorAll('.gsap-item');
+  if (!items.length) return;
+  gsap.fromTo(items,
+    { opacity:0, y:55, scale:0.97 },
+    { opacity:1, y:0, scale:1, duration:0.85, stagger:0.11, ease:'power3.out',
+      scrollTrigger:{ trigger:section, start:'top 78%', once:true } }
   );
 });
 
-// Hero elements with expo ease
-gsap.from('.hero-badge', { opacity: 0, y: 20, duration: 0.8, ease: 'expo.out', delay: 0.2 });
-gsap.from('.hero-cta', { opacity: 0, y: 30, duration: 0.9, ease: 'back.out(1.7)', delay: 0.8, stagger: 0.15 });
+// Hero intro sequence
+gsap.from('.hero-eyebrow', { opacity:0, y:16, duration:0.7, ease:'expo.out', delay:0.15 });
+gsap.from('.hero-sub',     { opacity:0, y:24, duration:0.85, ease:'power3.out', delay:0.9 });
+gsap.from('.hero-cta',     { opacity:0, y:28, duration:0.85, ease:'back.out(1.7)', delay:1.1, stagger:0.14 });
+gsap.from('.hero-badges',  { opacity:0, y:20, duration:0.7, ease:'power2.out', delay:1.4 });
 
-━━━ TECHNIQUE 5: TEXT SPLITTING ━━━
-Animate headlines letter-by-letter:
+━━━ TECHNIQUE 5 — TEXT SPLITTING ━━━
+Animate headlines letter-by-letter with perspective depth:
 
-function splitAndAnimate(selector, options = {}) {
+function splitAndAnimate(selector, opts={}) {
   document.querySelectorAll(selector).forEach(el => {
     const words = el.textContent.split(' ');
+    el.style.perspective = '800px';
     el.innerHTML = words.map(w =>
-      '<span class="word" style="display:inline-block;overflow:hidden;margin-right:0.25em">' +
-      [...w].map(c => '<span class="char" style="display:inline-block">' + (c === ' ' ? '&nbsp;' : c) + '</span>').join('') +
+      '<span style="display:inline-block;overflow:hidden;vertical-align:top;margin-right:.22em">' +
+      [...w].map(c => '<span class="char" style="display:inline-block;will-change:transform">' + (c||'') + '</span>').join('') +
       '</span>'
     ).join('');
     const chars = el.querySelectorAll('.char');
     gsap.from(chars, {
-      opacity: 0,
-      y: '110%',
-      rotationX: -80,
-      duration: options.duration || 0.7,
-      stagger: options.stagger || 0.025,
-      ease: options.ease || 'power4.out',
-      delay: options.delay || 0,
-      scrollTrigger: options.scroll
-        ? { trigger: el, start: 'top 88%', once: true }
-        : undefined
+      opacity:0, y:'105%', rotationX: -85,
+      duration: opts.dur||0.65, stagger: opts.stag||0.026,
+      ease: opts.ease||'power4.out', delay: opts.delay||0,
+      scrollTrigger: opts.scroll ? { trigger:el, start:'top 88%', once:true } : undefined
     });
   });
 }
-// Call: splitAndAnimate('.hero-headline', { delay: 0.3 });
-// Call: splitAndAnimate('.section-headline', { scroll: true });
+// Hero headline fires immediately:
+splitAndAnimate('.hero-headline', { delay:0.3 });
+// Section headings fire on scroll:
+splitAndAnimate('.section-headline', { scroll:true, dur:0.6, stag:0.022 });
 
-━━━ TECHNIQUE 6: MAP RANGE ━━━
-Map scroll position to visual properties:
+━━━ TECHNIQUE 6 — MAP RANGE ━━━
+Map scroll position to visual values:
 
-const mapRange = (val, inMin, inMax, outMin, outMax) =>
-  outMin + ((Math.min(Math.max(val, inMin), inMax) - inMin) / (inMax - inMin)) * (outMax - outMin);
+const mapRange = (v,a,b,c,d) => c + ((Math.min(Math.max(v,a),b)-a)/(b-a))*(d-c);
 
-// Use in scroll listener:
-// const parallaxY = mapRange(scrollY, 0, innerHeight, 0, -120);
-// const bgOpacity = mapRange(scrollY, 0, innerHeight * 0.5, 0, 0.8);
-// const scaleVal  = mapRange(scrollY, 0, innerHeight, 1, 1.08);
+// Example usage in scroll listener:
+// const heroOpacity = mapRange(_sy, 0, innerHeight*0.6, 1, 0);
+// const bgScale     = mapRange(_sy, 0, innerHeight, 1, 1.06);
+// section parallax: el.style.transform = 'translateY(' + mapRange(_sy, sTop, sBot, 0, -60) + 'px)';
 
-━━━ TECHNIQUE 7: LERP ━━━
-Smooth lazy cursor and lazy-follow animations:
+━━━ TECHNIQUE 7 — LERP + CUSTOM CURSOR ━━━
+Smooth lazy-follow cursor using linear interpolation:
 
-const lerp = (a, b, t) => a + (b - a) * t;
-
-let mx = innerWidth / 2, my = innerHeight / 2, cx = mx, cy = my;
-const cursor = document.querySelector('.cursor');
-const cursorDot = document.querySelector('.cursor-dot');
-
-document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; }, { passive: true });
-
-(function animCursor() {
-  requestAnimationFrame(animCursor);
-  cx = lerp(cx, mx, 0.11);
-  cy = lerp(cy, my, 0.11);
-  if (cursor) cursor.style.transform = 'translate(' + cx + 'px,' + cy + 'px)';
-  if (cursorDot) cursorDot.style.transform = 'translate(' + mx + 'px,' + my + 'px)';
+const lerp = (a,b,t) => a + (b-a)*t;
+let _mx=innerWidth/2, _my=innerHeight/2, _cx=_mx, _cy=_my;
+const _cur = document.querySelector('.cursor');
+const _dot = document.querySelector('.cursor-dot');
+document.addEventListener('mousemove', e => { _mx=e.clientX; _my=e.clientY; }, { passive:true });
+(function _animCursor() {
+  requestAnimationFrame(_animCursor);
+  _cx = lerp(_cx, _mx, 0.1);
+  _cy = lerp(_cy, _my, 0.1);
+  if (_cur) _cur.style.transform = 'translate('+_cx+'px,'+_cy+'px)';
+  if (_dot) _dot.style.transform = 'translate('+_mx+'px,'+_my+'px)';
 })();
-
 document.querySelectorAll('a,button,[data-hover]').forEach(el => {
-  el.addEventListener('mouseenter', () => cursor?.classList.add('hover'));
-  el.addEventListener('mouseleave', () => cursor?.classList.remove('hover'));
+  el.addEventListener('mouseenter', () => _cur?.classList.add('hover'));
+  el.addEventListener('mouseleave', () => _cur?.classList.remove('hover'));
 });
 
-Custom cursor HTML (place right after <body>):
-<div class="cursor" style="position:fixed;width:44px;height:44px;border:2px solid var(--brand);border-radius:50%;pointer-events:none;z-index:9999;margin:-22px 0 0 -22px;transition:transform 0s,opacity 0.3s,border-color 0.3s,width 0.3s,height 0.3s;will-change:transform"></div>
-<div class="cursor-dot" style="position:fixed;width:7px;height:7px;background:var(--brand);border-radius:50%;pointer-events:none;z-index:10000;margin:-3.5px 0 0 -3.5px;transition:opacity 0.3s;will-change:transform"></div>
-<style>
-.cursor.hover { width: 70px !important; height: 70px !important; margin: -35px 0 0 -35px !important; border-color: white; opacity: 0.7; }
+HTML (right after <body> open):
+<div class="cursor"></div>
+<div class="cursor-dot"></div>
+
+CSS:
+.cursor { position:fixed;width:44px;height:44px;border:1.5px solid var(--brand);border-radius:50%;pointer-events:none;z-index:9999;margin:-22px 0 0 -22px;transition:border-color .3s,width .3s,height .3s,margin .3s,opacity .3s;will-change:transform; }
+.cursor-dot { position:fixed;width:6px;height:6px;background:var(--brand);border-radius:50%;pointer-events:none;z-index:10000;margin:-3px 0 0 -3px;will-change:transform; }
+.cursor.hover { width:68px;height:68px;margin:-34px 0 0 -34px;border-color:rgba(255,255,255,.6);opacity:.7; }
 @media (hover:none),(pointer:coarse) { .cursor,.cursor-dot { display:none; } }
-</style>
 
-━━━ TECHNIQUE 8: GLSL SHADER (Three.js ShaderMaterial) ━━━
-Custom vertex + fragment shaders for the hero background plane:
+━━━ TECHNIQUE 8 — GLSL SHADER ━━━
+ShaderMaterial on Three.js plane behind the hero geometry:
 
-const vertexShader = \`
+const _vShader = \`
   varying vec2 vUv;
   uniform float uTime;
   void main() {
     vUv = uv;
     vec3 p = position;
-    p.z += sin(p.x * 2.5 + uTime * 0.9) * 0.18 + cos(p.y * 1.8 + uTime * 0.7) * 0.12;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    p.z += sin(p.x*2.8+uTime*0.85)*0.16 + cos(p.y*2.1+uTime*0.65)*0.11;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0);
   }
 \`;
-
-const fragmentShader = \`
+const _fShader = \`
   varying vec2 vUv;
   uniform float uTime;
   uniform vec3 uColor;
   void main() {
     float d = length(vUv - 0.5);
-    float ring = sin(d * 18.0 - uTime * 1.8) * 0.5 + 0.5;
-    float pulse = sin(uTime * 0.6) * 0.15 + 0.85;
-    float glow = (1.0 - smoothstep(0.0, 0.55, d)) * pulse;
-    float noise = sin(vUv.x * 40.0 + uTime) * sin(vUv.y * 40.0 + uTime * 0.8) * 0.05;
-    vec3 col = mix(vec3(0.0), uColor, (ring * glow + noise) * 0.9);
-    float alpha = glow * ring * 0.7 + noise * 0.3;
-    gl_FragColor = vec4(col, alpha);
+    float ring = sin(d*20.0 - uTime*2.0)*0.5+0.5;
+    float pulse = sin(uTime*0.5)*0.12+0.88;
+    float glow = (1.0-smoothstep(0.0,0.52,d))*pulse;
+    float noise = sin(vUv.x*38.0+uTime)*sin(vUv.y*38.0+uTime*0.9)*0.04;
+    gl_FragColor = vec4(mix(vec3(0.0),uColor,(ring*glow+noise)*0.85), glow*ring*0.65+noise*0.2);
   }
 \`;
-
-const shaderUniforms = {
-  uTime:  { value: 0.0 },
-  uColor: { value: new THREE.Color(BRAND_INT) }
-};
-
-const shaderMat = new THREE.ShaderMaterial({
-  vertexShader,
-  fragmentShader,
-  uniforms: shaderUniforms,
-  transparent: true,
-  depthWrite: false,
-  side: THREE.DoubleSide
+const _sUniforms = { uTime:{ value:0.0 }, uColor:{ value:new THREE.Color(BRAND_INT_PLACEHOLDER) } };
+const _sMat = new THREE.ShaderMaterial({
+  vertexShader:_vShader, fragmentShader:_fShader,
+  uniforms:_sUniforms, transparent:true, depthWrite:false, side:THREE.DoubleSide
 });
 
-━━━ THREE.JS FULL HERO SETUP ━━━
-Combine shader plane + icosahedron + particles + lerp mouse:
+━━━ WEBGL FULL HERO ━━━
+Shader plane + Icosahedron + particles + lerp mouse rotation:
 
-const canvas = document.getElementById('hero-canvas');
-let renderer3d, rAF3d;
+const _canvas = document.getElementById('hero-canvas');
+let _r3d, _raf3d;
 try {
-  renderer3d = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  renderer3d.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer3d.setSize(innerWidth, innerHeight);
-
-  const scene3d = new THREE.Scene();
-  const cam3d = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 100);
-  cam3d.position.z = 5;
-
-  scene3d.add(new THREE.AmbientLight(0xffffff, 0.25));
-  const pLight = new THREE.PointLight(BRAND_INT, 4, 18);
-  scene3d.add(pLight);
-
-  // Shader plane background
-  const planeGeo = new THREE.PlaneGeometry(14, 10, 32, 32);
-  const planeMesh = new THREE.Mesh(planeGeo, shaderMat);
-  planeMesh.position.z = -3;
-  scene3d.add(planeMesh);
-
-  // Main icosahedron with phong
-  const icoGeo = new THREE.IcosahedronGeometry(1.6, 1);
-  const icoMat = new THREE.MeshPhongMaterial({ color: BRAND_INT, shininess: 120, specular: 0xffffff });
-  const icoMesh = new THREE.Mesh(icoGeo, icoMat);
-  const wireMesh = new THREE.Mesh(icoGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.06 }));
-  scene3d.add(icoMesh, wireMesh);
-
+  _r3d = new THREE.WebGLRenderer({ canvas:_canvas, antialias:true, alpha:true });
+  _r3d.setPixelRatio(Math.min(devicePixelRatio,2));
+  _r3d.setSize(innerWidth,innerHeight);
+  const _sc = new THREE.Scene();
+  const _cam = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
+  _cam.position.z = 5;
+  _sc.add(new THREE.AmbientLight(0xffffff,0.2));
+  const _pl = new THREE.PointLight(BRAND_INT_PLACEHOLDER, 4, 18);
+  _sc.add(_pl);
+  // Shader background plane
+  const _plane = new THREE.Mesh(new THREE.PlaneGeometry(16,11,36,36), _sMat);
+  _plane.position.z = -3;
+  _sc.add(_plane);
+  // Main icosahedron
+  const _iGeo = new THREE.IcosahedronGeometry(1.55,1);
+  const _iMat = new THREE.MeshPhongMaterial({ color:BRAND_INT_PLACEHOLDER, shininess:130, specular:0xffffff });
+  const _iMesh = new THREE.Mesh(_iGeo,_iMat);
+  const _wMesh = new THREE.Mesh(_iGeo, new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, transparent:true, opacity:0.055 }));
+  _sc.add(_iMesh,_wMesh);
   // Particles
-  const pGeo = new THREE.BufferGeometry();
-  const pArr = new Float32Array(2400);
-  for (let i = 0; i < 2400; i++) pArr[i] = (Math.random() - 0.5) * 12;
-  pGeo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
-  scene3d.add(new THREE.Points(pGeo, new THREE.PointsMaterial({ color: BRAND_INT, size: 0.013, transparent: true, opacity: 0.55 })));
-
-  let wmx = 0, wmy = 0, wtx = 0, wty = 0, wt = 0;
-  document.addEventListener('mousemove', e => {
-    wmx = (e.clientX / innerWidth - 0.5) * 2;
-    wmy = -(e.clientY / innerHeight - 0.5) * 2;
-  }, { passive: true });
-
-  function loopGL() {
-    rAF3d = requestAnimationFrame(loopGL);
-    wt += 0.007;
-    wtx = lerp(wtx, wmx * 0.55, 0.04);
-    wty = lerp(wty, wmy * 0.55, 0.04);
-    icoMesh.rotation.y = wt * 0.35 + wtx;
-    icoMesh.rotation.x = wt * 0.18 + wty;
-    wireMesh.rotation.copy(icoMesh.rotation);
-    pLight.position.set(Math.sin(wt) * 4, Math.cos(wt * 0.7) * 3, 3);
-    shaderUniforms.uTime.value = wt;
-    renderer3d.render(scene3d, cam3d);
-  }
-  loopGL();
-
-  window.addEventListener('resize', () => {
-    cam3d.aspect = innerWidth / innerHeight;
-    cam3d.updateProjectionMatrix();
-    renderer3d.setSize(innerWidth, innerHeight);
-  });
-} catch (e) {
-  if (canvas) canvas.style.background = 'radial-gradient(ellipse at 50% 60%, BRAND_COLOR 0%, #070710 65%)';
+  const _pGeo = new THREE.BufferGeometry();
+  const _pArr = new Float32Array(2700);
+  for(let i=0;i<2700;i++) _pArr[i]=(Math.random()-.5)*12;
+  _pGeo.setAttribute('position', new THREE.BufferAttribute(_pArr,3));
+  _sc.add(new THREE.Points(_pGeo, new THREE.PointsMaterial({ color:BRAND_INT_PLACEHOLDER, size:0.013, transparent:true, opacity:0.5 })));
+  let _wt=0, _wmx=0, _wmy=0, _wtx=0, _wty=0;
+  document.addEventListener('mousemove', e=>{ _wmx=(e.clientX/innerWidth-.5)*2; _wmy=-(e.clientY/innerHeight-.5)*2; },{ passive:true });
+  (function _loopGL(){
+    _raf3d = requestAnimationFrame(_loopGL);
+    _wt += 0.007;
+    _wtx = lerp(_wtx, _wmx*0.5, 0.04);
+    _wty = lerp(_wty, _wmy*0.5, 0.04);
+    _iMesh.rotation.y = _wt*0.3+_wtx;
+    _iMesh.rotation.x = _wt*0.15+_wty;
+    _wMesh.rotation.copy(_iMesh.rotation);
+    _pl.position.set(Math.sin(_wt)*4, Math.cos(_wt*.7)*3, 3);
+    _sUniforms.uTime.value = _wt;
+    _r3d.render(_sc,_cam);
+  })();
+  window.addEventListener('resize',()=>{ _cam.aspect=innerWidth/innerHeight; _cam.updateProjectionMatrix(); _r3d.setSize(innerWidth,innerHeight); });
+} catch(e) {
+  if(_canvas) _canvas.style.background='radial-gradient(ellipse at 50% 55%, BRAND_COLOR_PLACEHOLDER 0%, #070710 68%)';
 }
 
-Hero canvas CSS:
-#hero-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  pointer-events: none;
-}
-.hero { position: relative; min-height: 100svh; display: flex; align-items: center; overflow: hidden; }
-.hero-content { position: relative; z-index: 1; will-change: transform, opacity; }
+Hero HTML:
+<section class="hero">
+  <canvas id="hero-canvas" style="position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none"></canvas>
+  <div class="hero-content" style="position:relative;z-index:1;will-change:transform,opacity">
+    <div class="hero-eyebrow">...</div>
+    <h1 class="hero-headline">...</h1>
+    <p class="hero-sub">...</p>
+    <div class="hero-cta-group">
+      <a class="btn-primary hero-cta">...</a>
+      <a class="btn-ghost hero-cta">...</a>
+    </div>
+    <div class="hero-badges">...</div>
+  </div>
+</section>
 
-━━━ NUMBER COUNTER ANIMATION ━━━
-<span data-target="2400" data-suffix="+">0</span>
-
-function animCount(el) {
-  const target = +el.dataset.target, suffix = el.dataset.suffix || '';
-  let current = 0;
-  const inc = target / 72;
-  const id = setInterval(() => {
-    current = Math.min(current + inc, target);
-    el.textContent = Math.floor(current).toLocaleString() + suffix;
-    if (current >= target) clearInterval(id);
-  }, 14);
-}
-new IntersectionObserver((entries) => {
-  entries.forEach(e => { if (e.isIntersecting) { animCount(e.target); } });
-}, { threshold: 0.6 }).observe; // call .observe on each [data-target] element
-
-━━━ HAMBURGER MOBILE MENU ━━━
-<button class="hamburger" aria-label="Menu" onclick="this.classList.toggle('open');document.querySelector('.mobile-drawer').classList.toggle('open')">
-  <span></span><span></span><span></span>
-</button>
-<div class="mobile-drawer">...</div>
-
-.hamburger { display: none; flex-direction: column; gap: 5px; cursor: pointer; background: none; border: none; padding: 4px; }
-.hamburger span { width: 24px; height: 2px; background: var(--text); transition: 0.3s; display: block; }
-.hamburger.open span:nth-child(1) { transform: rotate(45deg) translate(5px, 5px); }
-.hamburger.open span:nth-child(2) { opacity: 0; }
-.hamburger.open span:nth-child(3) { transform: rotate(-45deg) translate(5px, -5px); }
-.mobile-drawer { position: fixed; inset: 0; background: rgba(7,7,16,0.97); z-index: 90; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem; transform: translateX(100%); transition: transform 0.4s cubic-bezier(0.77,0,0.18,1); }
-.mobile-drawer.open { transform: none; }
-@media (max-width: 768px) { .nav-links { display: none; } .hamburger { display: flex; } }
+━━━ BUTTON STYLES ━━━
+.btn-primary { display:inline-flex;align-items:center;gap:.5rem;padding:.875rem 2.2rem;background:var(--brand);color:#fff;font-weight:700;font-size:.95rem;letter-spacing:.02em;border-radius:var(--radius-pill);border:none;cursor:pointer;transition:transform .25s,box-shadow .25s,filter .25s;will-change:transform; }
+.btn-primary:hover { transform:translateY(-2px) scale(1.02);box-shadow:var(--shadow-brand);filter:brightness(1.1); }
+.btn-ghost { display:inline-flex;align-items:center;gap:.5rem;padding:.875rem 2.2rem;background:transparent;color:var(--text);font-weight:600;font-size:.95rem;border:1.5px solid var(--border);border-radius:var(--radius-pill);cursor:pointer;transition:border-color .25s,background .25s; }
+.btn-ghost:hover { border-color:var(--brand);background:var(--brand-glow); }
 
 ━━━ GLASSMORPHISM CARDS ━━━
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 2.5rem 2rem;
-  backdrop-filter: blur(16px);
-  transition: transform 0.35s cubic-bezier(0.25,0.46,0.45,0.94), box-shadow 0.35s, border-color 0.35s;
-  will-change: transform;
+.card { background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem 2rem;backdrop-filter:blur(14px);transition:transform .35s cubic-bezier(.25,.46,.45,.94),box-shadow .35s,border-color .35s;will-change:transform; }
+.card:hover { transform:translateY(-10px);box-shadow:0 28px 70px var(--brand-glow),0 0 0 1px var(--brand);border-color:var(--brand); }
+
+━━━ MARQUEE ━━━
+.marquee { overflow:hidden;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:1.2rem 0; }
+.marquee-inner { display:flex;gap:3rem;width:max-content;animation:marquee 30s linear infinite;align-items:center; }
+@keyframes marquee { from{transform:translateX(0)} to{transform:translateX(-50%)} }
+.marquee:hover .marquee-inner { animation-play-state:paused; }
+
+━━━ NUMBER COUNTER ━━━
+function _animCount(el) {
+  const t=+el.dataset.target, s=el.dataset.suffix||'', p=el.dataset.prefix||'';
+  let c=0; const inc=t/75;
+  const id=setInterval(()=>{c=Math.min(c+inc,t);el.textContent=p+Math.floor(c).toLocaleString()+s;if(c>=t)clearInterval(id);},14);
 }
-.card:hover {
-  transform: translateY(-10px);
-  box-shadow: 0 24px 60px var(--brand-glow), 0 0 0 1px var(--brand);
-  border-color: var(--brand);
+new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){_animCount(e.target);}});},{threshold:.55}).observe;
+// Fix: use correct API:
+const _cio = new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){_animCount(e.target);_cio.unobserve(e.target);}});},{threshold:.55});
+document.querySelectorAll('[data-target]').forEach(el=>_cio.observe(el));
+
+━━━ ALL 9 SECTIONS (REQUIRED) ━━━
+1. NAV — sticky, logo + nav-links + cta + hamburger
+2. HERO — WebGL + shader canvas, scroll-bar, cursor, text-split headline, lerp mouse
+3. SOCIAL PROOF BAR — marquee stats: "4.9★ Rating" / "500+ Projects" / "$50M Generated"
+4. SERVICES — gsap-section, 3-6 card (.card.gsap-item), icon/emoji + title + desc + link
+5. ABOUT/STATS — two cols: 3 count-up stats (data-target/data-suffix) | story + cta
+6. PROCESS — 3-4 numbered steps, brand-colored circles, horizontal→vertical mobile
+7. TESTIMONIALS — 3 cards, blockquote + "★★★★★" + name + company, data-reveal stagger
+8. CTA SECTION — full-width brand bg, bold headline, single btn-primary
+9. FOOTER — dark bg, logo + tagline, 3-4 link columns, social icons, copyright bar
+
+━━━ CONTENT STANDARDS ━━━
+- Write REAL compelling marketing copy for this specific business — no generic filler
+- Stats: specific and believable ("1,400+ Roofs Installed" not "Many projects")
+- Testimonials: sound like real customers from the business's actual location/industry
+- Tagline: memorable and specific, not generic
+- CTAs: action-driven ("Get Your Free Estimate", "Talk to an Expert", "See Our Work")`
 }
-
-━━━ SOCIAL PROOF MARQUEE ━━━
-<div class="marquee-track"><div class="marquee-inner"><span>...</span> × 2</div></div>
-
-.marquee-track { overflow: hidden; width: 100%; }
-.marquee-inner { display: flex; gap: 3rem; width: max-content; animation: marquee 28s linear infinite; }
-@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-.marquee-track:hover .marquee-inner { animation-play-state: paused; }
-
-━━━ ALL 9 REQUIRED SECTIONS ━━━
-1. NAV — sticky (.site-nav), transparent → solid on scroll, logo + links + CTA, hamburger
-2. HERO — full-svh, WebGL + shader canvas, scroll-bar, split-text headline, lerp cursor, trust badges
-3. SOCIAL PROOF BAR — marquee with stats ("4.9★ rating", "500+ clients delivered", etc.)
-4. SERVICES — 3–6 glassmorphism cards (gsap-section/gsap-child), hover glow, icon + title + desc
-5. ABOUT/STATS — two cols: count-up stats (data-target) left | brand story right
-6. PROCESS — 3–4 numbered steps, brand-circle step numbers, horizontal → vertical on mobile
-7. TESTIMONIALS — 3 cards, 5-star rating, quote, name, company
-8. CTA SECTION — full-width brand-bg, bold headline, single CTA, optional geometric shapes
-9. FOOTER — dark bg, logo + tagline, 3-4 link columns, social icons, copyright
-
-━━━ REAL CONTENT RULES ━━━
-- Write compelling marketing copy specific to the business — NO placeholder text
-- Stats: impressive but believable (e.g. "1,200+ Roofs Installed", "98% Customer Retention")
-- Testimonials: sound like real people from the business's city/industry
-- CTAs: action verbs ("Get Your Free Quote", "Start Your Project", "Talk to an Expert")`
 
 // ── Output extractor ──────────────────────────────────────────────────────────
 
 function extractResult(raw: unknown): { html: string; title: string; slug: string } {
   const text = typeof raw === "string" ? raw : JSON.stringify(raw)
 
-  // Primary format: SITE_TITLE / SITE_SLUG / SITE_HTML:
   const titleMatch = text.match(/SITE_TITLE:\s*(.+)/i)
   const slugMatch  = text.match(/SITE_SLUG:\s*([a-z0-9-]+)/i)
-  const htmlMatch  = text.match(/SITE_HTML:\s*\r?\n?(<!DOCTYPE[\s\S]+)/i)
 
+  // Primary: SITE_HTML: marker
+  const htmlMatch = text.match(/SITE_HTML:\s*\r?\n?(<!DOCTYPE[\s\S]+)/i)
   if (htmlMatch?.[1]) {
     return {
       html:  htmlMatch[1].trim(),
@@ -433,7 +376,7 @@ function extractResult(raw: unknown): { html: string; title: string; slug: strin
     }
   }
 
-  // Fallback: bare <!DOCTYPE ...> in the response
+  // Fallback: bare DOCTYPE block
   const bareHtml = text.match(/(<!DOCTYPE[\s\S]+<\/html>)/i)
   if (bareHtml?.[1]) {
     return {
@@ -443,18 +386,80 @@ function extractResult(raw: unknown): { html: string; title: string; slug: strin
     }
   }
 
-  // Legacy fallback: JSON object with "html" key (old format)
+  // Legacy: JSON {html, title, slug}
   if (raw && typeof raw === "object" && "html" in (raw as object)) {
     const r = raw as Record<string, string>
     return { html: r.html, title: r.title ?? "Website", slug: r.slug ?? "site" }
   }
 
-  throw new Error("Website generation produced no HTML. The AI may have hit its output limit — try again.")
+  throw new Error("Website generation produced no HTML. The model may have hit its output limit — try again.")
+}
+
+// ── Post-processing: replace any leftover placeholders ───────────────────────
+
+function postProcess(html: string, brandColor: string, brandInt: string): string {
+  return html
+    .replace(/BRAND_COLOR_PLACEHOLDER/g, brandColor)
+    .replace(/BRAND_INT_PLACEHOLDER/g,   brandInt)
+    .replace(/BRAND_COLOR/g, brandColor)
+    .replace(/BRAND_INT/g,   brandInt)
+}
+
+// ── Improvement pass ──────────────────────────────────────────────────────────
+
+async function improveWebsite(
+  html: string,
+  score: number,
+  business: { name: string; type: string },
+  brandColor: string,
+  brandInt: string,
+  maxTokens: number
+): Promise<string> {
+  const checks = [
+    !html.includes("ShaderMaterial")                       && "Add ShaderMaterial GLSL shader to Three.js hero plane",
+    !html.includes("splitAndAnimate")                      && "Add splitAndAnimate() text splitting to the hero headline and 2 section headings",
+    !html.includes("lerp(")                                && "Add lerp-based smooth custom cursor",
+    !html.includes("mapRange(")                            && "Add mapRange() for scroll-driven hero opacity/scale",
+    !html.includes("IntersectionObserver")                 && "Add IntersectionObserver with [data-reveal] attributes",
+    !html.includes("ScrollTrigger")                        && "Add GSAP ScrollTrigger stagger animations",
+    !html.includes("WebGLRenderer")                        && "Add Three.js WebGL hero canvas",
+    !html.includes("marquee")                              && "Add CSS marquee social proof bar",
+    !html.includes("hamburger")                            && "Add hamburger mobile menu with animated drawer",
+    html.length < 40000                                    && "Website is too short — expand all sections with more content",
+  ].filter(Boolean) as string[]
+
+  if (checks.length === 0) return html
+
+  const improved = await runAgent(
+    buildSystemPrompt(_qualityBaseline, _totalGenerated),
+    `You previously generated a website for ${business.name} (${business.type}) that scored ${score.toFixed(1)}/10.
+
+The current quality baseline is ${_qualityBaseline.toFixed(1)}/10 — you MUST beat it.
+
+SPECIFIC ISSUES TO FIX:
+${checks.map((c, i) => `${i + 1}. ${c}`).join("\n")}
+
+Here is the current HTML to improve:
+${html.slice(0, 8000)}
+[...truncated for brevity — rewrite the complete document with all fixes applied]
+
+Output the complete improved website:
+SITE_TITLE: ${business.name} — [Subtitle]
+SITE_SLUG: [slug]
+SITE_HTML:
+<!DOCTYPE html>
+...complete improved document...
+</html>`,
+    { jsonMode: false, maxTokens, model: "sonnet" }
+  )
+
+  const result = extractResult(improved)
+  return postProcess(result.html, brandColor, brandInt)
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export async function generateWebsite(params: {
+export interface GenerateWebsiteParams {
   business: {
     name:        string
     type:        string
@@ -463,24 +468,39 @@ export async function generateWebsite(params: {
     phone?:      string | null
     website?:    string | null
   }
-  brandVoice:  Record<string, unknown>
-  brandColor:  string
-  services:    string[]
-  tagline?:    string
-  reviews?:    Array<{ reviewerName: string; rating: number; reviewText: string }>
-}): Promise<{ html: string; title: string; slug: string }> {
-  const { business, brandColor, services, tagline, reviews = [] } = params
+  brandVoice:       Record<string, unknown>
+  brandColor:       string
+  services:         string[]
+  tagline?:         string
+  reviews?:         Array<{ reviewerName: string; rating: number; reviewText: string }>
+  researchContext?: string
+}
 
-  const brandInt  = `0x${brandColor.replace("#", "")}`
-  const brandHex  = brandColor
+export interface GenerateWebsiteResult {
+  html:         string
+  title:        string
+  slug:         string
+  qualityScore: number
+  iterations:   number
+  researchUsed: boolean
+}
+
+export async function generateWebsite(params: GenerateWebsiteParams): Promise<GenerateWebsiteResult> {
+  const { business, brandColor, services, tagline, reviews = [], researchContext } = params
+
+  const brandInt = `0x${brandColor.replace("#", "")}`
 
   const reviewText = reviews.length > 0
     ? reviews.slice(0, 4).map(r => `• ${r.reviewerName}: "${r.reviewText}" (${r.rating}/5)`).join("\n")
-    : "(Generate 3 realistic testimonials from real-sounding clients in the business's city/industry)"
+    : "(Generate 3 realistic testimonials from real-sounding clients in the business's city)"
 
   const serviceList = services.length > 0
     ? services.slice(0, 6).join(" | ")
     : `Core ${business.type} services`
+
+  const researchSection = researchContext
+    ? `\n━━━ RESEARCH & REAL BUSINESS DATA ━━━\nUse this real information to make the site specific and authentic — prefer this over generic content:\n\n${researchContext}\n`
+    : ""
 
   const userPrompt = `Build a complete, award-winning website for this business using ALL 8 advanced techniques from the system prompt.
 
@@ -488,36 +508,31 @@ BUSINESS DETAILS:
 Name: ${business.name}
 Type: ${business.type}
 Location: ${business.location || "Nationwide"}
-Phone: ${business.phone || "(555) 000-0000"}
-Tagline: ${tagline || "(generate a powerful, memorable one)"}
-Brand Color: ${brandHex}
-Three.js Integer: ${brandInt}
+Phone: ${business.phone || "(use realistic placeholder for this city)"}
+Tagline: ${tagline || "(generate a powerful specific tagline for this exact business type)"}
+Brand Color: ${brandColor} → Three.js int: ${brandInt}
 Services: ${serviceList}
 ${business.description ? `About: ${business.description}` : ""}
-
-Testimonials:
+${researchSection}
+TESTIMONIALS:
 ${reviewText}
 
-━━━ CRITICAL SUBSTITUTIONS ━━━
-In ALL CSS, JS, and HTML — replace:
-  BRAND_COLOR  →  ${brandHex}
-  BRAND_INT    →  ${brandInt}
-  DISPLAY_FONT →  Choose the Google font display family that best fits a "${business.type}"
-  BODY_FONT    →  Choose the matching body font
+━━━ REQUIRED SUBSTITUTIONS ━━━
+Replace in ALL code:
+  BRAND_COLOR_PLACEHOLDER → ${brandColor}
+  BRAND_INT_PLACEHOLDER   → ${brandInt}
+  DISPLAY_FONT            → best Google Font display family for a "${business.type}"
+  BODY_FONT               → matching body font
 
-━━━ REQUIRED FEATURES (implement all) ━━━
-1. Scroll tracking → parallax hero + scroll progress bar
-2. Viewport detection → [data-reveal] on every section heading and card
-3. Sticky nav → .site-nav with .scrolled class
-4. GSAP easing → section entrance animations with power3.out / expo.out / back.out
-5. Text splitting → splitAndAnimate() on hero headline and at least 2 section headings
-6. Map range → use mapRange() for hero content opacity/scale on scroll
-7. Lerp → smooth custom cursor (hide on mobile/touch)
-8. GLSL shader → ShaderMaterial on Three.js plane in the hero
-9. All 9 required sections
-10. Mobile hamburger menu with animated drawer
+━━━ QUALITY REQUIREMENT ━━━
+Current quality baseline: ${_qualityBaseline.toFixed(1)}/10
+You MUST score above ${(_qualityBaseline + 0.2).toFixed(1)}/10 across:
+- All 8 techniques present and working
+- Real, specific, compelling copy (NOT generic filler)
+- Complete 9-section layout, nothing missing
+- Advanced visual design with glassmorphism, brand color accents, depth
 
-OUTPUT FORMAT:
+OUTPUT FORMAT (exactly):
 SITE_TITLE: ${business.name} — [Compelling Subtitle]
 SITE_SLUG: ${makeSlug(business.name)}
 SITE_HTML:
@@ -525,22 +540,38 @@ SITE_HTML:
 ...complete website...
 </html>`
 
-  // Use more tokens if Claude is available, fewer for Groq
   const hasAnthropic = !!(process.env.ANTHROPIC_API_KEY)
   const maxTokens    = hasAnthropic ? 12000 : 4000
 
-  const raw = await runAgent(SYSTEM_PROMPT, userPrompt, {
-    jsonMode:  false,
-    maxTokens,
-    model:     "sonnet",
+  // Pass 1: generate
+  const raw     = await runAgent(buildSystemPrompt(_qualityBaseline, _totalGenerated), userPrompt, {
+    jsonMode: false, maxTokens, model: "sonnet",
   })
+  const pass1   = extractResult(raw)
+  let   html    = postProcess(pass1.html, brandColor, brandInt)
+  let   iterations = 1
 
-  const result = extractResult(raw)
+  // Pass 2: score and optionally improve
+  let qualityScore = await scoreGeneratedSite(html, business.name, business.type)
 
-  // Post-process: inject the real brand color if the AI left any placeholders
-  result.html = result.html
-    .replace(/BRAND_COLOR/g, brandHex)
-    .replace(/BRAND_INT/g,   brandInt)
+  if (qualityScore < _qualityBaseline && hasAnthropic) {
+    const improved = await improveWebsite(html, qualityScore, business, brandColor, brandInt, Math.min(maxTokens, 10000))
+    if (improved.length > html.length * 0.6) {
+      html = improved
+      qualityScore = await scoreGeneratedSite(html, business.name, business.type)
+      iterations = 2
+    }
+  }
 
-  return result
+  // Ratchet up the baseline if this site beat it
+  raiseQualityBaseline(qualityScore)
+
+  return {
+    html,
+    title:        pass1.title,
+    slug:         pass1.slug,
+    qualityScore,
+    iterations,
+    researchUsed: !!(researchContext),
+  }
 }

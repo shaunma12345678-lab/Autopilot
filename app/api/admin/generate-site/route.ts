@@ -1,10 +1,13 @@
 import { NextRequest } from "next/server"
-import { generateWebsite } from "@/lib/agents/website-agent"
+import { generateWebsite, getQualityBaseline, getGenerationCount } from "@/lib/agents/website-agent"
+import { buildResearchContext } from "@/lib/agents/site-researcher"
 import { runAgent } from "@/lib/claude"
 
 export const maxDuration = 300
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+
+// ── Prompt parser ──────────────────────────────────────────────────────────────
 
 async function parsePrompt(prompt: string): Promise<{
   name: string; type: string; location: string; phone: string; website: string
@@ -12,22 +15,22 @@ async function parsePrompt(prompt: string): Promise<{
   needsMoreInfo: boolean; questions: string[]
 }> {
   const result = await runAgent(
-    `Extract website build parameters from a free-form description. Return ONLY valid JSON — no markdown, no explanation.
-If the business name is completely missing or ambiguous, set needsMoreInfo: true with one clarifying question.
-Otherwise extract everything and make smart inferences. Choose a premium brand color that authentically fits the industry.`,
+    `Extract website build parameters from a free-form description. Return ONLY valid JSON.
+If the business name is completely missing, set needsMoreInfo: true with one clarifying question.
+Otherwise extract everything and make smart inferences. Choose a premium brand color that authentically fits the industry — not generic blue.`,
     `User said: "${prompt}"
 
 Return this JSON:
 {
   "name": "business name (required)",
-  "type": "business type (e.g. Roofing Company, HVAC, Law Firm, Gym, Restaurant, Dental, Real Estate)",
+  "type": "specific business type (e.g. Luxury Roofing Company, HVAC & Cooling, Personal Injury Law Firm, CrossFit Gym)",
   "location": "city and state or empty string",
   "phone": "phone number or empty string",
   "website": "existing website URL or empty string",
-  "brandColor": "#hex — premium color that fits the industry (not generic blue)",
-  "tagline": "short powerful tagline or empty string",
-  "services": ["service 1", "service 2", "service 3", "service 4"],
-  "description": "2-3 sentence business description for content generation",
+  "brandColor": "#hex — premium color authentic to the industry",
+  "tagline": "short memorable tagline or empty string",
+  "services": ["service 1", "service 2", "service 3", "service 4", "service 5"],
+  "description": "2-3 sentence business description with personality",
   "needsMoreInfo": false,
   "questions": []
 }`,
@@ -51,6 +54,8 @@ Return this JSON:
   }
 }
 
+// ── Retry wrapper ─────────────────────────────────────────────────────────────
+
 async function generateWithRetry(
   params: Parameters<typeof generateWebsite>[0],
   maxAttempts = 3
@@ -64,10 +69,7 @@ async function generateWithRetry(
       lastError = err instanceof Error ? err : new Error(String(err))
       const lower = lastError.message.toLowerCase()
 
-      // Don't retry auth or invalid request errors
-      if (lower.includes("401") || lower.includes("invalid") || lower.includes("api key")) {
-        throw lastError
-      }
+      if (lower.includes("401") || lower.includes("api key")) throw lastError
 
       if (attempt < maxAttempts) {
         const delay = lower.includes("rate") || lower.includes("429") ? 12000 : 4000
@@ -78,6 +80,8 @@ async function generateWithRetry(
 
   throw lastError
 }
+
+// ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
@@ -98,10 +102,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Step 1: Parse the free-form description
+    // Step 1: Parse the description
     const parsed = await parsePrompt(prompt)
 
-    // Step 2: Ask for business name if missing
     if (parsed.needsMoreInfo || !parsed.name) {
       return Response.json({
         needsMoreInfo: true,
@@ -111,7 +114,23 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Step 3: Generate the site (with retry on transient errors)
+    // Step 2: Research pipeline — URL scraping + Tavily search (runs in parallel)
+    let researchContext = ""
+    let researchMeta    = { urlScraped: false, tavilyUsed: false }
+
+    try {
+      const research = await buildResearchContext(prompt, {
+        name:     parsed.name,
+        type:     parsed.type,
+        location: parsed.location,
+      })
+      researchContext = research.combined
+      researchMeta    = { urlScraped: research.urlScraped, tavilyUsed: research.tavilyUsed }
+    } catch {
+      // Research is best-effort — never block generation
+    }
+
+    // Step 3: Generate the site (with quality self-evaluation and improvement pass)
     const result = await generateWithRetry({
       business: {
         name:        parsed.name,
@@ -121,11 +140,12 @@ export async function POST(request: NextRequest) {
         phone:       parsed.phone    || null,
         website:     parsed.website  || null,
       },
-      brandVoice:  {},
-      brandColor:  parsed.brandColor,
-      services:    parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
-      tagline:     parsed.tagline || undefined,
-      reviews:     [],
+      brandVoice:      {},
+      brandColor:      parsed.brandColor,
+      services:        parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
+      tagline:         parsed.tagline || undefined,
+      reviews:         [],
+      researchContext: researchContext || undefined,
     })
 
     return Response.json({
@@ -133,6 +153,13 @@ export async function POST(request: NextRequest) {
       html:          result.html,
       title:         result.title,
       slug:          result.slug,
+      qualityScore:  result.qualityScore,
+      iterations:    result.iterations,
+      research:      researchMeta,
+      meta: {
+        qualityBaseline: getQualityBaseline(),
+        totalGenerated:  getGenerationCount(),
+      },
       parsed,
     })
   } catch (err) {
@@ -143,18 +170,32 @@ export async function POST(request: NextRequest) {
     let userMessage: string
     if (lower.includes("rate") || lower.includes("429")) {
       userMessage = "Rate limit reached. Please wait 30 seconds and try again."
-    } else if (lower.includes("401") || lower.includes("api key") || lower.includes("unauthorized")) {
-      userMessage = "AI provider not configured. Ask admin to set the ANTHROPIC_API_KEY in Vercel."
+    } else if (lower.includes("401") || lower.includes("api key")) {
+      userMessage = "AI provider not configured. Set ANTHROPIC_API_KEY in Vercel environment variables."
     } else if (lower.includes("no html") || lower.includes("output limit")) {
-      userMessage = "The AI couldn't fit the full website in one response. Try again — it usually succeeds on the second attempt."
+      userMessage = "The AI couldn't fit the full site in one response. Try again — it usually works on the second attempt."
     } else if (lower.includes("timeout") || lower.includes("timed out")) {
-      userMessage = "Generation timed out. Try again."
-    } else if (lower.includes("json") || lower.includes("parse")) {
-      userMessage = "The AI produced unexpected output. Try again with more specific details."
+      userMessage = "Generation timed out. Please try again."
     } else {
       userMessage = `Generation failed: ${msg.slice(0, 200)}`
     }
 
     return Response.json({ error: userMessage }, { status: 500 })
   }
+}
+
+// ── GET: return quality stats ─────────────────────────────────────────────────
+
+export async function GET(request: NextRequest) {
+  const pw = request.headers.get("x-admin-password")
+  if (pw !== ADMIN_PASSWORD) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  return Response.json({
+    qualityBaseline: getQualityBaseline(),
+    totalGenerated:  getGenerationCount(),
+    hasTavily:       !!(process.env.TAVILY_API_KEY),
+    hasAnthropic:    !!(process.env.ANTHROPIC_API_KEY),
+  })
 }
