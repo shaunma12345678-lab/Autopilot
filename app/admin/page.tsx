@@ -1456,6 +1456,57 @@ function SitesPanel({ password }: { password: string }) {
   const [deleting, setDeleting] = useState<string | null>(null)
   const headers = { "x-admin-password": password }
 
+  // Builder form state
+  const [showBuilder, setShowBuilder] = useState(false)
+  const [generating, setGenerating]   = useState(false)
+  const [genError, setGenError]       = useState("")
+  const [progress, setProgress]       = useState(0)
+  const [form, setForm] = useState({
+    name: "", type: "Business", description: "", location: "",
+    phone: "", website: "", brandColor: "#6366f1",
+    tagline: "", services: "",
+  })
+
+  const PROGRESS_STEPS = [
+    { pct: 10, msg: "Analysing brand…" },
+    { pct: 25, msg: "Crafting hero section…" },
+    { pct: 40, msg: "Writing service cards…" },
+    { pct: 58, msg: "Building WebGL shader…" },
+    { pct: 72, msg: "Adding particle system…" },
+    { pct: 86, msg: "Optimising for mobile…" },
+    { pct: 94, msg: "Finalising…" },
+  ]
+
+  async function generate() {
+    if (!form.name.trim()) { setGenError("Business name is required"); return }
+    setGenerating(true); setGenError(""); setProgress(0)
+    let step = 0
+    const tick = setInterval(() => {
+      if (step < PROGRESS_STEPS.length) { setProgress(PROGRESS_STEPS[step].pct); step++ }
+    }, 2500)
+    try {
+      const res = await fetch("/api/admin/generate-site", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          services: form.services ? form.services.split(",").map(s => s.trim()).filter(Boolean) : [],
+          save: true,
+        }),
+      })
+      clearInterval(tick); setProgress(100)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "Generation failed")
+      // Show preview immediately
+      setPreview({ id: data.savedId ?? "preview", slug: data.slug, title: data.title, html: data.html, published: false, createdAt: new Date().toISOString(), business: { name: form.name, type: form.type, user: { email: "admin" } } })
+      setShowBuilder(false)
+      await load()
+    } catch (e) { setGenError(e instanceof Error ? e.message : "Failed") }
+    finally { clearInterval(tick); setGenerating(false); setTimeout(() => setProgress(0), 1000) }
+  }
+
+  const progressMsg = PROGRESS_STEPS.slice().reverse().find(s => progress >= s.pct)?.msg ?? (progress === 100 ? "Done!" : "")
+
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/admin/sites", { headers })
@@ -1516,15 +1567,13 @@ function SitesPanel({ password }: { password: string }) {
             <span className="text-sm font-semibold text-white">{publishedCount}</span>
             <span className="text-sm text-gray-500">of {sites.length} live</span>
           </div>
-          <a
-            href="/website"
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            onClick={() => { setShowBuilder(v => !v); setGenError("") }}
             className="px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all hover:brightness-110"
-            style={{ background: "linear-gradient(135deg,#4f46e5,#7c3aed)" }}
+            style={{ background: showBuilder ? "#374151" : "linear-gradient(135deg,#4f46e5,#7c3aed)" }}
           >
-            + Build New Site ↗
-          </a>
+            {showBuilder ? "✕ Cancel" : "+ Build New Site"}
+          </button>
           <button onClick={load} className="px-3 py-2 rounded-lg border border-gray-700 text-xs text-gray-500 hover:text-white transition-colors">↻</button>
         </div>
       </div>
@@ -1533,6 +1582,99 @@ function SitesPanel({ password }: { password: string }) {
         <div className="flex items-center gap-3 bg-red-950/20 border border-red-800/40 rounded-xl px-4 py-3 text-sm">
           <span className="text-red-400 text-xs flex-1">{error}</span>
           <button onClick={() => setError("")} className="text-red-500 hover:text-red-400 text-lg leading-none">×</button>
+        </div>
+      )}
+
+      {/* ── Inline website builder ── */}
+      {showBuilder && (
+        <div className="bg-gray-900/80 border border-indigo-800/30 rounded-2xl p-6 space-y-5">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-indigo-400 font-semibold text-sm">Build Your Website</span>
+            <span className="text-xs text-gray-600">— WebGL 3D effects, mobile-first, SEO-ready in ~60s</span>
+          </div>
+
+          {/* Row 1 */}
+          <div className="grid sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Business Name *</label>
+              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Sunrise HVAC" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Business Type</label>
+              <input value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))} placeholder="e.g. HVAC Company" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Location</label>
+              <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. Austin, TX" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+            </div>
+          </div>
+
+          {/* Row 2 */}
+          <div className="grid sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Phone</label>
+              <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+1 (555) 000-0000" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Website URL</label>
+              <input value={form.website} onChange={e => setForm(f => ({ ...f, website: e.target.value }))} placeholder="https://yourbusiness.com" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Brand Color</label>
+              <div className="flex gap-2">
+                <input type="color" value={form.brandColor} onChange={e => setForm(f => ({ ...f, brandColor: e.target.value }))} className="w-10 h-10 rounded-lg border border-gray-700 cursor-pointer bg-transparent shrink-0" />
+                <input type="text" value={form.brandColor} onChange={e => setForm(f => ({ ...f, brandColor: e.target.value }))} className="flex-1 px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm font-mono focus:outline-none focus:border-indigo-500 transition-colors" />
+              </div>
+            </div>
+          </div>
+
+          {/* Row 3 */}
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Tagline <span className="text-gray-600 font-normal normal-case">(optional — AI writes one if blank)</span></label>
+              <input value={form.tagline} onChange={e => setForm(f => ({ ...f, tagline: e.target.value }))} placeholder="e.g. Phoenix's most trusted HVAC team" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Services <span className="text-gray-600 font-normal normal-case">(comma-separated)</span></label>
+              <input value={form.services} onChange={e => setForm(f => ({ ...f, services: e.target.value }))} placeholder="AC Repair, Heating Install, Tune-Ups, Emergency Service" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+            </div>
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Business Description <span className="text-gray-600 font-normal normal-case">(optional)</span></label>
+            <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} placeholder="What makes your business different? Awards, years in business, specialty areas…" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 resize-none transition-colors" />
+          </div>
+
+          {/* Progress */}
+          {generating && (
+            <div>
+              <div className="flex justify-between text-xs mb-1.5">
+                <span className="text-indigo-400 font-medium">{progressMsg}</span>
+                <span className="text-gray-600">{progress}%</span>
+              </div>
+              <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-700" style={{ width: `${progress}%`, background: "linear-gradient(90deg,#4f46e5,#7c3aed)" }} />
+              </div>
+            </div>
+          )}
+
+          {genError && <p className="text-red-400 text-sm">{genError}</p>}
+
+          <div className="flex gap-3">
+            <button onClick={() => { setShowBuilder(false); setGenError("") }} className="px-5 py-2.5 rounded-xl border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 transition-colors">Cancel</button>
+            <button
+              onClick={generate}
+              disabled={generating || !form.name.trim()}
+              className="flex-1 py-2.5 rounded-xl text-white text-sm font-bold disabled:opacity-40 transition-all hover:brightness-110 flex items-center justify-center gap-2"
+              style={{ background: "linear-gradient(135deg,#4f46e5,#7c3aed)" }}
+            >
+              {generating ? (
+                <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</>
+              ) : "Generate Website →"}
+            </button>
+          </div>
+          <p className="text-xs text-gray-700 text-center -mt-2">WebGL 3D • Particle system • Scroll animations • Mobile-first • ~45–90 seconds</p>
         </div>
       )}
 
