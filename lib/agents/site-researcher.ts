@@ -160,19 +160,27 @@ export async function scoreGeneratedSite(
   businessType: string
 ): Promise<number> {
   const checks = [
-    html.includes("ShaderMaterial")                                ? "✓ GLSL Shader" : "✗ GLSL Shader",
-    html.includes("splitAndAnimate") || html.includes(".char")     ? "✓ Text Split"  : "✗ Text Split",
-    html.includes("lerp(")                                         ? "✓ Lerp"         : "✗ Lerp",
-    html.includes("mapRange(")                                     ? "✓ MapRange"     : "✗ MapRange",
-    html.includes("IntersectionObserver")                          ? "✓ ViewportIO"   : "✗ ViewportIO",
-    html.includes("ScrollTrigger")                                 ? "✓ GSAP"         : "✗ GSAP",
-    html.includes("WebGLRenderer") || html.includes("IcosahedronGeometry") ? "✓ WebGL" : "✗ WebGL",
-    html.includes(".cursor")                                       ? "✓ Cursor"       : "✗ Cursor",
-    html.includes("data-reveal")                                   ? "✓ Reveal"       : "✗ Reveal",
-    html.includes("scroll-bar")                                    ? "✓ ScrollBar"    : "✗ ScrollBar",
-    html.includes("hamburger")                                     ? "✓ Mobile Menu"  : "✗ Mobile Menu",
-    html.includes("marquee")                                       ? "✓ Marquee"      : "✗ Marquee",
-    html.length > 40000                                            ? "✓ Length OK"    : "✗ Too Short",
+    // Original 8 techniques
+    html.includes("ShaderMaterial")                                        ? "✓ GLSL Shader"     : "✗ GLSL Shader",
+    html.includes("splitAndAnimate") || html.includes(".char")             ? "✓ Text Split"      : "✗ Text Split",
+    html.includes("lerp(")                                                 ? "✓ Lerp"            : "✗ Lerp",
+    html.includes("mapRange(")                                             ? "✓ MapRange"        : "✗ MapRange",
+    html.includes("IntersectionObserver")                                  ? "✓ ViewportIO"      : "✗ ViewportIO",
+    html.includes("ScrollTrigger")                                         ? "✓ GSAP"            : "✗ GSAP",
+    html.includes("WebGLRenderer") || html.includes("IcosahedronGeometry") ? "✓ WebGL"           : "✗ WebGL",
+    html.includes(".cursor")                                               ? "✓ Cursor"          : "✗ Cursor",
+    // New 6 techniques
+    html.includes("page-loader") || html.includes("loader-bar")           ? "✓ Page Loader"     : "✗ Page Loader",
+    html.includes("magnetic")                                              ? "✓ Magnetic Btns"   : "✗ Magnetic Btns",
+    html.includes("tilt-card") || html.includes("rotateY")                ? "✓ 3D Tilt"         : "✗ 3D Tilt",
+    html.includes("h-track") || html.includes("h-scroll")                 ? "✓ Horiz Scroll"    : "✗ Horiz Scroll",
+    html.includes("wipe-reveal") || html.includes("clip-path")            ? "✓ Clip-Path"       : "✗ Clip-Path",
+    html.includes("chip") || html.includes("btn-arrow")                   ? "✓ Micro-Anim"      : "✗ Micro-Anim",
+    // Quality checks
+    html.includes("data-reveal")                                           ? "✓ Reveal"          : "✗ Reveal",
+    html.includes("marquee")                                               ? "✓ Marquee"         : "✗ Marquee",
+    html.includes("hamburger")                                             ? "✓ Mobile Menu"     : "✗ Mobile Menu",
+    html.length > 45000                                                    ? "✓ Length OK"       : "✗ Too Short",
   ]
 
   const implemented = checks.filter(c => c.startsWith("✓")).length

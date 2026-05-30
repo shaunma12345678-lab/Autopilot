@@ -339,16 +339,140 @@ new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){_animCount(e.t
 const _cio = new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){_animCount(e.target);_cio.unobserve(e.target);}});},{threshold:.55});
 document.querySelectorAll('[data-target]').forEach(el=>_cio.observe(el));
 
+━━━ TECHNIQUE 9 — PAGE LOAD SEQUENCE ━━━
+Luxury loading screen before content reveals. Add as FIRST child of <body>:
+
+<div id="page-loader" style="position:fixed;inset:0;background:var(--bg);z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem">
+  <div id="loader-num" style="font-size:clamp(3rem,8vw,6rem);font-weight:800;color:var(--brand);letter-spacing:-.02em;font-variant-numeric:tabular-nums">0</div>
+  <div style="width:220px;height:2px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden">
+    <div id="loader-bar" style="height:100%;width:0%;background:var(--brand);transition:width .08s linear"></div>
+  </div>
+  <div style="font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--text-muted)">Loading Experience</div>
+</div>
+
+JS (before closing </body>, runs immediately):
+(function(){
+  document.documentElement.style.overflow='hidden';
+  let p=0;
+  const num=document.getElementById('loader-num'),bar=document.getElementById('loader-bar'),loader=document.getElementById('page-loader');
+  const iv=setInterval(()=>{
+    p+=Math.random()*14+5; if(p>100)p=100;
+    if(num)num.textContent=Math.floor(p)+'%';
+    if(bar)bar.style.width=p+'%';
+    if(p>=100){clearInterval(iv);setTimeout(()=>{
+      if(typeof gsap!=='undefined'){
+        gsap.to(loader,{yPercent:-100,duration:1.1,ease:'power4.inOut',onComplete:()=>{loader.remove();document.documentElement.style.overflow='';}});
+      } else { loader.remove(); document.documentElement.style.overflow=''; }
+    },350);}
+  },55);
+})();
+
+━━━ TECHNIQUE 10 — MAGNETIC BUTTONS ━━━
+All .btn-primary elements attract the cursor. Add class="magnetic" to CTAs.
+
+document.querySelectorAll('.magnetic').forEach(btn=>{
+  btn.addEventListener('mousemove',e=>{
+    const r=btn.getBoundingClientRect(),x=e.clientX-r.left-r.width/2,y=e.clientY-r.top-r.height/2;
+    btn.style.transition='transform 0.08s ease';
+    btn.style.transform='translate('+(x*.3)+'px,'+(y*.3)+'px)';
+  });
+  btn.addEventListener('mouseleave',()=>{
+    btn.style.transition='transform 0.55s cubic-bezier(.25,.46,.45,.94)';
+    btn.style.transform='translate(0,0)';
+  });
+});
+
+━━━ TECHNIQUE 11 — 3D CARD TILT ━━━
+Add class="tilt-card" to EVERY .card element.
+
+document.querySelectorAll('.tilt-card').forEach(card=>{
+  card.style.transformStyle='preserve-3d';
+  card.addEventListener('mousemove',e=>{
+    const r=card.getBoundingClientRect();
+    const x=(e.clientX-r.left)/r.width-.5, y=(e.clientY-r.top)/r.height-.5;
+    card.style.transition='transform 0.08s ease,box-shadow 0.08s';
+    card.style.transform='perspective(700px) rotateY('+(x*16)+'deg) rotateX('+(-y*16)+'deg) scale(1.04)';
+    card.style.boxShadow='0 30px 70px var(--brand-glow),0 0 0 1px var(--brand)';
+    card.style.borderColor='var(--brand)';
+  });
+  card.addEventListener('mouseleave',()=>{
+    card.style.transition='transform 0.6s cubic-bezier(.25,.46,.45,.94),box-shadow 0.4s,border-color 0.4s';
+    card.style.transform='perspective(700px) rotateY(0) rotateX(0) scale(1)';
+    card.style.boxShadow='';
+    card.style.borderColor='';
+  });
+});
+
+━━━ TECHNIQUE 12 — HORIZONTAL SCROLL SECTION ━━━
+Pin a section and scroll horizontally (use for services or portfolio):
+
+HTML:
+<section class="h-section gsap-section">
+  <div style="padding:3rem clamp(1.5rem,5vw,5rem)"><h2 class="section-headline split-text">Our Services</h2></div>
+  <div class="h-track" style="display:flex;gap:2rem;padding:0 clamp(1.5rem,5vw,5rem) 4rem;width:max-content">
+    <div class="h-card tilt-card card">...</div>
+    <div class="h-card tilt-card card">...</div>
+    <div class="h-card tilt-card card">...</div>
+    <div class="h-card tilt-card card">...</div>
+  </div>
+</section>
+
+CSS:
+.h-section { overflow:hidden; padding:0; }
+.h-card { width:360px; flex-shrink:0; }
+
+JS:
+const htrack=document.querySelector('.h-track');
+if(htrack){
+  gsap.to(htrack,{
+    x:()=>-(htrack.scrollWidth-innerWidth+120), ease:'none',
+    scrollTrigger:{ trigger:'.h-section', start:'top top', end:()=>'+='+(htrack.scrollWidth-innerWidth+120), scrub:1.2, pin:true, anticipatePin:1 }
+  });
+}
+
+━━━ TECHNIQUE 13 — CLIP-PATH WIPE REVEALS ━━━
+Cinematic left-to-right sweeps. Add .wipe-reveal to section headings and key visuals.
+
+CSS:
+.wipe-reveal { clip-path:inset(0 100% 0 0); transition:clip-path 1s cubic-bezier(.77,0,.18,1); }
+.wipe-reveal.in-view { clip-path:inset(0 0% 0 0); }
+.section-headline { position:relative; display:inline-block; }
+.section-headline::after { content:''; position:absolute; bottom:-8px; left:0; width:0; height:3px; background:var(--brand); border-radius:2px; transition:width 1.1s cubic-bezier(.77,0,.18,1) 0.3s; }
+.section-headline.in-view::after { width:55%; }
+
+Add .wipe-reveal class alongside [data-reveal] — the IntersectionObserver adds .in-view to both.
+
+━━━ TECHNIQUE 14 — MICRO-ANIMATIONS ━━━
+Polish every interactive element for a premium feel:
+
+Nav link underlines:
+.nav-links a { position:relative; padding-bottom:3px; }
+.nav-links a::after { content:''; position:absolute; bottom:0; left:0; width:0; height:1.5px; background:var(--brand); transition:width .3s ease; }
+.nav-links a:hover::after { width:100%; }
+
+Section label chips above every h2:
+<div class="chip">Our Services</div><h2 class="section-headline wipe-reveal">Headline</h2>
+.chip { display:inline-block; padding:.3rem 1rem; border:1px solid var(--brand); border-radius:var(--radius-pill); font-size:.68rem; letter-spacing:.14em; text-transform:uppercase; color:var(--brand); margin-bottom:.9rem; background:var(--brand-glow); }
+
+Button arrow slide:
+<a class="btn-primary magnetic btn-arrow">Get Started <span class="arr">→</span></a>
+.btn-arrow .arr { display:inline-block; transition:transform .3s ease; }
+.btn-arrow:hover .arr { transform:translateX(5px); }
+
+Footer link hover shift:
+.footer-links a { display:inline-block; transition:color .2s, transform .2s; }
+.footer-links a:hover { color:var(--brand); transform:translateX(5px); }
+
 ━━━ ALL 9 SECTIONS (REQUIRED) ━━━
-1. NAV — sticky, logo + nav-links + cta + hamburger
-2. HERO — WebGL + shader canvas, scroll-bar, cursor, text-split headline, lerp mouse
-3. SOCIAL PROOF BAR — marquee stats: "4.9★ Rating" / "500+ Projects" / "$50M Generated"
-4. SERVICES — gsap-section, 3-6 card (.card.gsap-item), icon/emoji + title + desc + link
-5. ABOUT/STATS — two cols: 3 count-up stats (data-target/data-suffix) | story + cta
-6. PROCESS — 3-4 numbered steps, brand-colored circles, horizontal→vertical mobile
-7. TESTIMONIALS — 3 cards, blockquote + "★★★★★" + name + company, data-reveal stagger
-8. CTA SECTION — full-width brand bg, bold headline, single btn-primary
-9. FOOTER — dark bg, logo + tagline, 3-4 link columns, social icons, copyright bar
+1. NAV — sticky + .scrolled, logo, nav-links (micro underlines), magnetic CTA, hamburger
+2. HERO — page-loader first, WebGL+shader canvas, scroll-bar, lerp cursor, text-split headline, magnetic CTAs, trust badges
+3. SOCIAL PROOF BAR — marquee: "4.9★ Rating" / "500+ Projects" / "$50M Generated" (duplicate content for seamless loop)
+4. SERVICES — use HORIZONTAL SCROLL h-section with 4 tilt-card cards
+5. ABOUT/STATS — two cols: 3 count-up stats (data-target/data-suffix) | wipe-reveal story paragraph + CTA
+6. PROCESS — chip label + wipe-reveal h2, 3-4 numbered steps with brand circles
+7. TESTIMONIALS — 3 tilt-card cards, ★★★★★, blockquote, name, company, data-reveal stagger
+8. CTA SECTION — full-width brand bg, split-text + wipe-reveal headline, single magnetic btn-primary
+9. FOOTER — dark bg, logo+tagline, 3-4 link columns (footer-links), social icons, copyright bar
 
 ━━━ CONTENT STANDARDS ━━━
 - Write REAL compelling marketing copy for this specific business — no generic filler
@@ -416,16 +540,22 @@ async function improveWebsite(
   maxTokens: number
 ): Promise<string> {
   const checks = [
-    !html.includes("ShaderMaterial")                       && "Add ShaderMaterial GLSL shader to Three.js hero plane",
-    !html.includes("splitAndAnimate")                      && "Add splitAndAnimate() text splitting to the hero headline and 2 section headings",
-    !html.includes("lerp(")                                && "Add lerp-based smooth custom cursor",
-    !html.includes("mapRange(")                            && "Add mapRange() for scroll-driven hero opacity/scale",
-    !html.includes("IntersectionObserver")                 && "Add IntersectionObserver with [data-reveal] attributes",
-    !html.includes("ScrollTrigger")                        && "Add GSAP ScrollTrigger stagger animations",
-    !html.includes("WebGLRenderer")                        && "Add Three.js WebGL hero canvas",
-    !html.includes("marquee")                              && "Add CSS marquee social proof bar",
-    !html.includes("hamburger")                            && "Add hamburger mobile menu with animated drawer",
-    html.length < 40000                                    && "Website is too short — expand all sections with more content",
+    !html.includes("ShaderMaterial")                                          && "Add ShaderMaterial GLSL shader to the Three.js hero plane",
+    !(html.includes("splitAndAnimate") || html.includes(".char"))             && "Add splitAndAnimate() letter-by-letter animation to hero headline and section headings",
+    !html.includes("lerp(")                                                   && "Add lerp() for smooth custom cursor",
+    !html.includes("mapRange(")                                               && "Add mapRange() driving hero opacity/scale from scroll position",
+    !html.includes("IntersectionObserver")                                    && "Add IntersectionObserver with [data-reveal] on all section headings and cards",
+    !html.includes("ScrollTrigger")                                           && "Add GSAP ScrollTrigger stagger animations on every section",
+    !(html.includes("WebGLRenderer") || html.includes("IcosahedronGeometry")) && "Add Three.js WebGL hero canvas with icosahedron geometry",
+    !(html.includes("page-loader") || html.includes("loader-bar"))           && "Add luxury page load sequence with animated percentage counter",
+    !html.includes("magnetic")                                                && "Add magnetic button effect to all CTA buttons",
+    !(html.includes("tilt-card") || html.includes("rotateY("))               && "Add 3D card tilt effect to service and testimonial cards",
+    !(html.includes("h-track") || html.includes("h-scroll"))                 && "Add GSAP horizontal scroll section for services showcase",
+    !(html.includes("wipe-reveal") || html.includes("clip-path"))            && "Add clip-path wipe reveal animations to section headings",
+    !html.includes("chip")                                                    && "Add label chip elements above every section heading",
+    !html.includes("marquee")                                                 && "Add CSS marquee social proof bar",
+    !html.includes("hamburger")                                               && "Add hamburger mobile menu with animated drawer",
+    html.length < 45000                                                       && "Website HTML is too short — expand all sections with substantially more content",
   ].filter(Boolean) as string[]
 
   if (checks.length === 0) return html

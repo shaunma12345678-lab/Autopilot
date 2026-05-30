@@ -1487,10 +1487,16 @@ function SitesPanel({ password }: { password: string }) {
       if (step < STEPS.length) { setProgress(STEPS[step].pct); step++ }
     }, 9000)
     try {
+      // Pass full chat history so the AI never asks repeat questions
+      const historyText = chatHistory
+        .map(m => `${m.role === "user" ? "User" : "AI"}: ${m.text}`)
+        .join("\n")
+        .slice(0, 3000)
+
       const res = await fetch("/api/admin/generate-site", {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userPrompt }),
+        body: JSON.stringify({ prompt: userPrompt, history: historyText }),
       })
       clearInterval(tick); setProgress(100)
       const data = await res.json()

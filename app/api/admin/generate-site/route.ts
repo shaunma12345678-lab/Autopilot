@@ -9,25 +9,35 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 
 // ── Prompt parser ──────────────────────────────────────────────────────────────
 
-async function parsePrompt(prompt: string): Promise<{
+async function parsePrompt(prompt: string, history: string): Promise<{
   name: string; type: string; location: string; phone: string; website: string
   brandColor: string; tagline: string; services: string[]; description: string
   needsMoreInfo: boolean; questions: string[]
 }> {
+  const contextBlock = history
+    ? `Conversation so far (use this for context — do NOT ask again for info already given):\n${history}\n\nLatest message: "${prompt}"`
+    : `User said: "${prompt}"`
+
   const result = await runAgent(
-    `Extract website build parameters from a free-form description. Return ONLY valid JSON.
-If the business name is completely missing, set needsMoreInfo: true with one clarifying question.
-Otherwise extract everything and make smart inferences. Choose a premium brand color that authentically fits the industry — not generic blue.`,
-    `User said: "${prompt}"
+    `You extract website build parameters from a user description. You have access to the full conversation history.
+
+RULES:
+- If the business name was already given in the conversation history, use it — never ask again
+- If the business type is clear from context, infer it — never ask what you can deduce
+- Only set needsMoreInfo: true if the business NAME is genuinely unknown after reading all history
+- When you do ask a question, make it specific to what's missing and relevant to building the site
+- Choose a premium, industry-authentic brand color (never generic #6366f1 blue)
+- Return ONLY valid JSON`,
+    `${contextBlock}
 
 Return this JSON:
 {
-  "name": "business name (required)",
-  "type": "specific business type (e.g. Luxury Roofing Company, HVAC & Cooling, Personal Injury Law Firm, CrossFit Gym)",
+  "name": "business name — infer from history if available",
+  "type": "specific business type (e.g. Luxury Roofing Company, Personal Injury Law Firm, CrossFit Gym)",
   "location": "city and state or empty string",
   "phone": "phone number or empty string",
   "website": "existing website URL or empty string",
-  "brandColor": "#hex — premium color authentic to the industry",
+  "brandColor": "#hex — premium color that fits the specific industry",
   "tagline": "short memorable tagline or empty string",
   "services": ["service 1", "service 2", "service 3", "service 4", "service 5"],
   "description": "2-3 sentence business description with personality",
@@ -96,14 +106,16 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  const prompt = String(body.prompt ?? "").trim()
+  const prompt  = String(body.prompt  ?? "").trim()
+  const history = String(body.history ?? "").slice(0, 3000)
+
   if (!prompt) {
     return Response.json({ error: "Describe the website you want to build" }, { status: 400 })
   }
 
   try {
-    // Step 1: Parse the description
-    const parsed = await parsePrompt(prompt)
+    // Step 1: Parse with full conversation history so it never asks repeat questions
+    const parsed = await parsePrompt(prompt, history)
 
     if (parsed.needsMoreInfo || !parsed.name) {
       return Response.json({
