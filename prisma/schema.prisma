@@ -8,39 +8,91 @@ datasource db {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  email        String     @unique
-  name         String?
-  stripeId     String?
-  plan         Plan       @default(FREE)
-  createdAt    DateTime   @default(now())
-  businesses   Business[]
-  agencyName   String?
-  agencyLogo   String?
-  agencyColor  String     @default("#6366f1")
-  agencyDomain String?
-  isAgency     Boolean    @default(false)
+  id                String             @id @default(cuid())
+  email             String             @unique
+  name              String?
+  stripeId          String?
+  plan              Plan               @default(FREE)
+  createdAt         DateTime           @default(now())
+  businesses        Business[]
+  connectedAccounts ConnectedAccount[]
+  agentRuns         AgentRun[]
+  conversations     Conversation[]
+  customTools       CustomTool[]
+  agencyName        String?
+  agencyLogo        String?
+  agencyColor       String             @default("#6366f1")
+  agencyDomain      String?
+  isAgency          Boolean            @default(false)
+}
+
+model ConnectedAccount {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider     String
+  accountName  String?
+  accountEmail String?
+  accessToken  String?
+  refreshToken String?
+  expiresAt    DateTime?
+  scopes       String[]  @default([])
+  metadata     Json      @default("{}")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model AgentRun {
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentSlug  String
+  agentName  String
+  status     RunStatus   @default(RUNNING)
+  input      Json        @default("{}")
+  output     Json?
+  errorMsg   String?
+  durationMs Int?
+  createdAt  DateTime    @default(now())
+  completedAt DateTime?
+
+  @@index([userId])
+  @@index([agentSlug])
+  @@index([createdAt])
+}
+
+enum RunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
 }
 
 model Business {
-  id             String    @id @default(cuid())
+  id             String             @id @default(cuid())
   userId         String
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   name           String
   type           String
-  description    String    @default("")
+  description    String             @default("")
   location       String
   phone          String?
   website        String?
-  brandVoice     Json      @default("{}")
-  socialProfiles Json      @default("{}")
-  activeAgents   String[]  @default([])
-  createdAt      DateTime  @default(now())
+  brandVoice     Json               @default("{}")
+  socialProfiles Json               @default("{}")
+  activeAgents   String[]           @default([])
+  createdAt      DateTime           @default(now())
   content        Content[]
   reviews        Review[]
   leads          Lead[]
   reports        Report[]
   site           Site?
+  conversations  Conversation[]
+  agentMemory    AgentMemory[]
+  fewShotExamples FewShotExample[]
+  scheduledRuns  ScheduledRun[]
 
   @@index([userId])
 }
@@ -156,4 +208,119 @@ enum LeadStatus {
   QUALIFIED
   CONVERTED
   LOST
+}
+
+// ── Conversation & Message (multi-turn chat, #5 #7) ───────────────────────────
+
+model Conversation {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessId String?
+  business   Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  agentSlug  String
+  agentName  String
+  title      String    @default("New Chat")
+  pinned     Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  messages   Message[]
+
+  @@index([userId, agentSlug])
+  @@index([businessId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String
+  metadata       Json         @default("{}")
+  qualityScore   Int?
+  iterations     Int?
+  searchUsed     Boolean      @default(false)
+  toolsUsed      String[]     @default([])
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+// ── Agent Memory (#5) ─────────────────────────────────────────────────────────
+
+model AgentMemory {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agentSlug  String
+  key        String
+  value      String
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  @@unique([businessId, agentSlug, key])
+  @@index([businessId, agentSlug])
+}
+
+// ── Few-Shot Examples (#15) ───────────────────────────────────────────────────
+
+model FewShotExample {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agentSlug  String
+  userInput  String
+  agentOutput String
+  quality    Int      @default(8)
+  approved   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([businessId, agentSlug])
+}
+
+// ── Custom Tools (#10) ────────────────────────────────────────────────────────
+
+model CustomTool {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String
+  toolType    String   @default("webhook")
+  config      Json     @default("{}")
+  inputSchema Json     @default("{}")
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ── Scheduled Runs with Diff Detection (#8) ───────────────────────────────────
+
+model ScheduledRun {
+  id              String    @id @default(cuid())
+  businessId      String
+  business        Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agentSlug       String
+  agentName       String
+  enabled         Boolean   @default(true)
+  cronExpression  String
+  lastOutput      String?
+  lastRunAt       DateTime?
+  nextRunAt       DateTime?
+  lastChangePct   Float?
+  notifyOnChange  Boolean   @default(true)
+  changeThreshold Float     @default(25.0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([businessId, agentSlug])
+  @@index([businessId])
 }

@@ -10,6 +10,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.98.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@radix-ui/react-avatar": "^1.1.11",
@@ -29,6 +30,7 @@
     "@stripe/stripe-js": "^9.4.0",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",
+    "@types/nodemailer": "^8.0.0",
     "@types/pg": "^8.20.0",
     "@types/three": "^0.184.1",
     "@upstash/redis": "^1.38.0",
@@ -40,6 +42,7 @@
     "howler": "^2.2.4",
     "lucide-react": "^1.14.0",
     "next": "16.2.6",
+    "nodemailer": "^8.0.9",
     "pg": "^8.20.0",
     "postprocessing": "^6.39.1",
     "prisma": "^7.8.0",

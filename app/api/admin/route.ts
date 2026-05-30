@@ -9,60 +9,62 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Invalid password" }, { status: 401 })
   }
 
-  const [
-    totalUsers,
-    totalBusinesses,
-    totalContent,
-    totalReviews,
-    totalLeads,
-    recentUsers,
-    recentBusinesses,
-    contentByStatus,
-    reviewsByRating,
-    planDistribution,
-  ] = await Promise.all([
-    prisma.user.count(),
-    prisma.business.count(),
-    prisma.content.count(),
-    prisma.review.count(),
-    prisma.lead.count(),
-    prisma.user.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 20,
-      select: { id: true, email: true, name: true, plan: true, createdAt: true },
-    }),
-    prisma.business.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 20,
-      include: {
-        _count: { select: { content: true, reviews: true, leads: true } },
-        user: { select: { email: true } },
-      },
-    }),
-    prisma.content.groupBy({ by: ["status"], _count: true }),
-    prisma.review.groupBy({ by: ["rating"], _count: true }),
-    prisma.user.groupBy({ by: ["plan"], _count: true }),
-  ])
-
-  const approvedContent = contentByStatus.find(c => c.status === "APPROVED")?._count ?? 0
-  const pendingContent  = contentByStatus.find(c => c.status === "PENDING")?._count ?? 0
-  const avgRating = reviewsByRating.length
-    ? (reviewsByRating.reduce((s, r) => s + r.rating * r._count, 0) / totalReviews).toFixed(1)
-    : "0"
-
-  return Response.json({
-    stats: {
+  // Password is correct — try to load DB stats, but never block login on DB failure
+  try {
+    const [
       totalUsers,
       totalBusinesses,
       totalContent,
       totalReviews,
       totalLeads,
-      approvedContent,
-      pendingContent,
-      avgRating,
-    },
-    planDistribution,
-    recentUsers,
-    recentBusinesses,
-  })
+      recentUsers,
+      recentBusinesses,
+      contentByStatus,
+      reviewsByRating,
+      planDistribution,
+    ] = await Promise.all([
+      prisma.user.count(),
+      prisma.business.count(),
+      prisma.content.count(),
+      prisma.review.count(),
+      prisma.lead.count(),
+      prisma.user.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: { id: true, email: true, name: true, plan: true, createdAt: true },
+      }),
+      prisma.business.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        include: {
+          _count: { select: { content: true, reviews: true, leads: true } },
+          user: { select: { email: true } },
+        },
+      }),
+      prisma.content.groupBy({ by: ["status"], _count: true }),
+      prisma.review.groupBy({ by: ["rating"], _count: true }),
+      prisma.user.groupBy({ by: ["plan"], _count: true }),
+    ])
+
+    const approvedContent = contentByStatus.find(c => c.status === "APPROVED")?._count ?? 0
+    const pendingContent  = contentByStatus.find(c => c.status === "PENDING")?._count ?? 0
+    const avgRating = reviewsByRating.length
+      ? (reviewsByRating.reduce((s, r) => s + r.rating * r._count, 0) / totalReviews).toFixed(1)
+      : "0"
+
+    return Response.json({
+      stats: { totalUsers, totalBusinesses, totalContent, totalReviews, totalLeads, approvedContent, pendingContent, avgRating },
+      planDistribution,
+      recentUsers,
+      recentBusinesses,
+    })
+  } catch {
+    // DB unavailable — still grant access with zeroed stats so sandbox works
+    return Response.json({
+      stats: { totalUsers: 0, totalBusinesses: 0, totalContent: 0, totalReviews: 0, totalLeads: 0, approvedContent: 0, pendingContent: 0, avgRating: "0" },
+      planDistribution: [],
+      recentUsers: [],
+      recentBusinesses: [],
+    })
+  }
 }
