@@ -1,7 +1,14 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { getAdminClient } from "@/lib/supabase/admin"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+
+const ZERO_STATS = {
+  stats: { totalUsers: 0, totalBusinesses: 0, totalContent: 0, totalReviews: 0, totalLeads: 0, approvedContent: 0, pendingContent: 0, avgRating: "0" },
+  planDistribution: [],
+  recentUsers: [],
+  recentBusinesses: [],
+}
 
 export async function POST(request: NextRequest) {
   const { password } = await request.json()
@@ -9,62 +16,75 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Invalid password" }, { status: 401 })
   }
 
-  // Password is correct — try to load DB stats, but never block login on DB failure
   try {
+    const sb = getAdminClient()
+
     const [
-      totalUsers,
-      totalBusinesses,
-      totalContent,
-      totalReviews,
-      totalLeads,
-      recentUsers,
-      recentBusinesses,
-      contentByStatus,
-      reviewsByRating,
-      planDistribution,
+      { count: totalUsers },
+      { count: totalBusinesses },
+      { count: totalContent },
+      { count: totalReviews },
+      { count: totalLeads },
+      { data: recentUsersRaw },
+      { data: recentBusinessesRaw },
+      { data: contentStatus },
+      { data: reviewRatings },
+      { data: planDist },
     ] = await Promise.all([
-      prisma.user.count(),
-      prisma.business.count(),
-      prisma.content.count(),
-      prisma.review.count(),
-      prisma.lead.count(),
-      prisma.user.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 20,
-        select: { id: true, email: true, name: true, plan: true, createdAt: true },
-      }),
-      prisma.business.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 20,
-        include: {
-          _count: { select: { content: true, reviews: true, leads: true } },
-          user: { select: { email: true } },
-        },
-      }),
-      prisma.content.groupBy({ by: ["status"], _count: true }),
-      prisma.review.groupBy({ by: ["rating"], _count: true }),
-      prisma.user.groupBy({ by: ["plan"], _count: true }),
+      sb.from("User").select("*", { count: "exact", head: true }),
+      sb.from("Business").select("*", { count: "exact", head: true }),
+      sb.from("Content").select("*", { count: "exact", head: true }),
+      sb.from("Review").select("*", { count: "exact", head: true }),
+      sb.from("Lead").select("*", { count: "exact", head: true }),
+      sb.from("User").select("id,email,name,plan,createdAt").order("createdAt", { ascending: false }).limit(20),
+      sb.from("Business").select("id,name,type,createdAt,userId,user:User(email)").order("createdAt", { ascending: false }).limit(20),
+      sb.from("Content").select("status"),
+      sb.from("Review").select("rating"),
+      sb.from("User").select("plan"),
     ])
 
-    const approvedContent = contentByStatus.find(c => c.status === "APPROVED")?._count ?? 0
-    const pendingContent  = contentByStatus.find(c => c.status === "PENDING")?._count ?? 0
-    const avgRating = reviewsByRating.length
-      ? (reviewsByRating.reduce((s, r) => s + r.rating * r._count, 0) / totalReviews).toFixed(1)
-      : "0"
+    const approvedContent = (contentStatus ?? []).filter((c: { status: string }) => c.status === "APPROVED").length
+    const pendingContent  = (contentStatus ?? []).filter((c: { status: string }) => c.status === "PENDING").length
+    const ratings = (reviewRatings ?? []).map((r: { rating: number }) => r.rating)
+    const avgRating = ratings.length ? (ratings.reduce((s: number, r: number) => s + r, 0) / ratings.length).toFixed(1) : "0"
+
+    // Build plan distribution
+    const planMap: Record<string, number> = {}
+    ;(planDist ?? []).forEach((u: { plan: string }) => { planMap[u.plan] = (planMap[u.plan] ?? 0) + 1 })
+    const planDistribution = Object.entries(planMap).map(([plan, _count]) => ({ plan, _count }))
+
+    // Attach content/review/lead counts to businesses
+    const businessIds = (recentBusinessesRaw ?? []).map((b: { id: string }) => b.id)
+    const [{ data: bContent }, { data: bReviews }, { data: bLeads }] = await Promise.all([
+      businessIds.length ? sb.from("Content").select("businessId").in("businessId", businessIds) : Promise.resolve({ data: [] }),
+      businessIds.length ? sb.from("Review").select("businessId").in("businessId", businessIds) : Promise.resolve({ data: [] }),
+      businessIds.length ? sb.from("Lead").select("businessId").in("businessId", businessIds) : Promise.resolve({ data: [] }),
+    ])
+
+    const recentBusinesses = (recentBusinessesRaw ?? []).map((b: Record<string, unknown>) => ({
+      ...b,
+      _count: {
+        content: (bContent ?? []).filter((c: { businessId: string }) => c.businessId === b.id).length,
+        reviews: (bReviews ?? []).filter((r: { businessId: string }) => r.businessId === b.id).length,
+        leads:   (bLeads   ?? []).filter((l: { businessId: string }) => l.businessId === b.id).length,
+      },
+    }))
 
     return Response.json({
-      stats: { totalUsers, totalBusinesses, totalContent, totalReviews, totalLeads, approvedContent, pendingContent, avgRating },
+      stats: {
+        totalUsers:      totalUsers   ?? 0,
+        totalBusinesses: totalBusinesses ?? 0,
+        totalContent:    totalContent ?? 0,
+        totalReviews:    totalReviews ?? 0,
+        totalLeads:      totalLeads   ?? 0,
+        approvedContent, pendingContent, avgRating,
+      },
       planDistribution,
-      recentUsers,
+      recentUsers:    recentUsersRaw ?? [],
       recentBusinesses,
     })
-  } catch {
-    // DB unavailable — still grant access with zeroed stats so sandbox works
-    return Response.json({
-      stats: { totalUsers: 0, totalBusinesses: 0, totalContent: 0, totalReviews: 0, totalLeads: 0, approvedContent: 0, pendingContent: 0, avgRating: "0" },
-      planDistribution: [],
-      recentUsers: [],
-      recentBusinesses: [],
-    })
+  } catch (err) {
+    console.error("[admin] DB error:", err)
+    return Response.json(ZERO_STATS)
   }
 }

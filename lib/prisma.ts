@@ -1,13 +1,10 @@
-import { PrismaClient } from "@/app/generated/prisma/client"
-import { PrismaPg } from "@prisma/adapter-pg"
+// Supabase REST-based database client — works on Vercel (IPv4 port 443).
+// Direct PostgreSQL is IPv6-only on Supabase free tier and unreachable from Vercel serverless.
+// All routes import { prisma } from "@/lib/prisma" and get the REST client transparently.
 
-function createPrismaClient() {
-  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
-  return new PrismaClient({ adapter })
-}
+import { db } from "@/lib/db"
+import type { PrismaClient } from "@/app/generated/prisma/client"
 
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
-
-export const prisma = globalForPrisma.prisma || createPrismaClient()
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma
+// Cast to PrismaClient so TypeScript uses the generated types across all routes and pages.
+// The runtime implementation uses Supabase REST API for every query.
+export const prisma = db as unknown as PrismaClient
