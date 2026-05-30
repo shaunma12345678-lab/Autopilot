@@ -426,6 +426,127 @@ export async function buildResearchContext(
   }
 }
 
+// ── #10 — Reference URL style cloner ─────────────────────────────────────────
+// Fetches a reference URL and extracts its design system as constraint text
+
+export async function cloneUrlStyle(referenceUrl: string): Promise<string> {
+  try {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 9000)
+
+    const res = await fetch(referenceUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; AutopilotSiteBuilder/1.0)", Accept: "text/html" },
+      signal: controller.signal,
+    })
+    if (!res.ok) return ""
+
+    const html = await res.text()
+    const css  = await fetchAndExtractCSS(referenceUrl, html)
+    const ds   = extractDesignSystem(css, html)
+
+    const parts: string[] = [`━━━ REFERENCE STYLE TO MATCH (${referenceUrl}) ━━━`]
+
+    if (ds.colors.length > 0) {
+      parts.push(`Color palette: ${ds.colors.slice(0, 10).join(", ")}`)
+    }
+    if (ds.fonts.length > 0) {
+      parts.push(`Font stack: ${ds.fonts.join(", ")}`)
+    }
+    if (ds.radii.length > 0) {
+      parts.push(`Border radius values: ${ds.radii.slice(0, 4).join(", ")}`)
+    }
+    if (ds.animations.length > 0) {
+      parts.push(`Animation names: ${ds.animations.join(", ")}`)
+    }
+
+    const importantVars = Object.entries(ds.vars).slice(0, 12)
+    if (importantVars.length > 0) {
+      parts.push(`CSS variables: ${importantVars.map(([k, v]) => `${k}: ${v}`).join("; ")}`)
+    }
+
+    // Extract dominant aesthetic from class names and structure
+    const usesGrid    = /display:\s*grid|grid-template/i.test(css)
+    const usesFlex    = /display:\s*flex/i.test(css)
+    const hasRounded  = /border-radius:\s*(1|1\.|2|3)rem/i.test(css)
+    const hasShadows  = /box-shadow:.{10,80}/i.test(css)
+    const hasGlassy   = /backdrop-filter|rgba\(\d+,\d+,\d+,0\.\d+\)/i.test(css)
+    const hasDark     = /(background|bg).*#[0-1][0-9a-f]{5}/i.test(css)
+
+    const aesthetics: string[] = []
+    if (usesGrid)   aesthetics.push("grid-heavy layout")
+    if (usesFlex)   aesthetics.push("flexbox-based")
+    if (hasRounded) aesthetics.push("rounded pill/card shapes")
+    if (hasShadows) aesthetics.push("depth via box-shadows")
+    if (hasGlassy)  aesthetics.push("glassmorphism elements")
+    if (hasDark)    aesthetics.push("dark background")
+
+    if (aesthetics.length > 0) {
+      parts.push(`Design aesthetic: ${aesthetics.join(", ")}`)
+    }
+
+    parts.push("DIRECTIVE: Replicate the design language above — colors, fonts, radius, and aesthetic — in the generated site.")
+
+    return parts.join("\n")
+  } catch {
+    return ""
+  }
+}
+
+// ── #30 — Reference image intent analyzer ────────────────────────────────────
+// Analyzes a base64-encoded reference image using Groq vision
+
+export async function analyzeReferenceImage(
+  base64Data: string,
+  mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" = "image/jpeg"
+): Promise<string> {
+  if (!process.env.GROQ_API_KEY) return ""
+
+  try {
+    const Groq = (await import("groq-sdk")).default
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+
+    const response = await groq.chat.completions.create({
+      model: "meta-llama/llama-4-scout-17b-16e-instruct",
+      max_tokens: 800,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: `data:${mediaType};base64,${base64Data}` },
+            },
+            {
+              type: "text",
+              text: `Analyze this website reference image/sketch and extract design intent.
+Describe specifically:
+1. Layout structure: section types, grid pattern, sidebar vs full-width
+2. Color palette: background, primary, accent, text colors (use hex estimates if visible)
+3. Typography: font style (serif/sans/mono), weight, size hierarchy
+4. Design aesthetic: luxury/minimal/bold/corporate/playful/creative
+5. Hero type: text-only, image-based, 3D, split-column, video
+6. Key UI elements: card styles, button shapes, navigation type, cursor effects
+7. Animation feel: static, subtle transitions, dramatic motion, scroll-driven
+8. Specific sections visible: pricing, testimonials, FAQ, portfolio, etc.
+
+Be specific and concrete — this description will be used to replicate the design.`,
+            },
+          ],
+        },
+      ],
+    })
+
+    const text = response.choices[0]?.message?.content ?? ""
+    if (!text) return ""
+
+    return `━━━ REFERENCE IMAGE DESIGN INTENT ━━━
+${text}
+DIRECTIVE: Implement the design language, layout, and aesthetic described above in the generated site.`
+  } catch {
+    return ""
+  }
+}
+
 // ── Quality scorer ────────────────────────────────────────────────────────────
 
 export async function scoreGeneratedSite(
