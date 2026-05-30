@@ -108,7 +108,7 @@ export async function runAgent(
     const client = getGroqClient()
     const response = await client.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      max_tokens: options.maxTokens ?? 4096,
+      max_tokens: options.maxTokens ?? 8192,
       response_format: options.jsonMode ? { type: "json_object" } : undefined,
       messages: [
         { role: "system", content: systemPrompt },

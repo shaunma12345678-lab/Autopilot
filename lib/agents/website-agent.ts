@@ -1133,7 +1133,8 @@ SITE_HTML:
 </html>`
 
   const hasAnthropic = !!(process.env.ANTHROPIC_API_KEY)
-  const maxTokens    = hasAnthropic ? 12000 : 4000
+  // Groq llama-3.3-70b-versatile supports up to 32,768 output tokens — use it fully
+  const maxTokens = hasAnthropic ? 12000 : 32000
 
   const raw   = await runAgent(
     buildSystemPrompt(_qualityBaseline, _totalGenerated, directives, shaderGlsl),
@@ -1146,10 +1147,11 @@ SITE_HTML:
 
   let qualityScore = await scoreGeneratedSite(html, business.name, business.type)
 
-  if (qualityScore < _qualityBaseline && hasAnthropic) {
+  // Improvement pass runs regardless of provider — Groq can do it too
+  if (qualityScore < _qualityBaseline) {
     const improved = await improveWebsite(
       html, qualityScore, business, brandColor, brandInt,
-      Math.min(maxTokens, 10000), directives
+      Math.min(maxTokens, 16000), directives
     )
     if (improved.length > html.length * 0.6) {
       html = improved
@@ -1158,10 +1160,10 @@ SITE_HTML:
     }
   }
 
-  // #2 — Compliance check + patch
+  // #2 — Compliance check + patch (runs on all providers)
   const complianceViolations = directives ? await verifyCompliance(html, directives) : []
 
-  if (complianceViolations.length > 0 && hasAnthropic) {
+  if (complianceViolations.length > 0) {
     try {
       const patchedRaw = await runAgent(
         buildSystemPrompt(_qualityBaseline, _totalGenerated, directives, shaderGlsl),
@@ -1175,7 +1177,7 @@ SITE_TITLE: ${pass1.title}
 SITE_SLUG: ${pass1.slug}
 SITE_HTML:
 <!DOCTYPE html>...`,
-        { jsonMode: false, maxTokens: Math.min(maxTokens, 10000), model: "sonnet" }
+        { jsonMode: false, maxTokens: Math.min(maxTokens, 16000), model: "sonnet" }
       )
       const patchResult = extractResult(patchedRaw)
       if (patchResult.html.length > html.length * 0.5) {
