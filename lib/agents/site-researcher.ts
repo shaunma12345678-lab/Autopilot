@@ -1,13 +1,41 @@
 import { webSearch, formatSearchResults } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
+import Anthropic from "@anthropic-ai/sdk"
+
+// ── Design system interface ────────────────────────────────────────────────────
+
+export interface DesignSystem {
+  vars:        Record<string, string>
+  fonts:       string[]
+  colors:      string[]
+  framework:   "tailwind" | "bootstrap" | "custom"
+  fontImports: string[]
+  animations:  string[]
+  radii:       string[]
+}
+
+// ── Component patterns interface ───────────────────────────────────────────────
+
+export interface ComponentPatterns {
+  sectionCount:  number
+  cardCount:     number
+  hasHamburger:  boolean
+  navLinkCount:  number
+  hasVideo:      boolean
+  hasParallax:   boolean
+}
+
+// ── Research context interface ─────────────────────────────────────────────────
 
 export interface ResearchContext {
-  urlScraped:    boolean
-  tavilyUsed:    boolean
-  urlSummary:    string
-  businessInfo:  string
-  industryDesign: string
-  combined:      string
+  urlScraped:        boolean
+  tavilyUsed:        boolean
+  urlSummary:        string
+  businessInfo:      string
+  industryDesign:    string
+  combined:          string
+  designSystem:      DesignSystem | null
+  componentPatterns: ComponentPatterns | null
 }
 
 // ── URL extraction ─────────────────────────────────────────────────────────────
@@ -17,6 +45,195 @@ export function extractUrl(text: string): string | null {
   if (!match) return null
   const url = match[0].replace(/[.,;!?]+$/, "")
   try { new URL(url); return url } catch { return null }
+}
+
+// ── CSS fetcher — pulls linked stylesheets + inline styles ────────────────────
+
+export async function fetchAndExtractCSS(baseUrl: string, html: string): Promise<string> {
+  const parts: string[] = []
+
+  // Extract inline <style> blocks
+  const styleBlocks = html.match(/<style[\s\S]*?<\/style>/gi) ?? []
+  for (const block of styleBlocks) {
+    const inner = block.replace(/<style[^>]*>/i, "").replace(/<\/style>/i, "")
+    parts.push(inner)
+  }
+
+  // Extract up to 4 linked stylesheet hrefs
+  const linkMatches = [...html.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi)]
+  const hrefs: string[] = []
+
+  for (const match of linkMatches) {
+    const hrefMatch = match[0].match(/href=["']([^"']+)["']/)
+    if (hrefMatch) {
+      const href = hrefMatch[1]
+      // Skip CDN-hosted libraries, focus on site's own CSS
+      if (href.startsWith("http") || href.startsWith("//")) {
+        hrefs.push(href.startsWith("//") ? "https:" + href : href)
+      } else {
+        // Resolve relative URL against base
+        try {
+          hrefs.push(new URL(href, baseUrl).toString())
+        } catch {
+          // Skip invalid URLs
+        }
+      }
+      if (hrefs.length >= 4) break
+    }
+  }
+
+  // Fetch each stylesheet with 5s timeout
+  await Promise.allSettled(
+    hrefs.map(async href => {
+      try {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5000)
+        const res = await fetch(href, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; AutopilotSiteBuilder/1.0)" },
+          signal: controller.signal,
+        })
+        clearTimeout(timeout)
+        if (res.ok) {
+          const css = await res.text()
+          parts.push(css.slice(0, 30000))
+        }
+      } catch {
+        // Non-blocking — skip failed stylesheets
+      }
+    })
+  )
+
+  return parts.join("\n\n").slice(0, 80000)
+}
+
+// ── CSS design system extractor ───────────────────────────────────────────────
+
+export function extractDesignSystem(css: string, html: string): DesignSystem {
+  // Extract CSS custom properties (--*)
+  const vars: Record<string, string> = {}
+  for (const match of css.matchAll(/--([a-z0-9-]+)\s*:\s*([^;}{]+)/gi)) {
+    vars[`--${match[1].trim()}`] = match[2].trim().slice(0, 80)
+  }
+
+  // Extract font-family declarations (deduplicated)
+  const fontSet = new Set<string>()
+  for (const match of css.matchAll(/font-family\s*:\s*([^;}{]+)/gi)) {
+    const raw = match[1].trim().split(",")[0].replace(/["']/g, "").trim()
+    if (raw && raw.length < 60 && !raw.toLowerCase().includes("inherit")) {
+      fontSet.add(raw)
+    }
+  }
+  const fonts = [...fontSet].slice(0, 8)
+
+  // Extract hex and rgb colors (deduplicated)
+  const colorSet = new Set<string>()
+  for (const match of css.matchAll(/#[0-9a-fA-F]{3,6}\b/g)) {
+    colorSet.add(match[0].toLowerCase())
+  }
+  for (const match of css.matchAll(/rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+[^)]*\)/g)) {
+    colorSet.add(match[0].toLowerCase().replace(/\s+/g, ""))
+  }
+  const colors = [...colorSet].slice(0, 24)
+
+  // Extract border-radius values
+  const radiiSet = new Set<string>()
+  for (const match of css.matchAll(/border-radius\s*:\s*([^;}{]+)/gi)) {
+    radiiSet.add(match[1].trim().slice(0, 40))
+  }
+  const radii = [...radiiSet].slice(0, 8)
+
+  // Extract @keyframes names
+  const animations: string[] = []
+  for (const match of css.matchAll(/@keyframes\s+([a-z0-9_-]+)/gi)) {
+    animations.push(match[1])
+  }
+
+  // Detect font @import statements (Google Fonts etc.)
+  const fontImports: string[] = []
+  for (const match of css.matchAll(/@import\s+url\(['"]([^'"]+)['"]\)/gi)) {
+    fontImports.push(match[1])
+  }
+  for (const match of html.matchAll(/<link[^>]+fonts\.googleapis\.com[^>]*>/gi)) {
+    const href = match[0].match(/href=["']([^"']+)["']/)
+    if (href) fontImports.push(href[1])
+  }
+
+  // Detect framework from HTML class names
+  let framework: "tailwind" | "bootstrap" | "custom" = "custom"
+  if (/class=["'][^"']*\b(flex|grid|text-\w+-\d+|bg-\w+-\d+|p-\d+|m-\d+|rounded-\w+)\b/i.test(html)) {
+    framework = "tailwind"
+  } else if (/class=["'][^"']*\b(container|row|col-\w+|btn btn-|navbar|card-body)\b/i.test(html)) {
+    framework = "bootstrap"
+  }
+
+  return { vars, fonts, colors, framework, fontImports, animations, radii }
+}
+
+// ── Component pattern recognizer ──────────────────────────────────────────────
+
+export function recognizeComponents(html: string): ComponentPatterns {
+  // Count <section> tags
+  const sectionCount = (html.match(/<section[\s>]/gi) ?? []).length
+
+  // Count elements with "card" in class
+  const cardCount = (html.match(/class=["'][^"']*\bcard\b[^"']*["']/gi) ?? []).length
+
+  // Detect hamburger / mobile menu pattern
+  const hasHamburger = /hamburger|mobile-menu|menu-toggle|nav-toggle|\.burger/i.test(html)
+
+  // Count nav links
+  const navLinkCount = (() => {
+    const navMatch = html.match(/<nav[\s\S]*?<\/nav>/i)
+    if (!navMatch) return 0
+    return (navMatch[0].match(/<a\s/gi) ?? []).length
+  })()
+
+  // Detect video elements
+  const hasVideo = /<video[\s>]/i.test(html) || /youtube\.com|vimeo\.com/i.test(html)
+
+  // Detect parallax
+  const hasParallax = /parallax|data-speed|data-parallax/i.test(html)
+
+  return { sectionCount, cardCount, hasHamburger, navLinkCount, hasVideo, hasParallax }
+}
+
+// ── Vision analysis via Anthropic SDK ────────────────────────────────────────
+
+export async function analyzeScreenshot(imageUrl: string): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY) return ""
+
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 600,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "url",
+                url: imageUrl,
+              },
+            },
+            {
+              type: "text",
+              text: "Analyze this website screenshot. Describe: 1) Layout structure and section types visible, 2) Color palette and primary/accent colors, 3) Typography style (serif/sans-serif, weight, size), 4) Design aesthetic (minimal, bold, luxury, corporate, creative), 5) Key UI components (cards, nav style, hero type, CTAs). Be specific and concise — this will be used to replicate the design language.",
+            },
+          ],
+        },
+      ],
+    })
+
+    const block = response.content[0]
+    if (block.type === "text") return block.text
+    return ""
+  } catch {
+    return ""
+  }
 }
 
 // ── URL scraping + AI summarization ──────────────────────────────────────────
@@ -114,20 +331,48 @@ async function searchTavily(
 
 export async function buildResearchContext(
   prompt: string,
-  business: { name: string; type: string; location: string }
+  business: { name: string; type: string; location: string },
+  visionContext?: string
 ): Promise<ResearchContext> {
   const url = extractUrl(prompt)
 
-  // Run URL scraping and Tavily search in parallel
-  const [urlResult, tavilyResult] = await Promise.allSettled([
+  // Run URL scraping, Tavily search, CSS fetching, and vision in parallel
+  const [urlResult, tavilyResult, cssResult] = await Promise.allSettled([
     url ? scrapeAndSummarize(url, business.name, business.type) : Promise.resolve(""),
     searchTavily(business.name, business.type, business.location),
+    url ? (async (): Promise<{ css: string; html: string } | null> => {
+      try {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 9000)
+        const res = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; AutopilotSiteBuilder/1.0)", Accept: "text/html" },
+          signal: controller.signal,
+        })
+        clearTimeout(timeout)
+        if (!res.ok) return null
+        const html = await res.text()
+        const css = await fetchAndExtractCSS(url, html)
+        return { css, html }
+      } catch {
+        return null
+      }
+    })() : Promise.resolve(null),
   ])
 
   const urlSummary    = urlResult.status    === "fulfilled" ? urlResult.value    : ""
   const tavilyData    = tavilyResult.status === "fulfilled" ? tavilyResult.value : { businessInfo: "", industryDesign: "" }
+  const cssData       = cssResult.status    === "fulfilled" ? cssResult.value    : null
   const urlScraped    = !!(url && urlSummary)
   const tavilyUsed    = !!(tavilyData.businessInfo)
+
+  // Extract design system and component patterns if we have CSS+HTML
+  let designSystem:      DesignSystem | null = null
+  let componentPatterns: ComponentPatterns | null = null
+
+  if (cssData) {
+    designSystem      = extractDesignSystem(cssData.css, cssData.html)
+    componentPatterns = recognizeComponents(cssData.html)
+  }
 
   // Merge into a combined context string
   const parts: string[] = []
@@ -135,6 +380,33 @@ export async function buildResearchContext(
   if (urlScraped) {
     parts.push(`━━━ SCRAPED FROM EXISTING SITE (${url}) ━━━\n${urlSummary}`)
   }
+
+  if (designSystem && (designSystem.colors.length > 0 || designSystem.fonts.length > 0)) {
+    const dsLines: string[] = ["━━━ EXTRACTED CSS DESIGN SYSTEM ━━━"]
+    if (designSystem.framework !== "custom") dsLines.push(`Framework: ${designSystem.framework}`)
+    if (designSystem.fonts.length)  dsLines.push(`Fonts: ${designSystem.fonts.join(", ")}`)
+    if (designSystem.colors.length) dsLines.push(`Colors: ${designSystem.colors.slice(0, 8).join(", ")}`)
+    if (designSystem.radii.length)  dsLines.push(`Border radii: ${designSystem.radii.slice(0, 4).join(", ")}`)
+    if (designSystem.animations.length) dsLines.push(`Animations: ${designSystem.animations.join(", ")}`)
+    const importantVars = Object.entries(designSystem.vars).slice(0, 10)
+    if (importantVars.length) dsLines.push(`CSS vars: ${importantVars.map(([k, v]) => `${k}: ${v}`).join("; ")}`)
+    parts.push(dsLines.join("\n"))
+  }
+
+  if (componentPatterns) {
+    const cpLines = [
+      "━━━ SITE COMPONENT PATTERNS ━━━",
+      `Sections: ${componentPatterns.sectionCount}, Cards: ${componentPatterns.cardCount}`,
+      `Nav links: ${componentPatterns.navLinkCount}, Hamburger: ${componentPatterns.hasHamburger ? "yes" : "no"}`,
+      `Video: ${componentPatterns.hasVideo ? "yes" : "no"}, Parallax: ${componentPatterns.hasParallax ? "yes" : "no"}`,
+    ]
+    parts.push(cpLines.join("\n"))
+  }
+
+  if (visionContext) {
+    parts.push(`━━━ AI VISION ANALYSIS ━━━\n${visionContext}`)
+  }
+
   if (tavilyData.businessInfo) {
     parts.push(`━━━ LIVE BUSINESS RESEARCH ━━━\n${tavilyData.businessInfo}`)
   }
@@ -146,9 +418,11 @@ export async function buildResearchContext(
     urlScraped,
     tavilyUsed,
     urlSummary,
-    businessInfo:   tavilyData.businessInfo,
-    industryDesign: tavilyData.industryDesign,
-    combined:       parts.join("\n\n"),
+    businessInfo:      tavilyData.businessInfo,
+    industryDesign:    tavilyData.industryDesign,
+    combined:          parts.join("\n\n"),
+    designSystem,
+    componentPatterns,
   }
 }
 

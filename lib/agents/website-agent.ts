@@ -705,3 +705,102 @@ SITE_HTML:
     researchUsed: !!(researchContext),
   }
 }
+
+// ── Multi-page site generation ────────────────────────────────────────────────
+
+export interface MultiPageSite {
+  pages: Array<{ slug: string; title: string; html: string }>
+  sharedDesignSystem: string
+}
+
+export async function generateMultiPageSite(params: GenerateWebsiteParams): Promise<MultiPageSite> {
+  // Step 1: Generate home page using the existing generator
+  const home = await generateWebsite(params)
+
+  // Step 2: Extract shared CSS variables block from home HTML
+  const rootMatch = home.html.match(/:root\s*\{[\s\S]*?\}/)
+  const sharedDesignSystem = rootMatch ? rootMatch[0] : ""
+
+  // Extract the nav and footer blocks to reuse across pages
+  const navMatch    = home.html.match(/<nav[\s\S]*?<\/nav>/i)
+  const footerMatch = home.html.match(/<footer[\s\S]*?<\/footer>/i)
+  const sharedNav    = navMatch    ? navMatch[0]    : ""
+  const sharedFooter = footerMatch ? footerMatch[0] : ""
+
+  // Step 3: Generate about, services, contact pages
+  const pageConfigs = [
+    {
+      slug:  `${home.slug}-about`,
+      title: `${params.business.name} — About Us`,
+      focus: "about page with company story, team section, values, and mission. Include the same hero nav and footer.",
+      section: "About",
+    },
+    {
+      slug:  `${home.slug}-services`,
+      title: `${params.business.name} — Services`,
+      focus: "services page with detailed service descriptions, pricing tiers if applicable, process steps, and FAQs.",
+      section: "Services",
+    },
+    {
+      slug:  `${home.slug}-contact`,
+      title: `${params.business.name} — Contact`,
+      focus: "contact page with contact form, phone, email, address, business hours, and a map placeholder.",
+      section: "Contact",
+    },
+  ]
+
+  const pageResults = await Promise.allSettled(
+    pageConfigs.map(async ({ slug, title, focus, section }) => {
+      const raw = await runAgent(
+        `You are an expert frontend engineer. Build a complete inner page for an existing multi-page website.
+The page must use the same design system, fonts, and visual style as the home page.
+Output EXACTLY:
+PAGE_HTML:
+<!DOCTYPE html>
+[complete page]
+</html>`,
+        `Business: ${params.business.name} (${params.business.type})
+Page: ${section} page
+Page focus: ${focus}
+
+━━━ SHARED CSS DESIGN SYSTEM (inject into :root) ━━━
+${sharedDesignSystem}
+
+━━━ SHARED NAV (use this exact nav) ━━━
+${sharedNav.slice(0, 3000)}
+
+━━━ SHARED FOOTER (use this exact footer) ━━━
+${sharedFooter.slice(0, 2000)}
+
+━━━ RESEARCH CONTEXT ━━━
+${params.researchContext ?? "(none)"}
+
+Build a complete, polished ${section} page that matches the home page design system exactly.
+Include: same CSS variables, same fonts, same color palette.
+Link back to home: <a href="index.html">Home</a>
+This page slug: ${slug}`,
+        { model: "sonnet", maxTokens: 10000, jsonMode: false }
+      ) as string
+
+      // Extract HTML from output
+      const htmlStart = raw.indexOf("PAGE_HTML:")
+      let pageHtml = htmlStart >= 0 ? raw.slice(htmlStart + 10).trim() : raw.trim()
+      // Strip markdown fences if present
+      pageHtml = pageHtml.replace(/^```(?:html)?\n?/i, "").replace(/\n?```$/i, "").trim()
+
+      return { slug, title, html: pageHtml }
+    })
+  )
+
+  const pages: Array<{ slug: string; title: string; html: string }> = [
+    { slug: home.slug, title: home.title, html: home.html },
+  ]
+
+  for (const result of pageResults) {
+    if (result.status === "fulfilled") {
+      pages.push(result.value)
+    }
+  }
+
+  return { pages, sharedDesignSystem }
+}

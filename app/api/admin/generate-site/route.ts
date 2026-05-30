@@ -1,11 +1,17 @@
 import { NextRequest } from "next/server"
 import { generateWebsite, getQualityBaseline, getGenerationCount } from "@/lib/agents/website-agent"
-import { buildResearchContext } from "@/lib/agents/site-researcher"
+import { buildResearchContext, analyzeScreenshot } from "@/lib/agents/site-researcher"
 import { runAgent } from "@/lib/claude"
 
 export const maxDuration = 300
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+
+// ── SSE helper ─────────────────────────────────────────────────────────────────
+
+function sseEvent(type: string, data: Record<string, unknown>): string {
+  return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`
+}
 
 // ── Prompt parser ──────────────────────────────────────────────────────────────
 
@@ -91,7 +97,7 @@ async function generateWithRetry(
   throw lastError
 }
 
-// ── Route handler ─────────────────────────────────────────────────────────────
+// ── Route handler — SSE streaming ─────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
@@ -106,94 +112,149 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  const prompt  = String(body.prompt  ?? "").trim()
-  const history = String(body.history ?? "").slice(0, 3000)
+  const prompt   = String(body.prompt   ?? "").trim()
+  const history  = String(body.history  ?? "").slice(0, 3000)
+  const imageUrl = body.imageUrl ? String(body.imageUrl).trim() : undefined
 
   if (!prompt) {
     return Response.json({ error: "Describe the website you want to build" }, { status: 400 })
   }
 
-  try {
-    // Step 1: Parse with full conversation history so it never asks repeat questions
-    const parsed = await parsePrompt(prompt, history)
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (type: string, data: Record<string, unknown>) => {
+        controller.enqueue(new TextEncoder().encode(sseEvent(type, data)))
+      }
 
-    if (parsed.needsMoreInfo || !parsed.name) {
-      return Response.json({
-        needsMoreInfo: true,
-        questions: parsed.questions.length > 0
-          ? parsed.questions
-          : ["What is the name of the business you want a website for?"],
-      })
-    }
+      try {
+        // Step 1: Parse prompt
+        send("progress", { msg: "Parsing your description…", pct: 5 })
+        const parsed = await parsePrompt(prompt, history)
 
-    // Step 2: Research pipeline — URL scraping + Tavily search (runs in parallel)
-    let researchContext = ""
-    let researchMeta    = { urlScraped: false, tavilyUsed: false }
+        if (parsed.needsMoreInfo || !parsed.name) {
+          send("clarify", {
+            questions: parsed.questions.length > 0
+              ? parsed.questions
+              : ["What is the name of the business you want a website for?"],
+          })
+          controller.close()
+          return
+        }
 
-    try {
-      const research = await buildResearchContext(prompt, {
-        name:     parsed.name,
-        type:     parsed.type,
-        location: parsed.location,
-      })
-      researchContext = research.combined
-      researchMeta    = { urlScraped: research.urlScraped, tavilyUsed: research.tavilyUsed }
-    } catch {
-      // Research is best-effort — never block generation
-    }
+        // Step 2: CSS scraping
+        send("progress", { msg: "Deep-scraping existing site code…", pct: 12 })
 
-    // Step 3: Generate the site (with quality self-evaluation and improvement pass)
-    const result = await generateWithRetry({
-      business: {
-        name:        parsed.name,
-        type:        parsed.type,
-        description: parsed.description,
-        location:    parsed.location,
-        phone:       parsed.phone    || null,
-        website:     parsed.website  || null,
-      },
-      brandVoice:      {},
-      brandColor:      parsed.brandColor,
-      services:        parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
-      tagline:         parsed.tagline || undefined,
-      reviews:         [],
-      researchContext: researchContext || undefined,
-    })
+        // Step 3: Vision analysis (if imageUrl provided)
+        let visionContext = ""
+        if (imageUrl) {
+          send("progress", { msg: "Analyzing with AI vision…", pct: 22 })
+          visionContext = await analyzeScreenshot(imageUrl)
+        }
 
-    return Response.json({
-      needsMoreInfo: false,
-      html:          result.html,
-      title:         result.title,
-      slug:          result.slug,
-      qualityScore:  result.qualityScore,
-      iterations:    result.iterations,
-      research:      researchMeta,
-      meta: {
-        qualityBaseline: getQualityBaseline(),
-        totalGenerated:  getGenerationCount(),
-      },
-      parsed,
-    })
-  } catch (err) {
-    console.error("[admin/generate-site]", err)
-    const msg   = err instanceof Error ? err.message : String(err)
-    const lower = msg.toLowerCase()
+        // Step 4: Research pipeline (URL scraping + CSS + Tavily — parallel)
+        send("progress", { msg: "Extracting CSS design system…", pct: 22 })
+        let researchContext = ""
+        let researchMeta    = { urlScraped: false, tavilyUsed: false }
+        let designSystemData: { colors: string[]; fonts: string[]; framework: string } | null = null
 
-    let userMessage: string
-    if (lower.includes("rate") || lower.includes("429")) {
-      userMessage = "Rate limit reached. Please wait 30 seconds and try again."
-    } else if (lower.includes("401") || lower.includes("api key")) {
-      userMessage = "AI provider not configured. Set ANTHROPIC_API_KEY in Vercel environment variables."
-    } else if (lower.includes("no html") || lower.includes("output limit")) {
-      userMessage = "The AI couldn't fit the full site in one response. Try again — it usually works on the second attempt."
-    } else if (lower.includes("timeout") || lower.includes("timed out")) {
-      userMessage = "Generation timed out. Please try again."
-    } else {
-      userMessage = `Generation failed: ${msg.slice(0, 200)}`
-    }
+        try {
+          const research = await buildResearchContext(
+            prompt,
+            { name: parsed.name, type: parsed.type, location: parsed.location },
+            visionContext || undefined
+          )
+          researchContext = research.combined
+          researchMeta    = { urlScraped: research.urlScraped, tavilyUsed: research.tavilyUsed }
 
-    return Response.json({ error: userMessage }, { status: 500 })
-  }
+          if (research.designSystem) {
+            designSystemData = {
+              colors:    research.designSystem.colors,
+              fonts:     research.designSystem.fonts,
+              framework: research.designSystem.framework,
+            }
+            send("design_system", {
+              colors:    research.designSystem.colors,
+              fonts:     research.designSystem.fonts,
+              framework: research.designSystem.framework,
+            })
+          }
+        } catch {
+          // Research is best-effort — never block generation
+        }
+
+        // Step 5: Web research complete
+        send("progress", { msg: "Running web research…", pct: 42 })
+
+        // Step 6: Generate site
+        send("progress", { msg: "Generating with 14 techniques…", pct: 55 })
+        const result = await generateWithRetry({
+          business: {
+            name:        parsed.name,
+            type:        parsed.type,
+            description: parsed.description,
+            location:    parsed.location,
+            phone:       parsed.phone    || null,
+            website:     parsed.website  || null,
+          },
+          brandVoice:      {},
+          brandColor:      parsed.brandColor,
+          services:        parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
+          tagline:         parsed.tagline || undefined,
+          reviews:         [],
+          researchContext: researchContext || undefined,
+        })
+
+        // Step 7: Done
+        send("progress", { msg: "Finalizing…", pct: 95 })
+        send("complete", {
+          html:         result.html,
+          title:        result.title,
+          slug:         result.slug,
+          qualityScore: result.qualityScore,
+          iterations:   result.iterations,
+          research:     {
+            ...researchMeta,
+            designSystem: designSystemData,
+          },
+          meta: {
+            qualityBaseline: getQualityBaseline(),
+            totalGenerated:  getGenerationCount(),
+          },
+          parsed,
+        })
+      } catch (err) {
+        console.error("[admin/generate-site]", err)
+        const msg   = err instanceof Error ? err.message : String(err)
+        const lower = msg.toLowerCase()
+
+        let userMessage: string
+        if (lower.includes("rate") || lower.includes("429")) {
+          userMessage = "Rate limit reached. Please wait 30 seconds and try again."
+        } else if (lower.includes("401") || lower.includes("api key")) {
+          userMessage = "AI provider not configured. Set ANTHROPIC_API_KEY in Vercel environment variables."
+        } else if (lower.includes("no html") || lower.includes("output limit")) {
+          userMessage = "The AI couldn't fit the full site in one response. Try again — it usually works on the second attempt."
+        } else if (lower.includes("timeout") || lower.includes("timed out")) {
+          userMessage = "Generation timed out. Please try again."
+        } else {
+          userMessage = `Generation failed: ${msg.slice(0, 200)}`
+        }
+
+        send("error", { message: userMessage })
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type":     "text/event-stream",
+      "Cache-Control":    "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+      "Connection":       "keep-alive",
+    },
+  })
 }
 
 // ── GET: return quality stats ─────────────────────────────────────────────────

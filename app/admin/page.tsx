@@ -1461,85 +1461,186 @@ function SitesPanel({ password }: { password: string }) {
   const [generating, setGenerating]     = useState(false)
   const [genError, setGenError]         = useState("")
   const [progress, setProgress]         = useState(0)
+  const [progressMsg, setProgressMsg]   = useState("")
   const [prompt, setPrompt]             = useState("")
+  const [imageRefUrl, setImageRefUrl]   = useState("")
   const [questions, setQuestions]       = useState<string[]>([])
   const [chatHistory, setChatHistory]   = useState<Array<{ role: "user" | "ai"; text: string }>>([])
+  const [publishing, setPublishing]     = useState(false)
   const promptRef                        = useRef<HTMLTextAreaElement>(null)
 
-  const STEPS = [
-    { pct: 5,  msg: "Parsing your description…" },
-    { pct: 14, msg: "Researching the business online…" },
-    { pct: 26, msg: "Scraping existing site (if linked)…" },
-    { pct: 38, msg: "Designing hero & WebGL shader…" },
-    { pct: 52, msg: "Building 9-section layout…" },
-    { pct: 66, msg: "Writing real marketing copy…" },
-    { pct: 78, msg: "Applying GSAP + text animations…" },
-    { pct: 88, msg: "Running quality evaluation…" },
-    { pct: 95, msg: "Applying improvement pass…" },
-  ]
+  // Detect if the user is issuing an edit command on an existing preview
+  const EDIT_TRIGGERS = /^(change|make|update|fix|remove|add|replace|edit|modify|darker|lighter|bigger|smaller|shift|swap|convert|turn|color|font|size|hide|show|move|delete|rewrite|redo|adjust)/i
+
+  async function editSection(instruction: string) {
+    if (!preview) return
+    setGenerating(true); setGenError(""); setProgressMsg("Applying edit…")
+    setChatHistory(prev => [...prev, { role: "user", text: instruction }])
+    try {
+      const res = await fetch("/api/admin/edit-site", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html: preview.html,
+          instruction,
+          history: chatHistory.map(m => `${m.role === "user" ? "User" : "AI"}: ${m.text}`).join("\n").slice(0, 2000),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "Edit failed")
+      setPreview(prev => prev ? { ...prev, html: data.html } : null)
+      setChatHistory(prev => [...prev, { role: "ai", text: `✓ Applied: ${data.sectionEdited !== "global-css" ? `patched the ${data.sectionEdited} section` : "updated global CSS"}. Preview refreshed.` }])
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : "Edit failed")
+      setChatHistory(prev => [...prev, { role: "ai", text: "Edit failed — please try again with more detail." }])
+    } finally {
+      setGenerating(false); setProgressMsg("")
+    }
+  }
+
+  async function publishSite() {
+    if (!preview) return
+    setPublishing(true)
+    setChatHistory(prev => [...prev, { role: "ai", text: "Publishing to Vercel…" }])
+    try {
+      const res = await fetch("/api/admin/publish-site", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ html: preview.html, slug: preview.slug, title: preview.title }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "Publish failed")
+      setChatHistory(prev => [...prev, { role: "ai", text: `✓ Published! Live at: ${data.url}` }])
+    } catch (e) {
+      setChatHistory(prev => [...prev, { role: "ai", text: `Publish failed: ${e instanceof Error ? e.message : "Unknown error"}` }])
+    } finally {
+      setPublishing(false)
+    }
+  }
 
   async function generate(userPrompt: string) {
     if (!userPrompt.trim()) return
-    setGenerating(true); setGenError(""); setProgress(0); setQuestions([])
-    setChatHistory(prev => [...prev, { role: "user", text: userPrompt }])
-    let step = 0
-    const tick = setInterval(() => {
-      if (step < STEPS.length) { setProgress(STEPS[step].pct); step++ }
-    }, 9000)
-    try {
-      // Pass full chat history so the AI never asks repeat questions
-      const historyText = chatHistory
-        .map(m => `${m.role === "user" ? "User" : "AI"}: ${m.text}`)
-        .join("\n")
-        .slice(0, 3000)
 
+    // Route edit commands to section editor when a preview exists
+    if (preview && EDIT_TRIGGERS.test(userPrompt.trim())) {
+      return editSection(userPrompt.trim())
+    }
+
+    setGenerating(true); setGenError(""); setProgress(0); setProgressMsg(""); setQuestions([])
+    setChatHistory(prev => [...prev, { role: "user", text: userPrompt }])
+
+    const historyText = chatHistory
+      .map(m => `${m.role === "user" ? "User" : "AI"}: ${m.text}`)
+      .join("\n")
+      .slice(0, 3000)
+
+    try {
       const res = await fetch("/api/admin/generate-site", {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userPrompt, history: historyText }),
+        body: JSON.stringify({
+          prompt: userPrompt,
+          history: historyText,
+          imageUrl: imageRefUrl.trim() || undefined,
+        }),
       })
-      clearInterval(tick); setProgress(100)
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? "Generation failed")
 
-      if (data.needsMoreInfo) {
-        setQuestions(data.questions)
-        setChatHistory(prev => [...prev, { role: "ai", text: data.questions.join("\n") }])
-        setPrompt("")
-      } else {
-        const score     = data.qualityScore ? ` · Quality: ${data.qualityScore.toFixed(1)}/10` : ""
-        const iters     = data.iterations > 1 ? ` · ${data.iterations} passes` : ""
-        const researched = [
-          data.research?.urlScraped  && "scraped existing site",
-          data.research?.tavilyUsed  && "live web research",
-        ].filter(Boolean).join(" + ")
-        const researchNote = researched ? ` · Used ${researched}` : ""
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({ error: "Generation failed" }))
+        throw new Error(data.error ?? "Generation failed")
+      }
 
-        setChatHistory(prev => [...prev, {
-          role: "ai",
-          text: `✓ "${data.title}" built${score}${iters}${researchNote}\n\nPreview loaded below. Download or publish when ready.`,
-        }])
-        setPreview({
-          id: data.savedId ?? "preview",
-          slug: data.slug,
-          title: data.title,
-          html: data.html,
-          published: false,
-          createdAt: new Date().toISOString(),
-          business: { name: data.parsed?.name ?? "Site", type: data.parsed?.type ?? "Business", user: { email: "admin" } },
-        })
-        setPrompt("")
-        await load()
+      // Parse SSE stream
+      const reader  = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer    = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split("\n\n")
+        buffer = parts.pop() ?? ""
+
+        for (const part of parts) {
+          let eventType = "message"
+          let dataStr   = ""
+          for (const line of part.split("\n")) {
+            if (line.startsWith("event: ")) eventType = line.slice(7).trim()
+            else if (line.startsWith("data: ")) dataStr = line.slice(6)
+          }
+          if (!dataStr) continue
+
+          let data: Record<string, unknown>
+          try { data = JSON.parse(dataStr) } catch { continue }
+
+          switch (eventType) {
+            case "progress":
+              setProgress(data.pct as number)
+              setProgressMsg(data.msg as string)
+              break
+
+            case "design_system": {
+              const colors = (data.colors as string[]).slice(0, 4).join(", ")
+              const fonts  = (data.fonts  as string[]).slice(0, 2).join(", ")
+              setChatHistory(prev => [...prev, {
+                role: "ai",
+                text: `🎨 Design system extracted — Colors: ${colors || "detected"} · Fonts: ${fonts || "detected"} · CSS: ${data.framework}`,
+              }])
+              break
+            }
+
+            case "clarify":
+              setQuestions(data.questions as string[])
+              setChatHistory(prev => [...prev, { role: "ai", text: (data.questions as string[]).join("\n") }])
+              setPrompt("")
+              break
+
+            case "complete": {
+              const score  = data.qualityScore ? ` · Quality: ${(data.qualityScore as number).toFixed(1)}/10` : ""
+              const iters  = (data.iterations as number) > 1 ? ` · ${data.iterations} passes` : ""
+              const r      = data.research as { urlScraped: boolean; tavilyUsed: boolean; hasDesignSystem: boolean } | undefined
+              const used   = [r?.urlScraped && "scraped site code", r?.tavilyUsed && "web research", r?.hasDesignSystem && "design system cloned"].filter(Boolean).join(" + ")
+
+              setChatHistory(prev => [...prev, {
+                role: "ai",
+                text: `✓ "${data.title}" built${score}${iters}${used ? ` · ${used}` : ""}\n\nPreview loaded. Type an edit command (e.g. "make the hero darker") to refine, or hit Publish.`,
+              }])
+              setPreview({
+                id:        "preview",
+                slug:      data.slug as string,
+                title:     data.title as string,
+                html:      data.html as string,
+                published: false,
+                createdAt: new Date().toISOString(),
+                business:  {
+                  name: (data.parsed as Record<string, string>)?.name ?? "Site",
+                  type: (data.parsed as Record<string, string>)?.type ?? "Business",
+                  user: { email: "admin" },
+                },
+              })
+              setProgress(100)
+              setPrompt("")
+              setImageRefUrl("")
+              load()
+              break
+            }
+
+            case "error":
+              setGenError(data.message as string)
+              setChatHistory(prev => [...prev, { role: "ai", text: "Something went wrong. Please try again." }])
+              break
+          }
+        }
       }
     } catch (e) {
       setGenError(e instanceof Error ? e.message : "Failed")
       setChatHistory(prev => [...prev, { role: "ai", text: "Something went wrong. Please try again." }])
     } finally {
-      clearInterval(tick); setGenerating(false); setTimeout(() => setProgress(0), 1400)
+      setGenerating(false)
+      setTimeout(() => { setProgress(0); setProgressMsg("") }, 1400)
     }
   }
-
-  const progressMsg = STEPS.slice().reverse().find(s => progress >= s.pct)?.msg ?? (progress >= 100 ? "Done!" : "")
 
   const load = useCallback(async () => {
     try {
@@ -1732,7 +1833,18 @@ function SitesPanel({ password }: { password: string }) {
                 {generating ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin block" /> : "→"}
               </button>
             </div>
-            <p className="text-[10px] text-gray-700 mt-1.5 px-1">Press Enter to send · Paste a URL to scrape the existing site · ~90–120 seconds to generate</p>
+            <div className="flex items-center gap-2 mt-2 px-1">
+              <input
+                type="url"
+                value={imageRefUrl}
+                onChange={e => setImageRefUrl(e.target.value)}
+                placeholder="Screenshot or site URL to copy style from (optional)"
+                disabled={generating}
+                className="flex-1 px-2.5 py-1.5 bg-gray-800/60 border border-gray-700/50 rounded-lg text-[11px] text-gray-400 placeholder-gray-700 focus:outline-none focus:border-indigo-600 disabled:opacity-40 transition-all"
+              />
+              {imageRefUrl && <span className="text-[10px] text-indigo-400 shrink-0">Vision ✓</span>}
+            </div>
+            <p className="text-[10px] text-gray-700 mt-1 px-1">Enter to send · Edit commands patch just the target section · ~90–120 seconds to generate</p>
           </div>
         </div>
       )}
@@ -1816,6 +1928,11 @@ function SitesPanel({ password }: { password: string }) {
                     onClick={() => { const blob = new Blob([preview.html], { type: "text/html" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${preview.slug}.html`; a.click() }}
                     className="text-[10px] px-2.5 py-1 border border-gray-700 hover:border-emerald-700 text-gray-500 hover:text-emerald-400 rounded-lg transition-colors"
                   >Download</button>
+                  <button
+                    onClick={publishSite}
+                    disabled={publishing}
+                    className="text-[10px] px-2.5 py-1 border border-emerald-800/60 bg-emerald-950/30 text-emerald-400 hover:bg-emerald-950/60 rounded-lg transition-colors disabled:opacity-50 font-semibold"
+                  >{publishing ? "Publishing…" : "Publish →"}</button>
                 </div>
               </div>
               <iframe srcDoc={preview.html} className="flex-1 w-full border-0" title="Site Preview" sandbox="allow-scripts" />
