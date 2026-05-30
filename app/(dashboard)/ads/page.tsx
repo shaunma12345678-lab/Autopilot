@@ -147,7 +147,7 @@ export default function AdsPage() {
             </div>
           }
         >
-          {result && <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">{JSON.stringify(result, null, 2)}</pre>}
+          {result != null && <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">{JSON.stringify(result as Record<string, unknown>, null, 2)}</pre>}
         </OutputPanel>
       </div>
     </div>
