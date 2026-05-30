@@ -477,29 +477,35 @@ document.querySelectorAll('[data-target]').forEach(el=>_cio.observe(el));
 
 ━━━ TECHNIQUE 9 — PAGE LOAD SEQUENCE ━━━
 Add as FIRST child of <body>:
-<div id="page-loader" style="position:fixed;inset:0;background:var(--bg);z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem">
-  <div id="loader-num" style="font-size:clamp(3rem,8vw,6rem);font-weight:800;color:var(--brand);letter-spacing:-.02em;font-variant-numeric:tabular-nums">0</div>
+<div id="page-loader" style="position:fixed;inset:0;background:var(--bg);z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem;transition:transform 1.1s cubic-bezier(0.77,0,0.18,1),opacity 0.4s ease">
+  <div id="loader-num" style="font-size:clamp(3rem,8vw,6rem);font-weight:800;color:var(--brand);letter-spacing:-.02em;font-variant-numeric:tabular-nums">0%</div>
   <div style="width:220px;height:2px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden">
     <div id="loader-bar" style="height:100%;width:0%;background:var(--brand);transition:width .08s linear"></div>
   </div>
-  <div style="font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--text-muted)">Loading Experience</div>
+  <div style="font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--text-muted)">Initialising</div>
 </div>
 
-Before </body>:
+IMPORTANT — Use this EXACT loader JS (pure CSS exit, no GSAP dependency):
 (function(){
+  var loader=document.getElementById('page-loader');
+  if(!loader){return;}
   document.documentElement.style.overflow='hidden';
-  let p=0;
-  const num=document.getElementById('loader-num'),bar=document.getElementById('loader-bar'),loader=document.getElementById('page-loader');
-  const iv=setInterval(()=>{
+  var num=document.getElementById('loader-num'),bar=document.getElementById('loader-bar'),p=0;
+  function exitLoader(){
+    loader.style.transform='translateY(-100%)';
+    setTimeout(function(){
+      if(loader.parentNode) loader.parentNode.removeChild(loader);
+      document.documentElement.style.overflow='';
+    },1200);
+  }
+  var iv=setInterval(function(){
     p+=Math.random()*14+5; if(p>100)p=100;
     if(num)num.textContent=Math.floor(p)+'%';
     if(bar)bar.style.width=p+'%';
-    if(p>=100){clearInterval(iv);setTimeout(()=>{
-      if(typeof gsap!=='undefined'){
-        gsap.to(loader,{yPercent:-100,duration:1.1,ease:'power4.inOut',onComplete:()=>{loader.remove();document.documentElement.style.overflow='';}});
-      } else { loader.remove(); document.documentElement.style.overflow=''; }
-    },350);}
+    if(p>=100){clearInterval(iv);setTimeout(exitLoader,250);}
   },55);
+  // Hard fallback: always exits after 5 seconds regardless of JS state
+  setTimeout(function(){clearInterval(iv);exitLoader();},5000);
 })();
 
 ━━━ TECHNIQUE 10 — MAGNETIC BUTTONS ━━━
@@ -1133,8 +1139,9 @@ SITE_HTML:
 </html>`
 
   const hasAnthropic = !!(process.env.ANTHROPIC_API_KEY)
-  // Groq llama-3.3-70b-versatile supports up to 32,768 output tokens — use it fully
-  const maxTokens = hasAnthropic ? 12000 : 32000
+  // Groq free tier: 6K TPM. Keep output at 8K so total request stays within limits.
+  // 8K output tokens ≈ 32KB of HTML — plenty for a complete site with all 15 techniques.
+  const maxTokens = hasAnthropic ? 12000 : 8000
 
   const raw   = await runAgent(
     buildSystemPrompt(_qualityBaseline, _totalGenerated, directives, shaderGlsl),

@@ -88,7 +88,8 @@ async function generateWithRetry(
       if (lower.includes("401") || lower.includes("api key")) throw lastError
 
       if (attempt < maxAttempts) {
-        const delay = lower.includes("rate") || lower.includes("429") ? 12000 : 4000
+        // runAgent already retries rate limits internally; this handles other transient errors
+        const delay = lower.includes("rate") || lower.includes("429") ? 5000 : 4000
         await new Promise(r => setTimeout(r, delay))
       }
     }

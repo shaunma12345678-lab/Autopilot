@@ -91,11 +91,8 @@ export async function runAgent(
     }
 
     if (useThinking) {
-      // Extended thinking: model works through complex problems step-by-step
-      // Requires min 1024 max_tokens and budget < max_tokens
       const budget = Math.min(thinkingBudget, maxTokens - 1024)
       params.thinking = { type: "enabled", budget_tokens: budget }
-      // Extended thinking requires temperature=1 (or omitted — Anthropic default)
     }
 
     const response = await client.messages.create(params)
@@ -106,16 +103,38 @@ export async function runAgent(
       .join("")
   } else {
     const client = getGroqClient()
-    const response = await client.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: options.maxTokens ?? 8192,
-      response_format: options.jsonMode ? { type: "json_object" } : undefined,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: finalUserPrompt },
-      ],
-    })
-    text = response.choices[0]?.message?.content ?? ""
+
+    // Groq rate-limit retry: up to 4 attempts with escalating backoff
+    let lastGroqError: Error = new Error("Groq request failed")
+    let groqResponse: Awaited<ReturnType<typeof client.chat.completions.create>> | null = null
+
+    for (let attempt = 0; attempt <= 3; attempt++) {
+      try {
+        groqResponse = await client.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          max_tokens: options.maxTokens ?? 8192,
+          response_format: options.jsonMode ? { type: "json_object" } : undefined,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: finalUserPrompt },
+          ],
+        })
+        break
+      } catch (err: unknown) {
+        lastGroqError = err instanceof Error ? err : new Error(String(err))
+        const msg = lastGroqError.message.toLowerCase()
+        const isRateLimit = msg.includes("429") || msg.includes("rate limit") || msg.includes("rate_limit")
+
+        if (!isRateLimit || attempt === 3) throw lastGroqError
+
+        // Groq rate limit window resets every 60s — wait long enough on each retry
+        const waitMs = attempt === 0 ? 15000 : attempt === 1 ? 30000 : 60000
+        await new Promise(r => setTimeout(r, waitMs))
+      }
+    }
+
+    if (!groqResponse) throw lastGroqError
+    text = groqResponse.choices[0]?.message?.content ?? ""
   }
 
   if (options.jsonMode) {
