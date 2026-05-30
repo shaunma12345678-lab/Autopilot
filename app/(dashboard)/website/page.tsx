@@ -699,7 +699,7 @@ export default function WebsitePage() {
                     className="w-full border-0"
                     style={{ height: "100%", minHeight: "700px" }}
                     title="Website Preview"
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-same-origin allow-popups"
                   />
                 </div>
               </div>

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { generateWebsite, getQualityBaseline, getGenerationCount } from "@/lib/agents/website-agent"
+import { generateWebsite, getQualityBaseline, getGenerationCount, parseUserCommand } from "@/lib/agents/website-agent"
 import { buildResearchContext, analyzeScreenshot } from "@/lib/agents/site-researcher"
 import { runAgent } from "@/lib/claude"
 
@@ -183,11 +183,12 @@ export async function POST(request: NextRequest) {
           // Research is best-effort — never block generation
         }
 
-        // Step 5: Web research complete
-        send("progress", { msg: "Running web research…", pct: 42 })
+        // Step 5: Parse style directives from the user's full prompt
+        send("progress", { msg: "Parsing style directives…", pct: 44 })
+        const directives = await parseUserCommand(prompt).catch(() => null)
 
         // Step 6: Generate site
-        send("progress", { msg: "Generating with 14 techniques…", pct: 55 })
+        send("progress", { msg: "Generating with 15 techniques…", pct: 55 })
         const result = await generateWithRetry({
           business: {
             name:        parsed.name,
@@ -203,6 +204,7 @@ export async function POST(request: NextRequest) {
           tagline:         parsed.tagline || undefined,
           reviews:         [],
           researchContext: researchContext || undefined,
+          directives:      directives ?? undefined,
         })
 
         // Step 7: Done
@@ -230,7 +232,7 @@ export async function POST(request: NextRequest) {
 
         let userMessage: string
         if (lower.includes("rate") || lower.includes("429")) {
-          userMessage = "Rate limit reached. Please wait 30 seconds and try again."
+          userMessage = "AI rate limit reached after retrying. Please wait 60 seconds and try again."
         } else if (lower.includes("401") || lower.includes("api key")) {
           userMessage = "AI provider not configured. Set ANTHROPIC_API_KEY in Vercel environment variables."
         } else if (lower.includes("no html") || lower.includes("output limit")) {

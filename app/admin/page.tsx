@@ -1935,7 +1935,7 @@ function SitesPanel({ password }: { password: string }) {
                   >{publishing ? "Publishing…" : "Publish →"}</button>
                 </div>
               </div>
-              <iframe srcDoc={preview.html} className="flex-1 w-full border-0" title="Site Preview" sandbox="allow-scripts" />
+              <iframe srcDoc={preview.html} className="flex-1 w-full border-0" title="Site Preview" sandbox="allow-scripts allow-same-origin allow-popups" />
             </div>
           )}
         </div>

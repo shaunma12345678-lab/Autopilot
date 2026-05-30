@@ -196,7 +196,12 @@ function buildSystemPrompt(
 
 ${mandate}
 
-${constraintBlock}━━━ OUTPUT FORMAT ━━━
+${constraintBlock}━━━ CODE EFFICIENCY (critical — you have a limited output budget) ━━━
+Write CONCISE production code. No comments. No blank lines between CSS rules.
+Minimise whitespace inside JS functions. Every token must add value.
+A complete 9-section site with all 15 techniques MUST fit in a single response.
+
+━━━ OUTPUT FORMAT ━━━
 Output EXACTLY this — no JSON, no markdown fences, no explanation before or after:
 
 SITE_TITLE: [compelling SEO title]
