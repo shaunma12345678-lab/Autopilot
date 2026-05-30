@@ -5,11 +5,12 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 
 async function checkTable(name: string, results: string[]) {
   const sb = getAdminClient()
-  const { error } = await sb.from(name).select("*", { head: true, count: "exact" }).limit(0)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (sb as any).from(name).select("*", { head: true, count: "exact" }).limit(0)
   if (!error || !error.message?.includes("does not exist")) {
     results.push(`${name}: OK`)
   } else {
-    results.push(`${name}: MISSING — run scripts/migrate-new-models.sql in Supabase SQL editor`)
+    results.push(`${name}: MISSING`)
   }
 }
 

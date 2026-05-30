@@ -98,7 +98,7 @@ export async function PATCH(request: NextRequest) {
       where: { id: siteId },
       include: { business: { select: { userId: true } } },
     })
-    if (!site || site.business.userId !== user.id) {
+    if (!site || !site.business || site.business.userId !== user.id) {
       return Response.json({ error: "Not found" }, { status: 404 })
     }
 

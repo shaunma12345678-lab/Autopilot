@@ -88,7 +88,7 @@ model Business {
   reviews        Review[]
   leads          Lead[]
   reports        Report[]
-  site           Site?
+  sites          Site[]
   conversations  Conversation[]
   agentMemory    AgentMemory[]
   fewShotExamples FewShotExample[]
@@ -98,10 +98,10 @@ model Business {
 }
 
 model Site {
-  id         String   @id @default(cuid())
-  businessId String   @unique
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  slug       String   @unique
+  id         String    @id @default(cuid())
+  businessId String?
+  business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  slug       String    @unique
   title      String
   html       String
   published  Boolean  @default(false)
