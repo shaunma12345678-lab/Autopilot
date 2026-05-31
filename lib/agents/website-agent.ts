@@ -1,5 +1,12 @@
 import { runAgent } from "@/lib/claude"
 import { scoreGeneratedSite } from "@/lib/agents/site-researcher"
+import {
+  T, selectTechniques, planSections, buildTechniqueBlock,
+  type SectionType, type TechniqueKey,
+} from "@/lib/agents/technique-library"
+
+// silence unused import warning — T is referenced via buildTechniqueBlock
+void T
 
 function makeSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "site"
@@ -11,13 +18,11 @@ let _qualityBaseline = 8.0
 let _totalGenerated  = 0
 
 export function getQualityBaseline(): number { return _qualityBaseline }
-export function getGenerationCount(): number  { return _totalGenerated }
+export function getGenerationCount():  number { return _totalGenerated }
 
 export function raiseQualityBaseline(score: number): void {
   _totalGenerated++
-  if (score > _qualityBaseline) {
-    _qualityBaseline = Math.min(9.9, _qualityBaseline + 0.15)
-  }
+  if (score > _qualityBaseline) _qualityBaseline = Math.min(9.9, _qualityBaseline + 0.15)
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -39,19 +44,10 @@ export interface SiteDirectives {
   targetAudience:      string | null
 }
 
-export interface CROIssue {
-  severity: "critical" | "high" | "medium"
-  issue:    string
-  fix:      string
-}
+export interface CROIssue { severity: "critical" | "high" | "medium"; issue: string; fix: string }
+export interface CROResult { issues: CROIssue[]; fixedHtml: string; score: number }
 
-export interface CROResult {
-  issues:   CROIssue[]
-  fixedHtml: string
-  score:    number
-}
-
-// ── #1 — 15-field command parser ──────────────────────────────────────────────
+// ── #1 Command parser ─────────────────────────────────────────────────────────
 
 export async function parseUserCommand(userMessage: string): Promise<SiteDirectives> {
   const defaults: SiteDirectives = {
@@ -60,48 +56,14 @@ export async function parseUserCommand(userMessage: string): Promise<SiteDirecti
     tone: null, heroType: null, mustInclude: [], mustExclude: [],
     scrollBehavior: null, animationDirectives: [], shaderEffect: null, targetAudience: null,
   }
-
   if (!userMessage?.trim()) return defaults
-
   try {
     const raw = await runAgent(
-      `You extract structured website design directives from user messages.
-Return ONLY valid JSON matching the schema exactly — no explanation, no markdown fences.
-If a field is not mentioned, return null or [].`,
-      `User message: "${userMessage}"
-
-Return this exact JSON:
-{
-  "darkMode": true/false/null,
-  "animationsEnabled": true/false/null,
-  "fontStyle": "serif"|"sans"|"mono"|"display"|null,
-  "layout": "centered"|"wide"|"asymmetric"|"split"|null,
-  "sections": ["hero","pricing","faq","testimonials","contact",...],
-  "colorScheme": { "primary": "#hex or null", "bg": "#hex or null", "text": "#hex or null" },
-  "tone": "luxury"|"corporate"|"playful"|"minimal"|"bold"|"professional"|null,
-  "heroType": "video"|"3d"|"image"|"text-only"|"split"|null,
-  "mustInclude": ["things user explicitly said must be included"],
-  "mustExclude": ["things user said NOT to include, e.g. no cursor effects"],
-  "scrollBehavior": "smooth"|"scrub"|"snap"|null,
-  "animationDirectives": ["specific animation descriptions like hero text slides up on load"],
-  "shaderEffect": "aurora"|"water"|"plasma"|"galaxy"|"smoke"|"fire"|"crystal"|null,
-  "targetAudience": "string or null"
-}
-
-Mapping examples:
-- "make it dark" → darkMode: true
-- "light theme, white background" → darkMode: false
-- "no animations" → animationsEnabled: false
-- "serif fonts, Playfair Display" → fontStyle: "serif"
-- "I want pricing, faq, and contact sections" → sections: ["hero","pricing","faq","contact"]
-- "no cursor effects" → mustExclude: ["cursor effects"]
-- "water shader" → shaderEffect: "water"
-- "hero slides in" → animationDirectives: ["hero content slides up 0.8s power4.out on load"]
-- "luxury brand" → tone: "luxury"
-- "target: restaurant owners" → targetAudience: "restaurant owners"`,
-      { model: "haiku", maxTokens: 600, jsonMode: true }
+      `Extract website design directives from user messages. Return ONLY valid JSON.`,
+      `User: "${userMessage}"
+Return: {"darkMode":bool/null,"animationsEnabled":bool/null,"fontStyle":"serif"|"sans"|"mono"|"display"|null,"layout":"centered"|"wide"|"asymmetric"|"split"|null,"sections":[],"colorScheme":{"primary":null,"bg":null,"text":null},"tone":"luxury"|"corporate"|"playful"|"minimal"|"bold"|"professional"|null,"heroType":"video"|"3d"|"image"|"text-only"|"split"|null,"mustInclude":[],"mustExclude":[],"scrollBehavior":"smooth"|"scrub"|"snap"|null,"animationDirectives":[],"shaderEffect":"aurora"|"water"|"plasma"|"galaxy"|"fire"|null,"targetAudience":null}`,
+      { model: "haiku", maxTokens: 500, jsonMode: true }
     ) as Record<string, unknown>
-
     const cs = (raw.colorScheme ?? {}) as Record<string, unknown>
     return {
       darkMode:          raw.darkMode === true ? true : raw.darkMode === false ? false : null,
@@ -123,790 +85,445 @@ Mapping examples:
       shaderEffect:      typeof raw.shaderEffect === "string" ? raw.shaderEffect : null,
       targetAudience:    typeof raw.targetAudience === "string" ? raw.targetAudience : null,
     }
-  } catch {
-    return defaults
-  }
+  } catch { return defaults }
 }
 
-// ── #3 — Constraint block: injects directives as top-priority system rules ────
+// ── #3 Constraint block ───────────────────────────────────────────────────────
 
 function buildConstraintBlock(d: SiteDirectives, shaderGlsl?: string): string {
   const rules: string[] = []
-
-  if (d.darkMode === true)  rules.push("Background MUST be dark (#070710 or similar) — NO light sections anywhere")
-  if (d.darkMode === false) rules.push("LIGHT THEME: white/near-white background (#fafafa or #ffffff), dark text (#0f172a). Override ALL dark CSS defaults.")
-  if (d.animationsEnabled === false) rules.push("NO JavaScript animations — static HTML/CSS only. Remove all GSAP, Three.js, WebGL, cursor JS.")
-  if (d.fontStyle === "serif")   rules.push("Font: premium serif Google Font (Playfair Display, DM Serif Display, or Lora). Apply to all headings.")
-  if (d.fontStyle === "sans")    rules.push("Font: clean sans-serif (Inter, Plus Jakarta Sans, or Geist) for all text.")
-  if (d.fontStyle === "mono")    rules.push("Font: monospace (JetBrains Mono or Fira Code) for headings — technical/developer aesthetic.")
-  if (d.fontStyle === "display") rules.push("Font: bold display/decorative (Space Grotesk, Syne, or Bebas Neue) for headings.")
-  if (d.layout === "wide")       rules.push("Layout: full-bleed, edge-to-edge. No max-width constraint on sections.")
-  if (d.layout === "centered")   rules.push("Layout: centered content, max-width 960px, generous whitespace.")
-  if (d.layout === "asymmetric") rules.push("Layout: asymmetric grid — alternate content alignment per section, overlapping elements.")
-  if (d.layout === "split")      rules.push("Layout: two-column split for hero and key sections (text left, visual right).")
-  if (d.sections.length > 0)    rules.push(`SECTIONS: Include EXACTLY these in this order — no others: ${d.sections.join(", ")}`)
-  if (d.colorScheme.primary)    rules.push(`Override --brand CSS variable with: ${d.colorScheme.primary}`)
-  if (d.colorScheme.bg)         rules.push(`Override --bg CSS variable with: ${d.colorScheme.bg}`)
-  if (d.colorScheme.text)       rules.push(`Override --text CSS variable with: ${d.colorScheme.text}`)
-  if (d.tone === "luxury")      rules.push("Tone: ultra-luxury. Generous whitespace, refined copy (no exclamation marks), subtle gold accent touches.")
-  if (d.tone === "playful")     rules.push("Tone: playful and energetic. Rounded shapes, bright accent pops, friendly copy.")
-  if (d.tone === "minimal")     rules.push("Tone: radical minimalism. Maximum whitespace, single accent color, sparse copy, no decoration.")
-  if (d.tone === "corporate")   rules.push("Tone: professional corporate. Structured layout, trust signals prominent, conservative vocabulary.")
-  if (d.tone === "bold")        rules.push("Tone: bold and impactful. Large type, high contrast, strong CTAs, confident copy.")
-  if (d.heroType === "text-only") rules.push("Hero: typography-only. No WebGL canvas. Large kinetic text with GSAP animation only.")
-  if (d.heroType === "split")   rules.push("Hero: two-column split. Text + CTA on left, 3D canvas or large visual on right.")
-  if (d.heroType === "image")   rules.push("Hero: image-based. Full-bleed CSS gradient background (no WebGL). Overlay text.")
+  if (d.darkMode === true)  rules.push("Background MUST be dark (#070710) — NO light sections")
+  if (d.darkMode === false) rules.push("LIGHT THEME: white background, dark text. Override all dark defaults.")
+  if (d.animationsEnabled === false) rules.push("NO JS animations — static HTML/CSS only. Remove GSAP, WebGL, cursor JS.")
+  if (d.fontStyle === "serif")   rules.push("Use Cormorant Garamond or Playfair Display for headings.")
+  if (d.fontStyle === "sans")    rules.push("Use Inter or Plus Jakarta Sans for all text.")
+  if (d.fontStyle === "mono")    rules.push("Use JetBrains Mono for headings — technical aesthetic.")
+  if (d.fontStyle === "display") rules.push("Use Bebas Neue or Syne for headings.")
+  if (d.sections.length > 0)    rules.push(`SECTIONS: exactly these in order — ${d.sections.join(", ")}`)
+  if (d.colorScheme.primary)    rules.push(`Override --brand with: ${d.colorScheme.primary}`)
+  if (d.tone === "luxury")      rules.push("Tone: ultra-luxury. Generous whitespace, refined copy, no exclamation marks.")
+  if (d.tone === "playful")     rules.push("Tone: playful. Rounded shapes, bright pops, friendly copy.")
+  if (d.tone === "minimal")     rules.push("Tone: radical minimalism. Max whitespace, single accent, sparse copy.")
+  if (d.tone === "corporate")   rules.push("Tone: professional. Trust signals prominent, conservative vocabulary.")
+  if (d.heroType === "text-only") rules.push("Hero: typography only — no WebGL canvas.")
   if (d.mustInclude.length > 0) rules.push(`MUST INCLUDE: ${d.mustInclude.join("; ")}`)
   if (d.mustExclude.length > 0) rules.push(`MUST NOT INCLUDE: ${d.mustExclude.join("; ")}`)
-  if (d.scrollBehavior === "scrub") rules.push("ALL GSAP ScrollTrigger animations MUST use scrub:1 — scroll-position-driven, not time-based.")
-  if (d.targetAudience)         rules.push(`Target audience: ${d.targetAudience}. All copy speaks directly to them.`)
+  if (d.targetAudience)         rules.push(`Target audience: ${d.targetAudience}`)
   if (d.animationDirectives.length > 0) {
-    rules.push(`ANIMATION DIRECTIVES — execute exactly:\n${d.animationDirectives.map((a, i) => `   ${i + 1}. ${a}`).join("\n")}`)
+    rules.push(`ANIMATION DIRECTIVES:\n${d.animationDirectives.map((a,i)=>`  ${i+1}. ${a}`).join("\n")}`)
   }
   if (d.shaderEffect && shaderGlsl) {
-    rules.push(`CUSTOM SHADER: Replace the default rings fragment shader with this GLSL:\n\`\`\`glsl\n${shaderGlsl}\n\`\`\``)
+    rules.push(`CUSTOM SHADER: replace default rings fragment shader with:\n\`\`\`glsl\n${shaderGlsl}\n\`\`\``)
   } else if (d.shaderEffect) {
-    rules.push(`CUSTOM SHADER EFFECT: Generate a unique GLSL fragment shader for the "${d.shaderEffect}" visual effect. Replace the default rings shader. Be technically impressive.`)
+    rules.push(`CUSTOM SHADER: generate GLSL for "${d.shaderEffect}" effect — aurora/water/plasma/galaxy/fire.`)
   }
-
   if (rules.length === 0) return ""
-  return `━━━ MANDATORY USER REQUIREMENTS — OVERRIDE ALL DEFAULTS ━━━
-Honor every rule below exactly — these take absolute priority:
-${rules.map((r, i) => `${i + 1}. ${r}`).join("\n")}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-`
+  return `━━━ MANDATORY USER REQUIREMENTS ━━━\n${rules.map((r,i)=>`${i+1}. ${r}`).join("\n")}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`
 }
 
-// ── System prompt (all 15 techniques) ────────────────────────────────────────
+// ── Font pair lookup ──────────────────────────────────────────────────────────
 
-function buildSystemPrompt(
-  qualityBaseline: number,
-  generationCount: number,
-  directives?: SiteDirectives,
-  shaderGlsl?: string
+function getFontPair(businessType: string): { import: string; display: string; body: string } {
+  const t = businessType.toLowerCase()
+  if (/luxury|real estate|interior|jewelry|fashion|boutique|couture/i.test(t))
+    return { import: "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Jost:wght@300;400;500&display=swap", display: "Cormorant Garamond", body: "Jost" }
+  if (/construction|roofing|hvac|plumbing|electric|auto|security|contractor/i.test(t))
+    return { import: "https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap", display: "Bebas Neue", body: "Plus Jakarta Sans" }
+  if (/saas|software|tech|ai|startup|app|platform|dev/i.test(t))
+    return { import: "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500&display=swap", display: "Space Grotesk", body: "Inter" }
+  if (/agency|design|creative|studio|media|film|branding/i.test(t))
+    return { import: "https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500&display=swap", display: "Syne", body: "DM Sans" }
+  if (/law|legal|finance|consulting|insurance|accounting/i.test(t))
+    return { import: "https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Source+Sans+3:wght@400;600&display=swap", display: "Playfair Display", body: "Source Sans 3" }
+  if (/restaurant|cafe|food|dining|bakery|wellness|spa|yoga|fitness/i.test(t))
+    return { import: "https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500&display=swap", display: "DM Serif Display", body: "DM Sans" }
+  return { import: "https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,900&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap", display: "Fraunces", body: "Plus Jakarta Sans" }
+}
+
+// ── Section system prompt (lean — uses technique library references) ──────────
+
+function buildSectionSystemPrompt(
+  techniques: TechniqueKey[],
+  directives: SiteDirectives | undefined,
+  shaderGlsl: string | undefined,
+  brandColor: string,
+  font: { display: string; body: string },
 ): string {
-  const mandate = generationCount === 0
-    ? "Build the highest-quality website you are capable of. Target: 9+/10."
-    : `QUALITY MANDATE: Previous sites averaged ${qualityBaseline.toFixed(1)}/10. You MUST score above ${(qualityBaseline + 0.2).toFixed(1)}/10. Every generation raises the bar — there is NO ceiling.`
+  const constraints = directives ? buildConstraintBlock(directives, shaderGlsl) : ""
+  const techBlock   = buildTechniqueBlock(techniques)
 
-  const constraintBlock = directives ? buildConstraintBlock(directives, shaderGlsl) : ""
+  return `You are the world's best frontend engineer — you build single sections of award-winning websites.
 
-  return `You are the world's #1 frontend engineer. You build complete, award-winning single-file HTML websites.
+Sites to match in quality: Linear (linear.app), Framer (framer.com), Vercel (vercel.com), Igloo Inc (Awwwards SOTY 2024), Active Theory, Stripe.
 
-${mandate}
+${constraints}━━━ CSS VARIABLES IN USE ━━━
+--brand: ${brandColor}; --brand-dark: color-mix(in srgb,var(--brand) 62%,black); --brand-glow: color-mix(in srgb,var(--brand) 22%,transparent); --brand-subtle: color-mix(in srgb,var(--brand) 8%,transparent);
+--text: #f1f5f9; --text-muted: #8892a4; --bg: #070710; --bg-alt: #0c0c1a; --surface: rgba(255,255,255,.035); --border: rgba(255,255,255,.06);
+--radius: 12px; --radius-lg: 24px; --radius-pill: 999px; --shadow-brand: 0 0 60px var(--brand-glow);
+--font-display: '${font.display}', serif; --font-body: '${font.body}', sans-serif;
 
-${constraintBlock}━━━ CODE EFFICIENCY (critical — you have a limited output budget) ━━━
-Write CONCISE production code. No comments. No blank lines between CSS rules.
-Minimise whitespace inside JS functions. Every token must add value.
-A complete 9-section site with all 15 techniques MUST fit in a single response.
+━━━ TYPOGRAPHY STANDARDS ━━━
+h1: font-family:var(--font-display); font-size:clamp(4.5rem,11vw,13rem); line-height:.92; letter-spacing:-.04em; font-weight:700
+h2: font-family:var(--font-display); font-size:clamp(3rem,6.5vw,8rem); line-height:.95; letter-spacing:-.03em; font-weight:700
+h3: font-family:var(--font-display); font-size:clamp(1.5rem,2.8vw,2.5rem); line-height:1.1; letter-spacing:-.02em
+p: font-family:var(--font-body); font-size:clamp(.975rem,1.1vw,1.05rem); line-height:1.75; color:var(--text-muted)
+.text-gradient: background:linear-gradient(135deg,var(--brand),color-mix(in srgb,var(--brand) 55%,#fff)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text
+.text-outline: -webkit-text-stroke:1.5px currentColor; color:transparent; opacity:.35
+.overline: font-family:var(--font-body); font-size:.6rem; letter-spacing:.3em; text-transform:uppercase; font-weight:600; color:var(--brand); display:inline-block; margin-bottom:1.2rem
+.chip: same as overline but with border:1px solid var(--brand) and background:var(--brand-subtle) and padding:.3rem 1rem
 
-━━━ OUTPUT FORMAT ━━━
-Output EXACTLY this — no JSON, no markdown fences, no explanation before or after:
-
-SITE_TITLE: [compelling SEO title]
-SITE_SLUG: [url-friendly-slug]
-SITE_HTML:
-<!DOCTYPE html>
-[complete website]
-</html>
-
-━━━ CDN LIBRARIES (only these) ━━━
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
-Google Fonts: @import in <style> — TWO fonts always: one display/heading, one body. Use the premium pair for the industry.
-
-━━━ PREMIUM FONT PAIRING — pick the exact pair for the business type ━━━
-Luxury · Real Estate · Interior Design · Jewelry:
-  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Jost:wght@300;400;500&display=swap');
-  --font-display: 'Cormorant Garamond', serif;  --font-body: 'Jost', sans-serif;
-
-Bold · Construction · Sports · Auto · Security:
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap');
-  --font-display: 'Bebas Neue', sans-serif;  --font-body: 'Plus Jakarta Sans', sans-serif;
-
-Tech · SaaS · AI · Software · Startup:
-  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500&display=swap');
-  --font-display: 'Space Grotesk', sans-serif;  --font-body: 'Inter', sans-serif;
-
-Creative · Agency · Design · Media · Film:
-  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500&display=swap');
-  --font-display: 'Syne', sans-serif;  --font-body: 'DM Sans', sans-serif;
-
-Legal · Finance · Consulting · Insurance · Medical:
-  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Source+Sans+3:wght@400;600&display=swap');
-  --font-display: 'Playfair Display', serif;  --font-body: 'Source Sans 3', sans-serif;
-
-Food · Hospitality · Restaurant · Wellness · Spa:
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500&display=swap');
-  --font-display: 'DM Serif Display', serif;  --font-body: 'DM Sans', sans-serif;
-
-Fashion · Streetwear · Music · Entertainment:
-  @import url('https://fonts.googleapis.com/css2?family=Syne+Mono&family=Plus+Jakarta+Sans:wght@400;600&display=swap');
-  --font-display: 'Syne Mono', monospace;  --font-body: 'Plus Jakarta Sans', sans-serif;
-
-Default (anything else):
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@400;700;900&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap');
-  --font-display: 'Fraunces', serif;  --font-body: 'Plus Jakarta Sans', sans-serif;
-
-━━━ CSS FOUNDATION — $10,000-level typographic standards ━━━
-:root {
-  --brand: BRAND_COLOR_PLACEHOLDER;
-  --brand-dark: color-mix(in srgb, var(--brand) 62%, black);
-  --brand-glow: color-mix(in srgb, var(--brand) 22%, transparent);
-  --brand-subtle: color-mix(in srgb, var(--brand) 8%, transparent);
-  --text: #f1f5f9; --text-muted: #8892a4;
-  --bg: #070710; --bg-alt: #0c0c1a;
-  --surface: rgba(255,255,255,0.035); --border: rgba(255,255,255,0.06);
-  --radius: 12px; --radius-lg: 24px; --radius-pill: 999px;
-  --shadow-brand: 0 0 60px var(--brand-glow);
-  --font-display: 'Fraunces', serif;
-  --font-body: 'Plus Jakarta Sans', sans-serif;
-}
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
-body { background: var(--bg); color: var(--text); overflow-x: hidden; font-family: var(--font-body); font-size: 1rem; line-height: 1.65; -webkit-font-smoothing: antialiased; }
-section { padding: clamp(7rem, 14vw, 14rem) clamp(1.5rem, 6vw, 7rem); }
-
-/* HEADLINE SCALE — Awwwards-level. Large, tight, negative-tracked. */
-h1 { font-family: var(--font-display); font-size: clamp(4.5rem, 11vw, 13rem); line-height: 0.92; letter-spacing: -0.04em; font-weight: 700; }
-h2 { font-family: var(--font-display); font-size: clamp(3rem, 6.5vw, 8rem); line-height: 0.95; letter-spacing: -0.03em; font-weight: 700; }
-h3 { font-family: var(--font-display); font-size: clamp(1.5rem, 2.8vw, 2.5rem); line-height: 1.1; letter-spacing: -0.02em; font-weight: 600; }
-p { font-family: var(--font-body); font-size: clamp(0.975rem, 1.1vw, 1.05rem); line-height: 1.75; color: var(--text-muted); }
-a { color: inherit; text-decoration: none; }
-img { max-width: 100%; }
-
-/* PREMIUM TEXT EFFECTS — use these on hero headline words */
-.text-gradient {
-  background: linear-gradient(135deg, var(--brand) 0%, color-mix(in srgb, var(--brand) 55%, #fff) 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-}
-.text-outline {
-  -webkit-text-stroke: 1.5px currentColor; color: transparent;
-  opacity: 0.35;
-}
-/* Mix gradient + outline for split hero effect:
-   Line 1 of h1 → class="text-outline"  (subtle, large)
-   Line 2 of h1 → class="text-gradient" (vivid, brand color)
-   This is the #1 typographic technique on Awwwards-winning sites. */
-
-/* Overline chip — above every section heading */
-.overline { font-family: var(--font-body); font-size: 0.6rem; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 600; color: var(--brand); display: inline-block; margin-bottom: 1.2rem; }
-
-━━━ TECHNIQUE 1 — SCROLL TRACKING ━━━
-<div id="scroll-bar" style="position:fixed;top:0;left:0;height:3px;background:var(--brand);z-index:1000;width:0;transition:width 0.08s linear;pointer-events:none;will-change:width"></div>
-
-let _sy = 0;
-window.addEventListener('scroll', () => {
-  _sy = window.scrollY;
-  const _sp = _sy / Math.max(document.body.scrollHeight - innerHeight, 1);
-  const bar = document.getElementById('scroll-bar');
-  if (bar) bar.style.width = (_sp * 100) + '%';
-  const heroContent = document.querySelector('.hero-content');
-  if (heroContent && _sy < innerHeight) {
-    heroContent.style.transform = 'translateY(' + (_sy * 0.22) + 'px)';
-    heroContent.style.opacity   = String(Math.max(0, 1 - _sy / (innerHeight * 0.65)));
-  }
-  document.querySelector('.site-nav')?.classList.toggle('scrolled', _sy > 60);
-}, { passive: true });
-
-━━━ TECHNIQUE 2 — VIEWPORT DETECTION ━━━
-[data-reveal] { opacity:0; transform:translateY(48px); transition:opacity 0.75s cubic-bezier(.25,.46,.45,.94), transform 0.75s cubic-bezier(.25,.46,.45,.94); }
-[data-reveal].in-view { opacity:1; transform:none; }
-[data-reveal][data-delay="1"] { transition-delay:.12s; }
-[data-reveal][data-delay="2"] { transition-delay:.24s; }
-[data-reveal][data-delay="3"] { transition-delay:.36s; }
-[data-reveal][data-delay="4"] { transition-delay:.48s; }
-[data-reveal][data-delay="5"] { transition-delay:.60s; }
-
-const _io = new IntersectionObserver(es => {
-  es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in-view'); _io.unobserve(e.target); } });
-}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
-document.querySelectorAll('[data-reveal]').forEach(el => _io.observe(el));
-
-━━━ TECHNIQUE 3 — STICKY NAV ━━━
-<nav class="site-nav">
-  <div class="nav-logo">LOGO</div>
-  <ul class="nav-links"><li><a>...</a></li></ul>
-  <a class="nav-cta btn-primary magnetic">CTA</a>
-  <button class="hamburger" onclick="document.querySelector('.mobile-nav').classList.toggle('open');this.classList.toggle('open')">
-    <span></span><span></span><span></span>
-  </button>
-</nav>
-<div class="mobile-nav">...</div>
-
-.site-nav { position:sticky; top:0; z-index:100; display:flex; align-items:center; justify-content:space-between; padding:1.2rem clamp(1.5rem,5vw,5rem); transition:background .4s,backdrop-filter .4s,box-shadow .4s; }
-.site-nav.scrolled { background:rgba(7,7,16,.94); backdrop-filter:blur(24px); box-shadow:0 1px 0 var(--border); }
-.hamburger { display:none; flex-direction:column; gap:5px; cursor:pointer; background:none; border:none; padding:4px; }
-.hamburger span { width:24px; height:2px; background:var(--text); transition:.3s; display:block; }
-.hamburger.open span:first-child { transform:rotate(45deg) translate(5px,5px); }
-.hamburger.open span:nth-child(2) { opacity:0; width:0; }
-.hamburger.open span:last-child { transform:rotate(-45deg) translate(5px,-5px); }
-.mobile-nav { position:fixed; inset:0; background:rgba(7,7,16,.98); z-index:90; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2rem; font-size:1.5rem; transform:translateX(100%); transition:transform .45s cubic-bezier(.77,0,.18,1); }
-.mobile-nav.open { transform:none; }
-@media (max-width:768px) { .nav-links,.nav-cta { display:none; } .hamburger { display:flex; } }
-
-━━━ TECHNIQUE 4 — GSAP SECTION ENTRANCES ━━━
-gsap.registerPlugin(ScrollTrigger);
-
-gsap.utils.toArray('.gsap-section').forEach(section => {
-  const items = section.querySelectorAll('.gsap-item');
-  if (!items.length) return;
-  gsap.fromTo(items,
-    { opacity:0, y:55, scale:0.97 },
-    { opacity:1, y:0, scale:1, duration:0.85, stagger:0.11, ease:'power3.out',
-      scrollTrigger:{ trigger:section, start:'top 78%', once:true } }
-  );
-});
-
-gsap.from('.hero-eyebrow', { opacity:0, y:16, duration:0.7, ease:'expo.out', delay:0.15 });
-gsap.from('.hero-sub',     { opacity:0, y:24, duration:0.85, ease:'power3.out', delay:0.9 });
-gsap.from('.hero-cta',     { opacity:0, y:28, duration:0.85, ease:'back.out(1.7)', delay:1.1, stagger:0.14 });
-gsap.from('.hero-badges',  { opacity:0, y:20, duration:0.7, ease:'power2.out', delay:1.4 });
-
-━━━ TECHNIQUE 5 — KINETIC TYPOGRAPHY (Awwwards standard) ━━━
-// WORD REVEAL — clip-path slide up (used by Igloo, Cartier, Active Theory)
-// Each word masked inside its own overflow:hidden container.
-// Result: words emerge from below like theatre curtain — not a basic fade.
-function revealWords(selector, opts={}) {
-  document.querySelectorAll(selector).forEach(el => {
-    // Preserve existing HTML (spans with classes like text-gradient stay intact)
-    const nodes = Array.from(el.childNodes);
-    el.innerHTML = '';
-    nodes.forEach(node => {
-      if (node.nodeType === 3) { // text node — split into words
-        node.textContent.split(/(\s+)/).forEach(part => {
-          if (!part.trim()) { el.appendChild(document.createTextNode(part)); return; }
-          const wrap = document.createElement('span');
-          wrap.style.cssText = 'display:inline-block;overflow:hidden;vertical-align:bottom;margin-right:.12em';
-          const inner = document.createElement('span');
-          inner.className = 'word-inner';
-          inner.style.cssText = 'display:inline-block;will-change:transform';
-          inner.textContent = part;
-          wrap.appendChild(inner);
-          el.appendChild(wrap);
-        });
-      } else { // element node (e.g. <span class="text-gradient">) — wrap as single unit
-        const wrap = document.createElement('span');
-        wrap.style.cssText = 'display:inline-block;overflow:hidden;vertical-align:bottom;margin-right:.12em';
-        const inner = document.createElement('span');
-        inner.className = 'word-inner';
-        inner.style.cssText = 'display:inline-block;will-change:transform';
-        inner.appendChild(node.cloneNode(true));
-        wrap.appendChild(inner);
-        el.appendChild(wrap);
-      }
-    });
-    gsap.from(el.querySelectorAll('.word-inner'), {
-      y: '115%', opacity: 0,
-      duration: opts.dur || 1.1,
-      stagger: opts.stag || 0.07,
-      ease: opts.ease || 'power4.out',
-      delay: opts.delay || 0,
-      scrollTrigger: opts.scroll ? { trigger: el, start: 'top 85%', once: true } : undefined
-    });
-  });
-}
-revealWords('.hero-headline', { delay: 0.25, dur: 1.3, stag: 0.09 });
-revealWords('.section-headline', { scroll: true, dur: 1.1, stag: 0.07 });
-
-// BLUR REVEAL on body text and subheadings
-gsap.utils.toArray('.reveal-blur').forEach(el => {
-  gsap.from(el, {
-    opacity: 0, filter: 'blur(12px)', y: 20, duration: 1.2, ease: 'power3.out',
-    scrollTrigger: { trigger: el, start: 'top 88%', once: true }
-  });
-});
-
-━━━ TECHNIQUE 6 — MAP RANGE ━━━
-const mapRange = (v,a,b,c,d) => c + ((Math.min(Math.max(v,a),b)-a)/(b-a))*(d-c);
-
-━━━ TECHNIQUE 7 — LERP + CONTEXT-AWARE CURSOR ━━━
-const lerp = (a,b,t) => a + (b-a)*t;
-let _mx=innerWidth/2, _my=innerHeight/2, _cx=_mx, _cy=_my;
-const _cur = document.querySelector('.cursor');
-const _dot = document.querySelector('.cursor-dot');
-document.addEventListener('mousemove', e => { _mx=e.clientX; _my=e.clientY; }, { passive:true });
-(function _animCursor() {
-  requestAnimationFrame(_animCursor);
-  _cx = lerp(_cx, _mx, 0.1);
-  _cy = lerp(_cy, _my, 0.1);
-  if (_cur) _cur.style.transform = 'translate('+_cx+'px,'+_cy+'px)';
-  if (_dot) _dot.style.transform = 'translate('+_mx+'px,'+_my+'px)';
-})();
-// Context-aware: cursor morphs per section (luxury-site pattern)
-document.querySelectorAll('[data-cursor]').forEach(el => {
-  el.addEventListener('mouseenter', () => { if(_cur){ _cur.dataset.type = el.dataset.cursor||''; _cur.classList.add('hover'); } });
-  el.addEventListener('mouseleave', () => { if(_cur){ _cur.dataset.type = ''; _cur.classList.remove('hover'); } });
-});
-document.querySelectorAll('a,button').forEach(el => {
-  el.addEventListener('mouseenter', () => _cur?.classList.add('hover'));
-  el.addEventListener('mouseleave', () => _cur?.classList.remove('hover'));
-});
-
-HTML: <div class="cursor"></div><div class="cursor-dot"></div>
-CSS:
-.cursor { position:fixed;width:44px;height:44px;border:1.5px solid var(--brand);border-radius:50%;pointer-events:none;z-index:9999;margin:-22px 0 0 -22px;transition:border-color .3s,width .3s,height .3s,margin .3s,opacity .3s,background .3s;will-change:transform; }
-.cursor-dot { position:fixed;width:6px;height:6px;background:var(--brand);border-radius:50%;pointer-events:none;z-index:10000;margin:-3px 0 0 -3px;will-change:transform; }
-.cursor.hover { width:68px;height:68px;margin:-34px 0 0 -34px;border-color:rgba(255,255,255,.6);opacity:.7; }
-.cursor[data-type="image"] { background:var(--brand-glow);border-width:0;width:80px;height:80px;margin:-40px 0 0 -40px; }
-@media (hover:none),(pointer:coarse) { .cursor,.cursor-dot { display:none; } }
-
-━━━ TECHNIQUE 8 — GLSL SHADER ━━━
-const _vShader = \`
-  varying vec2 vUv;
-  uniform float uTime;
-  void main() {
-    vUv = uv;
-    vec3 p = position;
-    p.z += sin(p.x*2.8+uTime*0.85)*0.16 + cos(p.y*2.1+uTime*0.65)*0.11;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0);
-  }
-\`;
-const _fShader = \`
-  varying vec2 vUv;
-  uniform float uTime;
-  uniform vec3 uColor;
-  void main() {
-    float d = length(vUv - 0.5);
-    float ring = sin(d*20.0 - uTime*2.0)*0.5+0.5;
-    float pulse = sin(uTime*0.5)*0.12+0.88;
-    float glow = (1.0-smoothstep(0.0,0.52,d))*pulse;
-    float noise = sin(vUv.x*38.0+uTime)*sin(vUv.y*38.0+uTime*0.9)*0.04;
-    gl_FragColor = vec4(mix(vec3(0.0),uColor,(ring*glow+noise)*0.85), glow*ring*0.65+noise*0.2);
-  }
-\`;
-const _sUniforms = { uTime:{ value:0.0 }, uColor:{ value:new THREE.Color(BRAND_INT_PLACEHOLDER) } };
-const _sMat = new THREE.ShaderMaterial({
-  vertexShader:_vShader, fragmentShader:_fShader,
-  uniforms:_sUniforms, transparent:true, depthWrite:false, side:THREE.DoubleSide
-});
-
-━━━ WEBGL FULL HERO ━━━
-const _canvas = document.getElementById('hero-canvas');
-let _r3d;
-try {
-  _r3d = new THREE.WebGLRenderer({ canvas:_canvas, antialias:true, alpha:true });
-  _r3d.setPixelRatio(Math.min(devicePixelRatio,2));
-  _r3d.setSize(innerWidth,innerHeight);
-  const _sc = new THREE.Scene();
-  const _cam = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
-  _cam.position.z = 5;
-  _sc.add(new THREE.AmbientLight(0xffffff,0.2));
-  const _pl = new THREE.PointLight(BRAND_INT_PLACEHOLDER, 4, 18);
-  _sc.add(_pl);
-  const _plane = new THREE.Mesh(new THREE.PlaneGeometry(16,11,36,36), _sMat);
-  _plane.position.z = -3;
-  _sc.add(_plane);
-  const _iGeo = new THREE.IcosahedronGeometry(1.55,1);
-  const _iMesh = new THREE.Mesh(_iGeo, new THREE.MeshPhongMaterial({ color:BRAND_INT_PLACEHOLDER, shininess:130, specular:0xffffff }));
-  const _wMesh = new THREE.Mesh(_iGeo, new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, transparent:true, opacity:0.055 }));
-  _sc.add(_iMesh,_wMesh);
-  const _pArr = new Float32Array(2700);
-  for(let i=0;i<2700;i++) _pArr[i]=(Math.random()-.5)*12;
-  const _pGeo = new THREE.BufferGeometry();
-  _pGeo.setAttribute('position', new THREE.BufferAttribute(_pArr,3));
-  _sc.add(new THREE.Points(_pGeo, new THREE.PointsMaterial({ color:BRAND_INT_PLACEHOLDER, size:0.013, transparent:true, opacity:0.5 })));
-  let _wt=0, _wmx=0, _wmy=0, _wtx=0, _wty=0;
-  document.addEventListener('mousemove', e=>{ _wmx=(e.clientX/innerWidth-.5)*2; _wmy=-(e.clientY/innerHeight-.5)*2; },{ passive:true });
-  (function _loopGL(){
-    requestAnimationFrame(_loopGL);
-    _wt += 0.007;
-    _wtx = lerp(_wtx, _wmx*0.5, 0.04);
-    _wty = lerp(_wty, _wmy*0.5, 0.04);
-    _iMesh.rotation.y = _wt*0.3+_wtx;
-    _iMesh.rotation.x = _wt*0.15+_wty;
-    _wMesh.rotation.copy(_iMesh.rotation);
-    _pl.position.set(Math.sin(_wt)*4, Math.cos(_wt*.7)*3, 3);
-    _sUniforms.uTime.value = _wt;
-    _r3d.render(_sc,_cam);
-  })();
-  window.addEventListener('resize',()=>{ _cam.aspect=innerWidth/innerHeight; _cam.updateProjectionMatrix(); _r3d.setSize(innerWidth,innerHeight); });
-} catch(e) {
-  if(_canvas) _canvas.style.background='radial-gradient(ellipse at 50% 55%, BRAND_COLOR_PLACEHOLDER 0%, #070710 68%)';
-}
-
-Hero HTML — MANDATORY STRUCTURE (every hero must follow this):
-<section class="hero" data-cursor="image" style="position:relative;min-height:100svh;display:flex;align-items:center;overflow:hidden">
-  <canvas id="hero-canvas" style="position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none"></canvas>
-  <div class="hero-content" style="position:relative;z-index:1;will-change:transform,opacity;padding:0 clamp(1.5rem,6vw,7rem);max-width:1400px;width:100%">
-    <!-- Overline: short uppercase label -->
-    <div class="overline hero-eyebrow">Trusted Since 2018 · 3,200+ Clients Served</div>
-    <!-- Hero headline: TWO LINES. Line 1 = outline text (decorative). Line 2 = gradient text (vivid). -->
-    <h1 class="hero-headline" style="margin:1rem 0 2rem">
-      <span class="text-outline" style="display:block">The Standard</span>
-      <span class="text-gradient" style="display:block">Everyone Compares To</span>
-    </h1>
-    <!-- Subheading: one sentence max. Blur-reveal class. -->
-    <p class="hero-sub reveal-blur" style="max-width:520px;font-size:clamp(1.05rem,1.5vw,1.25rem);line-height:1.65;margin-bottom:2.5rem">
-      Write one powerful, specific sentence about what makes this business different. No filler.
-    </p>
-    <!-- CTA row -->
-    <div class="hero-cta-group hero-cta" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center;margin-bottom:3rem">
-      <a class="btn-primary magnetic btn-arrow">Get Your Free Quote <span class="arr">→</span></a>
-      <a class="btn-ghost">See Our Work</a>
-    </div>
-    <!-- Trust badges row — real specific numbers -->
-    <div class="hero-badges reveal-blur" style="display:flex;flex-wrap:wrap;gap:2.5rem;padding-top:2rem;border-top:1px solid var(--border)">
-      <div><div style="font-family:var(--font-display);font-size:2.2rem;font-weight:700;letter-spacing:-.03em;color:var(--brand)">3,200+</div><div style="font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">Clients Served</div></div>
-      <div><div style="font-family:var(--font-display);font-size:2.2rem;font-weight:700;letter-spacing:-.03em;color:var(--brand)">4.9★</div><div style="font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">Average Rating</div></div>
-      <div><div style="font-family:var(--font-display);font-size:2.2rem;font-weight:700;letter-spacing:-.03em;color:var(--brand)">18yrs</div><div style="font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">In Business</div></div>
-    </div>
-  </div>
-</section>
-
-IMPORTANT: Use display font for ALL h1, h2, h3. Use outline + gradient split on EVERY hero headline.
-Write real specific numbers in badges. One-sentence subheading max. No generic filler copy.
+Hero headline MUST use two-line split: line 1 = <span class="text-outline">, line 2 = <span class="text-gradient">
+All section headings use class="section-headline wipe-reveal"
+Body text uses class="reveal-blur" on paragraphs
+Generous section padding: clamp(7rem,14vw,14rem) top/bottom
 
 ━━━ BUTTON STYLES ━━━
-.btn-primary { display:inline-flex;align-items:center;gap:.5rem;padding:.875rem 2.2rem;background:var(--brand);color:#fff;font-weight:700;font-size:.95rem;letter-spacing:.02em;border-radius:var(--radius-pill);border:none;cursor:pointer;transition:transform .25s,box-shadow .25s,filter .25s;will-change:transform; }
-.btn-primary:hover { transform:translateY(-2px) scale(1.02);box-shadow:var(--shadow-brand);filter:brightness(1.1); }
-.btn-ghost { display:inline-flex;align-items:center;gap:.5rem;padding:.875rem 2.2rem;background:transparent;color:var(--text);font-weight:600;font-size:.95rem;border:1.5px solid var(--border);border-radius:var(--radius-pill);cursor:pointer;transition:border-color .25s,background .25s; }
-.btn-ghost:hover { border-color:var(--brand);background:var(--brand-glow); }
-.btn-arrow .arr { display:inline-block;transition:transform .3s ease; }
-.btn-arrow:hover .arr { transform:translateX(5px); }
+.btn-primary: background:var(--brand); color:#fff; padding:.875rem 2.2rem; border-radius:var(--radius-pill); font-family:var(--font-body); font-weight:700; font-size:.95rem; letter-spacing:.02em; border:none; cursor:pointer; display:inline-flex; align-items:center; gap:.5rem; transition:transform .25s,box-shadow .25s,filter .25s; will-change:transform
+.btn-primary:hover: transform:translateY(-2px) scale(1.02); box-shadow:var(--shadow-brand); filter:brightness(1.1)
+.btn-ghost: transparent; border:1.5px solid var(--border); hover: border-color:var(--brand); background:var(--brand-glow)
+.card: background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:2.5rem 2rem; backdrop-filter:blur(14px); transition:transform .35s,box-shadow .35s,border-color .35s
+.card:hover: transform:translateY(-10px); box-shadow:0 28px 70px var(--brand-glow),0 0 0 1px var(--brand); border-color:var(--brand)
 
-━━━ GLASSMORPHISM CARDS ━━━
-.card { background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem 2rem;backdrop-filter:blur(14px);transition:transform .35s cubic-bezier(.25,.46,.45,.94),box-shadow .35s,border-color .35s;will-change:transform; }
-.card:hover { transform:translateY(-10px);box-shadow:0 28px 70px var(--brand-glow),0 0 0 1px var(--brand);border-color:var(--brand); }
+━━━ TECHNIQUE REFERENCE ━━━
+${techBlock}
 
-━━━ MARQUEE ━━━
-.marquee { overflow:hidden;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:1.2rem 0; }
-.marquee-inner { display:flex;gap:3rem;width:max-content;animation:marquee 30s linear infinite;align-items:center; }
-@keyframes marquee { from{transform:translateX(0)} to{transform:translateX(-50%)} }
-.marquee:hover .marquee-inner { animation-play-state:paused; }
-
-━━━ NUMBER COUNTER ━━━
-function _animCount(el) {
-  const t=+el.dataset.target, s=el.dataset.suffix||'', p=el.dataset.prefix||'';
-  let c=0; const inc=t/75;
-  const id=setInterval(()=>{c=Math.min(c+inc,t);el.textContent=p+Math.floor(c).toLocaleString()+s;if(c>=t)clearInterval(id);},14);
+━━━ OUTPUT RULES ━━━
+- Output ONLY the HTML for the requested section — no <html>, <head>, <body>, <style>, or <script> wrappers
+- Use all CSS vars listed above — never hardcode hex colors
+- Add class="gsap-section" to every section, class="gsap-item" to every card/item within
+- Add [data-reveal] and [data-delay="1/2/3"] to headings and paragraphs
+- Add .wipe-reveal to section headings
+- Write CONCISE production code — no comments, no blank lines between CSS rules in inline styles
+- Real, specific copy — no filler. Real numbers. No "world-class" or "passionate about"
+- ★★★★★ means five actual star characters, not the word "stars"
+- Section output must be complete and fully realized — every element described in the plan`
 }
-const _cio = new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){_animCount(e.target);_cio.unobserve(e.target);}});},{threshold:.55});
-document.querySelectorAll('[data-target]').forEach(el=>_cio.observe(el));
 
-━━━ TECHNIQUE 9 — PAGE LOAD SEQUENCE ━━━
-Add as FIRST child of <body>:
-<div id="page-loader" style="position:fixed;inset:0;background:var(--bg);z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem;transition:transform 1.1s cubic-bezier(0.77,0,0.18,1),opacity 0.4s ease">
-  <div id="loader-num" style="font-size:clamp(3rem,8vw,6rem);font-weight:800;color:var(--brand);letter-spacing:-.02em;font-variant-numeric:tabular-nums">0%</div>
-  <div style="width:220px;height:2px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden">
-    <div id="loader-bar" style="height:100%;width:0%;background:var(--brand);transition:width .08s linear"></div>
-  </div>
-  <div style="font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--text-muted)">Initialising</div>
-</div>
+// ── Design system generator (CSS + JS — one focused call) ─────────────────────
 
-IMPORTANT — Use this EXACT loader JS (pure CSS exit, no GSAP dependency):
-(function(){
-  var loader=document.getElementById('page-loader');
-  if(!loader){return;}
-  document.documentElement.style.overflow='hidden';
-  var num=document.getElementById('loader-num'),bar=document.getElementById('loader-bar'),p=0;
-  function exitLoader(){
-    loader.style.transform='translateY(-100%)';
-    setTimeout(function(){
-      if(loader.parentNode) loader.parentNode.removeChild(loader);
-      document.documentElement.style.overflow='';
-    },1200);
+async function generateDesignCss(params: {
+  business: { name: string; type: string; location: string }
+  brandColor: string
+  tagline: string | undefined
+  font: { import: string; display: string; body: string }
+  techniques: TechniqueKey[]
+  directives: SiteDirectives | undefined
+}): Promise<string> {
+  const { business, brandColor, font, techniques, directives } = params
+  const brandInt = `0x${brandColor.replace("#","")}`
+
+  const raw = await runAgent(
+    `You generate the complete CSS and JavaScript design system for a premium website.
+Output ONLY a raw <style> block followed by CDN <script> tags — no HTML sections, no explanation.
+The CSS and JS you output will be placed in the <head> and at the end of <body> respectively.`,
+    `Business: ${business.name} (${business.type})
+Brand color: ${brandColor} (Three.js int: ${brandInt})
+Display font: '${font.display}' | Body font: '${font.body}'
+Font import: @import url('${font.import}');
+
+Generate:
+1. <style> block containing:
+   - @import for both Google Fonts
+   - :root { all CSS variables }
+   - Base reset: *, html, body, section, h1, h2, h3, p, a, img
+   - h1: clamp(4.5rem,11vw,13rem) / line-height:.92 / letter-spacing:-.04em / font-family:var(--font-display) / font-weight:700
+   - h2: clamp(3rem,6.5vw,8rem) / line-height:.95 / letter-spacing:-.03em / same font
+   - h3: clamp(1.5rem,2.8vw,2.5rem) / line-height:1.1 / letter-spacing:-.02em
+   - p: clamp(.975rem,1.1vw,1.05rem) / line-height:1.75 / color:var(--text-muted) / font-family:var(--font-body)
+   - section padding: clamp(7rem,14vw,14rem) clamp(1.5rem,6vw,7rem)
+   - .text-gradient (brand→white clip-text), .text-outline (-webkit-text-stroke:1.5px), .overline, .chip
+   - .btn-primary, .btn-ghost, .btn-arrow .arr, .btn-arrow:hover .arr
+   - .card, .card:hover, .tilt-card
+   - .site-nav, .site-nav.scrolled, .nav-links, .nav-links a::after, .hamburger, .mobile-nav
+   - .marquee, .marquee-inner, @keyframes marquee
+   - [data-reveal], [data-reveal].in-view, [data-reveal][data-delay="1/2/3/4"]
+   - .wipe-reveal, .wipe-reveal.in-view, .section-headline::after, .section-headline.in-view::after
+   - .cursor, .cursor-dot, .cursor-label, .cursor.hover, .cursor.has-label
+   - .h-section, .h-track, .h-card
+   - .asym-grid, .asym-section:nth-child(odd/even) rules
+   - .pricing-grid, .pricing-card, .pricing-card.popular, .pricing-card.popular::before, .plan-price, .plan-features
+   - .timeline, .timeline-svg, .tl-line, .tl-step, .tl-num, .tl-line.drawn
+   - body::after grain texture (SVG noise, opacity:.22, mix-blend-mode:overlay, z-index:9997, pointer-events:none)
+   - Mobile: @media(max-width:768px) responsive overrides for grid, nav, pricing, h_scroll
+   - @media(max-width:900px) for asym-grid
+
+2. Three <script> tags: Three.js, GSAP, ScrollTrigger CDN
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+
+Directives override: ${directives ? JSON.stringify({darkMode:directives.darkMode,tone:directives.tone,colorScheme:directives.colorScheme}) : "none"}
+${directives?.darkMode === false ? "LIGHT THEME: use #fafafa for --bg, #0f172a for --text, adjust surface/border for light mode" : ""}`,
+    { model: "sonnet", maxTokens: 6000, jsonMode: false }
+  ) as string
+
+  return raw.trim()
+}
+
+// ── Per-section HTML generator ────────────────────────────────────────────────
+
+const SECTION_INSTRUCTIONS: Record<SectionType, string> = {
+  nav: `Generate the STICKY NAV section. Use the NAV technique. Include: logo (business name in display font), nav-links (3-4 real links), .btn-primary.magnetic.nav-cta, hamburger, mobile-nav overlay. The nav must use class="site-nav" and respond to .scrolled class with backdrop-filter.`,
+
+  hero: `Generate the HERO section — the most important section. Requirements:
+- min-height:100svh, display:flex, align-items:center
+- <canvas id="hero-canvas"> as position:absolute background
+- .hero-content with position:relative z-index:1
+- .overline text (real credibility signal, not generic)
+- <h1 class="hero-headline">: TWO LINES — line 1 as <span class="text-outline">, line 2 as <span class="text-gradient">. Make the headline bold, specific, 3-5 words per line.
+- <p class="hero-sub reveal-blur">: ONE sentence. Specific differentiator. No filler.
+- .hero-cta-row with .btn-primary.magnetic.btn-arrow and .btn-ghost
+- .hero-badges: 3 real specific stats using display font at 2.2rem (e.g. "3,200+" "4.9★" "18yrs")
+- Add data-cursor-text="EXPLORE" to the hero section
+- Include the WebGL canvas setup using SHADER technique with BRAND_INT placeholder`,
+
+  proof: `Generate the SOCIAL PROOF BAR using the MARQUEE technique. Items: star rating, project count, revenue/impact number, awards or recognition. Duplicate items for seamless loop. Position between hero and next section.`,
+
+  services: `Generate the SERVICES section using H_SCROLL technique (horizontal pinned scroll). 4-5 service cards, each a .h-card.tilt-card.card with: icon (SVG or emoji), service name as h3, 2-line description, specific outcome/benefit, and "Learn More →" link. Use business-specific real services. Add data-cursor-text="DRAG" to .h-track.`,
+
+  features: `Generate the FEATURES section using ASYMMETRIC technique. 3-4 features alternating left/right. Each feature: icon, h3, p describing the specific capability, stat or proof point. Use .asym-section structure. Add .reveal-blur to paragraphs.`,
+
+  about: `Generate the ABOUT section. Split layout: left side has .overline + h2.section-headline.wipe-reveal + 2 paragraphs.reveal-blur + .btn-ghost. Right side: styled card with a compelling stat or quote in large display font. Make the copy specific — mention the city, years in business, specific credentials. No "passionate about" clichés.`,
+
+  stats: `Generate the STATS section. Full-width dark band with 3-4 count-up stats using [data-target][data-suffix][data-prefix] pattern. Each stat: large number in display font, descriptor label in overline style. Stats should be specific and impressive but believable for the business.`,
+
+  process: `Generate the PROCESS section using SVG_TIMELINE technique (for service/trade businesses) OR numbered asymmetric steps. 4 steps max. Each step: two-digit number in display font at large size (opacity:.2), step title as h3, specific one-sentence description. The process should describe the real customer journey, not generic steps.`,
+
+  testimonials: `Generate the TESTIMONIALS section. 3 testimonial cards (.tilt-card.card). Each: ★★★★★ (five real stars), blockquote with specific outcome ("Saved us $4,200 on our energy bill"), person name + last initial, city + business type (e.g. "Mike T. · Phoenix homeowner"), and optionally a company/context label. Make testimonials sound specific and human, not AI-generated.`,
+
+  pricing: `Generate the PRICING section using the PRICING technique. 3 tiers appropriate for the business. Center card gets .popular class. Include monthly/annual toggle. Prices must be realistic for the industry. Feature lists must be specific and differentiated between tiers.`,
+
+  gallery: `Generate the GALLERY section. CSS grid of 6-8 image placeholders (div with gradient backgrounds using brand color variations, aspect-ratio:4/3 or 1/1). Add data-cursor-text="VIEW" to each. Caption each with a specific project/product name. Section headline uses wipe-reveal.`,
+
+  team: `Generate the TEAM section. 3-4 team member cards (.tilt-card.card). Each: avatar placeholder (circle with initials in display font), name, title, 1-sentence bio with a specific credential. Professional and real-sounding.`,
+
+  cta: `Generate the CTA section — the conversion section. Full-width, uses a gradient or the brand color as background. Large h2 with the core offer. Subheading adds urgency or specificity. ONE primary CTA button (.magnetic). Optional: phone number or "no commitment" reassurance line. This must make people want to click.`,
+
+  footer: `Generate the FOOTER. 4 columns: logo+tagline+social links | service links | company links | contact details (address, phone, email). Copyright bar. All links have .footer-links hover animation. Social icons as SVG. Business-specific contact details (use realistic placeholders if not provided).`,
+
+  faq: `Generate the FAQ section. 5-7 accordion-style Q&A items. Questions should be REAL objections a potential customer would have. Answers must be specific, confident, and overcome the objection. Implement with CSS details/summary or JS toggle with smooth height animation.`,
+
+  locations: `Generate the LOCATIONS / SERVICE AREA section. Map placeholder (styled div with brand gradient), list of specific cities/areas served, business hours, contact details for the primary location. Real-looking and specific.`,
+
+  results: `Generate the RESULTS / CASE STUDIES section. 2-3 result cards. Each: client industry/type, specific problem, specific outcome with real numbers ("Increased revenue 34% in 90 days"), testimonial excerpt. Use brand color accent on the outcome numbers.`,
+}
+
+async function generateSectionHtml(
+  sectionType: SectionType,
+  params: {
+    business: { name: string; type: string; location: string; phone?: string | null; description: string }
+    brandColor: string
+    brandInt: string
+    services: string[]
+    tagline: string | undefined
+    reviews: Array<{ reviewerName: string; rating: number; reviewText: string }>
+    font: { display: string; body: string }
+    techniques: TechniqueKey[]
+    directives: SiteDirectives | undefined
+    shaderGlsl: string | undefined
+    researchContext: string | undefined
+    competitorContext: string | undefined
+    businessLiveData?: { leadCount: number; reviewCount: number; avgRating: number; recentContent: string[] }
   }
-  var iv=setInterval(function(){
-    p+=Math.random()*14+5; if(p>100)p=100;
-    if(num)num.textContent=Math.floor(p)+'%';
-    if(bar)bar.style.width=p+'%';
-    if(p>=100){clearInterval(iv);setTimeout(exitLoader,250);}
-  },55);
-  // Hard fallback: always exits after 5 seconds regardless of JS state
-  setTimeout(function(){clearInterval(iv);exitLoader();},5000);
-})();
+): Promise<string> {
+  const { business, brandColor, brandInt, services, tagline, reviews, font, techniques, directives, shaderGlsl, researchContext, competitorContext, businessLiveData } = params
 
-━━━ TECHNIQUE 10 — MAGNETIC BUTTONS ━━━
-document.querySelectorAll('.magnetic').forEach(btn=>{
-  btn.addEventListener('mousemove',e=>{
-    const r=btn.getBoundingClientRect(),x=e.clientX-r.left-r.width/2,y=e.clientY-r.top-r.height/2;
-    btn.style.transition='transform 0.08s ease';
-    btn.style.transform='translate('+(x*.3)+'px,'+(y*.3)+'px)';
-  });
-  btn.addEventListener('mouseleave',()=>{
-    btn.style.transition='transform 0.55s cubic-bezier(.25,.46,.45,.94)';
-    btn.style.transform='translate(0,0)';
-  });
-});
+  const systemPrompt = buildSectionSystemPrompt(techniques, directives, shaderGlsl, brandColor, font)
 
-━━━ TECHNIQUE 11 — 3D CARD TILT ━━━
-document.querySelectorAll('.tilt-card').forEach(card=>{
-  card.style.transformStyle='preserve-3d';
-  card.addEventListener('mousemove',e=>{
-    const r=card.getBoundingClientRect();
-    const x=(e.clientX-r.left)/r.width-.5, y=(e.clientY-r.top)/r.height-.5;
-    card.style.transition='transform 0.08s ease,box-shadow 0.08s';
-    card.style.transform='perspective(700px) rotateY('+(x*16)+'deg) rotateX('+(-y*16)+'deg) scale(1.04)';
-    card.style.boxShadow='0 30px 70px var(--brand-glow),0 0 0 1px var(--brand)';
-    card.style.borderColor='var(--brand)';
-  });
-  card.addEventListener('mouseleave',()=>{
-    card.style.transition='transform 0.6s cubic-bezier(.25,.46,.45,.94),box-shadow 0.4s,border-color 0.4s';
-    card.style.transform='perspective(700px) rotateY(0) rotateX(0) scale(1)';
-    card.style.boxShadow=''; card.style.borderColor='';
-  });
-});
+  const reviewBlock = reviews.length > 0
+    ? reviews.slice(0,4).map(r=>`• ${r.reviewerName}: "${r.reviewText}" (${r.rating}/5)`).join("\n")
+    : "(generate 3 specific real-sounding testimonials from the business's actual city)"
 
-━━━ TECHNIQUE 12 — HORIZONTAL SCROLL ━━━
-<section class="h-section gsap-section">
-  <div style="padding:3rem clamp(1.5rem,5vw,5rem)"><h2 class="section-headline split-text">Our Services</h2></div>
-  <div class="h-track" style="display:flex;gap:2rem;padding:0 clamp(1.5rem,5vw,5rem) 4rem;width:max-content">
-    <div class="h-card tilt-card card">...</div>
-  </div>
-</section>
-.h-section { overflow:hidden; padding:0; }
-.h-card { width:360px; flex-shrink:0; }
-const htrack=document.querySelector('.h-track');
-if(htrack){
-  gsap.to(htrack,{
-    x:()=>-(htrack.scrollWidth-innerWidth+120), ease:'none',
-    scrollTrigger:{ trigger:'.h-section', start:'top top', end:()=>'+='+(htrack.scrollWidth-innerWidth+120), scrub:1.2, pin:true, anticipatePin:1 }
-  });
+  const liveData = businessLiveData && businessLiveData.leadCount > 0
+    ? `Live data: ${businessLiveData.leadCount} leads, ${businessLiveData.reviewCount} reviews avg ${businessLiveData.avgRating.toFixed(1)}/5`
+    : ""
+
+  const userPrompt = `${SECTION_INSTRUCTIONS[sectionType]}
+
+Business: ${business.name}
+Type: ${business.type}
+Location: ${business.location || "Nationwide"}
+Phone: ${business.phone || "(use realistic local placeholder)"}
+Tagline: ${tagline || "(generate a specific powerful tagline)"}
+Brand color: ${brandColor} | Three.js int: ${brandInt}
+Display font: '${font.display}' | Body font: '${font.body}'
+Services: ${services.slice(0,6).join(" | ") || "Core services"}
+${business.description ? `About: ${business.description}` : ""}
+${liveData}
+Reviews: ${reviewBlock}
+${researchContext ? `Research: ${researchContext.slice(0,800)}` : ""}
+${competitorContext ? `Competitor intel: ${competitorContext.slice(0,400)}` : ""}
+
+Output ONLY the HTML for the ${sectionType} section — starting with <section, <nav, or <footer. No <html>, <head>, <body>, <style> or <script> wrappers. Use all CSS vars. Make it exceptional.`
+
+  const raw = await runAgent(systemPrompt, userPrompt, {
+    model: "sonnet", maxTokens: 6000, jsonMode: false,
+  }) as string
+
+  return raw.replace(/^```(?:html)?\n?/i,"").replace(/\n?```$/i,"").trim()
 }
 
-━━━ TECHNIQUE 13 — CLIP-PATH WIPE REVEALS ━━━
-.wipe-reveal { clip-path:inset(0 100% 0 0); transition:clip-path 1s cubic-bezier(.77,0,.18,1); }
-.wipe-reveal.in-view { clip-path:inset(0 0% 0 0); }
-.section-headline { position:relative; display:inline-block; }
-.section-headline::after { content:''; position:absolute; bottom:-8px; left:0; width:0; height:3px; background:var(--brand); border-radius:2px; transition:width 1.1s cubic-bezier(.77,0,.18,1) 0.3s; }
-.section-headline.in-view::after { width:55%; }
+// ── JS block generator (all technique JS combined) ────────────────────────────
 
-━━━ TECHNIQUE 14 — MICRO-ANIMATIONS ━━━
-.nav-links a { position:relative; padding-bottom:3px; }
-.nav-links a::after { content:''; position:absolute; bottom:0; left:0; width:0; height:1.5px; background:var(--brand); transition:width .3s ease; }
-.nav-links a:hover::after { width:100%; }
-.chip { display:inline-block; padding:.3rem 1rem; border:1px solid var(--brand); border-radius:var(--radius-pill); font-size:.68rem; letter-spacing:.14em; text-transform:uppercase; color:var(--brand); margin-bottom:.9rem; background:var(--brand-glow); }
-.footer-links a { display:inline-block; transition:color .2s, transform .2s; }
-.footer-links a:hover { color:var(--brand); transform:translateX(5px); }
+async function generateSharedJs(params: {
+  business: { name: string; type: string }
+  brandColor: string
+  brandInt: string
+  techniques: TechniqueKey[]
+  sections: SectionType[]
+  directives: SiteDirectives | undefined
+}): Promise<string> {
+  const { business, brandColor, brandInt, techniques, sections, directives } = params
 
-━━━ TECHNIQUE 15 — SCROLL SCRUBBING (Awwwards-level) ━━━
-Animation progress driven by scroll position — user controls the pace.
-Add alongside all existing ScrollTrigger calls:
+  if (directives?.animationsEnabled === false) return ""
 
-// Hero cinematic parallax exit (scrub driven)
-gsap.to('.hero-content', {
-  y:-80, opacity:0, scale:0.96, ease:'none',
-  scrollTrigger:{ trigger:'.hero', start:'center center', end:'bottom top', scrub:1.5 }
-});
+  const raw = await runAgent(
+    `Generate a complete JavaScript block for a website. Output ONLY raw JavaScript — no <script> tags, no explanation.
+The JS uses these techniques: ${techniques.join(", ")}.
+The page has these sections: ${sections.join(", ")}.
+CSS variables and DOM elements are already in the page.`,
+    `Business: ${business.name} (${business.type})
+Brand color: ${brandColor} | Three.js int: ${brandInt}
 
-// Section headings scrub in from below
-gsap.utils.toArray('.section-headline').forEach(el => {
-  gsap.fromTo(el, { y:50, opacity:0 }, { y:0, opacity:1, ease:'none',
-    scrollTrigger:{ trigger:el, start:'top 90%', end:'top 40%', scrub:1 }
-  });
-});
+Generate ONE complete JavaScript block that includes ALL of the following (in order):
+1. lerp helper: const lerp=(a,b,t)=>a+(b-a)*t;
+2. mapRange helper: const mapRange=(v,a,b,c,d)=>c+((Math.min(Math.max(v,a),b)-a)/(b-a))*(d-c);
+3. Scroll progress bar + hero parallax + nav scrolled state (SCROLL_BAR technique)
+4. IntersectionObserver for [data-reveal] elements (REVEAL technique)
+5. Cursor lerp animation + context-aware label from data-cursor-text (CURSOR technique)
+6. GSAP registerPlugin(ScrollTrigger) + section entrance animations (GSAP technique)
+7. revealWords() function + call on .hero-headline (delay .25) and .section-headline (scroll:true) (KINETIC_TYPE)
+8. Blur reveal on .reveal-blur elements
+9. Magnetic button effect on .magnetic elements (MAGNETIC)
+10. 3D card tilt on .tilt-card elements (TILT)
+11. IntersectionObserver for .wipe-reveal elements (WIPE)
+12. Count-up animation for [data-target] elements (MICRO)
+13. Scroll scrub: hero exit (scrub 1.5), section headings (scrub 1), cards (scrub 1) (SCRUB)
+${sections.includes("services") || sections.includes("gallery") ? "14. GSAP horizontal scroll for .h-track (H_SCROLL)" : ""}
+${sections.includes("pricing") ? "15. Pricing toggle: monthly/annual button swap (PRICING)" : ""}
+${sections.includes("process") ? "16. SVG timeline line draw on scroll (.tl-line.drawn)" : ""}
+17. Three.js WebGL hero: scene + camera + ShaderMaterial plane + IcosahedronGeometry + wireframe + particles + PointLight + animation loop with lerp mouse rotation. Brand int: ${brandInt}. Wrap in try/catch — fallback: canvas.style.background='radial-gradient(ellipse at 50% 55%,${brandColor} 0%,#070710 68%)'
+18. Page loader: var l=document.getElementById('page-loader'); ... (LOADER technique JS — pure CSS exit, 5s fallback)
 
-// Cards scrub in with stagger
-gsap.utils.toArray('.gsap-section').forEach(section => {
-  const cards = section.querySelectorAll('.card,.gsap-item');
-  if (!cards.length) return;
-  gsap.fromTo(cards, { y:60, opacity:0 }, {
-    y:0, opacity:1, stagger:0.08, ease:'none',
-    scrollTrigger:{ trigger:section, start:'top 85%', end:'top 30%', scrub:1 }
-  });
-});
+Write complete, working JavaScript. No comments. Minified style is fine.`,
+    { model: "sonnet", maxTokens: 6000, jsonMode: false }
+  ) as string
 
-// Parallax background layers: add data-parallax="0.3" to bg elements
-gsap.utils.toArray('[data-parallax]').forEach(el => {
-  const speed = parseFloat(el.getAttribute('data-parallax') || '0.3');
-  const parent = el.closest('section') || el.parentElement;
-  gsap.to(el, {
-    y:()=>-(parent?.offsetHeight||400)*speed, ease:'none',
-    scrollTrigger:{ trigger:parent, start:'top bottom', end:'bottom top', scrub:true }
-  });
-});
-
-━━━ ANIMATION DIRECTIVE EXECUTION ━━━
-When ANIMATION_DIRECTIVES listed in MANDATORY REQUIREMENTS, execute each one:
-Format: "[target] [effect] [duration]s [easing] [delay]s on:[load|scroll]"
-- "hero-headline slides-up 0.8s power4.out 0.3s on:load"
-  → gsap.from('.hero-headline', {y:60,opacity:0,duration:0.8,ease:'power4.out',delay:0.3})
-- "service-cards stagger-fade 0.6s expo.out 0.1s on:scroll"
-  → stagger ScrollTrigger fromTo on .card elements
-Always implement the closest GSAP equivalent.
-
-━━━ ALL 9 SECTIONS (required unless MANDATORY REQUIREMENTS override) ━━━
-1. NAV — sticky + .scrolled, logo, nav-links, magnetic nav-cta, hamburger
-2. HERO — page-loader first, cursor, scroll-bar, WebGL+shader canvas, split-text headline, magnetic CTAs, badges
-3. SOCIAL PROOF BAR — marquee trust signals ("4.9★" / "500+ Projects" / "$50M Generated")
-4. SERVICES — horizontal scroll h-section with 4 tilt-card cards
-5. ABOUT/STATS — 3 count-up stats | wipe-reveal story + CTA
-6. PROCESS — chip label, wipe-reveal h2, 3-4 numbered steps
-7. TESTIMONIALS — 3 tilt-card cards, ★★★★★, blockquote, name, company
-8. CTA SECTION — full-width brand bg, split-text headline, magnetic btn-primary
-9. FOOTER — logo+tagline, 3-4 link columns (footer-links), social icons, copyright
-
-━━━ SEO (required on every site) ━━━
-Include in <head>: <title>, <meta name="description">, <meta property="og:title">, <meta property="og:description">
-Include before </body>: JSON-LD schema (LocalBusiness or Organization)
-
-━━━ TYPOGRAPHY RULES — non-negotiable ━━━
-1. Import TWO Google Fonts — display font for headings, body font for paragraphs/buttons.
-   Pick the premium pair from the PREMIUM FONT PAIRING table above that best fits the business type.
-2. Apply: h1,h2,h3,.hero-headline,.section-headline { font-family: var(--font-display); }
-          body,p,.btn-primary,.nav-links,input,textarea { font-family: var(--font-body); }
-3. Every hero headline MUST use the outline + gradient split pattern (line 1 = .text-outline, line 2 = .text-gradient)
-4. Every section heading must be massive — h2 at clamp(3rem, 6.5vw, 8rem) minimum
-5. Add class="reveal-blur" to every p.hero-sub, every stat label, and the hero badges div
-6. Negative letter-spacing on ALL headings: h1 → -0.04em, h2 → -0.03em, h3 → -0.02em
-7. Section padding must be generous: clamp(7rem, 14vw, 14rem) top/bottom
-
-━━━ CONTENT STANDARDS — $10,000 copywriting level ━━━
-- Hero headline: 3–6 words max per line. Bold claim, no clichés.
-- Subheading: ONE sentence. Specific differentiator. No "we are committed to excellence."
-- Stats: specific and credible ("1,847 Roofs Installed" not "Many projects"). Real numbers.
-- Testimonials: first name + last initial, real city, specific outcome ("saved us $4,200 on our roof")
-- CTAs: action + outcome ("Get Your Free Roof Estimate", "Book a 15-min Strategy Call")
-- Section headlines: statement or question, never generic ("Why Phoenix Homeowners Choose Us" not "Our Services")
-- NO: "world-class", "industry-leading", "cutting-edge", "seamless", "passionate about", "dedicated to"`
+  return raw.replace(/^```(?:javascript|js)?\n?/i,"").replace(/\n?```$/i,"").trim()
 }
 
-// ── Output extractor ──────────────────────────────────────────────────────────
+// ── HTML assembler ────────────────────────────────────────────────────────────
 
-function extractResult(raw: unknown): { html: string; title: string; slug: string } {
-  const text = typeof raw === "string" ? raw : JSON.stringify(raw)
+function assembleHtml(params: {
+  business: { name: string; type: string; location: string; phone?: string | null }
+  brandColor: string
+  font: { import: string; display: string; body: string }
+  designCss: string
+  sections: Array<{ type: SectionType; html: string }>
+  sharedJs: string
+  title: string
+  slug: string
+}): string {
+  const { business, brandColor, designCss, sections, sharedJs, title, slug } = params
 
-  const titleMatch = text.match(/SITE_TITLE:\s*(.+)/i)
-  const slugMatch  = text.match(/SITE_SLUG:\s*([a-z0-9-]+)/i)
+  const metaDesc = `${business.name} — professional ${business.type.toLowerCase()} in ${business.location || "your area"}. Contact us today.`
 
-  const htmlMatch = text.match(/SITE_HTML:\s*\r?\n?(<!DOCTYPE[\s\S]+)/i)
-  if (htmlMatch?.[1]) {
-    return {
-      html:  htmlMatch[1].trim(),
-      title: titleMatch?.[1]?.trim() ?? "Business Website",
-      slug:  slugMatch?.[1]?.trim()  ?? "website",
-    }
-  }
+  const sectionHtml = sections.map(s => s.html).join("\n\n")
 
-  const bareHtml = text.match(/(<!DOCTYPE[\s\S]+<\/html>)/i)
-  if (bareHtml?.[1]) {
-    return {
-      html:  bareHtml[1].trim(),
-      title: titleMatch?.[1]?.trim() ?? "Business Website",
-      slug:  slugMatch?.[1]?.trim()  ?? "website",
-    }
-  }
-
-  if (raw && typeof raw === "object" && "html" in (raw as object)) {
-    const r = raw as Record<string, string>
-    return { html: r.html, title: r.title ?? "Website", slug: r.slug ?? "site" }
-  }
-
-  throw new Error("Website generation produced no HTML. The model may have hit its output limit — try again.")
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>${title}</title>
+<meta name="description" content="${metaDesc}">
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${metaDesc}">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="${brandColor}">
+${designCss}
+</head>
+<body>
+${sectionHtml}
+<script>
+${sharedJs}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"LocalBusiness","name":"${business.name}","description":"${metaDesc}","telephone":"${business.phone || ""}","address":{"@type":"PostalAddress","addressLocality":"${business.location || ""}"},"url":"https://${slug}.autopilot.ai"}
+</script>
+</body>
+</html>`
 }
 
-// ── Post-processing ───────────────────────────────────────────────────────────
-
-function postProcess(html: string, brandColor: string, brandInt: string): string {
-  return html
-    .replace(/BRAND_COLOR_PLACEHOLDER/g, brandColor)
-    .replace(/BRAND_INT_PLACEHOLDER/g,   brandInt)
-    .replace(/BRAND_COLOR/g, brandColor)
-    .replace(/BRAND_INT/g,   brandInt)
-}
-
-// ── #17 — Custom GLSL shader generator ───────────────────────────────────────
+// ── #17 Shader generator ──────────────────────────────────────────────────────
 
 export async function generateCustomShader(effectName: string): Promise<string> {
   try {
     const glsl = await runAgent(
-      `You are an expert GLSL shader programmer for Three.js ShaderMaterial.
-Output ONLY valid GLSL fragment shader code — no explanation, no markdown, no js wrapper.
-Requirements:
-- Declare at top: varying vec2 vUv; uniform float uTime; uniform vec3 uColor;
-- Output: gl_FragColor = vec4(rgb, alpha)
-- Animate using uTime, incorporate uColor for brand tinting
-- No texture samplers, no external uniforms beyond uTime and uColor
-- Max 5 loop iterations for GPU performance
-- Be visually impressive`,
-      `Effect: "${effectName}" — for a business website hero background on dark background. Output only GLSL.`,
-      { model: "haiku", maxTokens: 700, jsonMode: false }
+      `Generate GLSL fragment shader code only. No explanation. No markdown.
+Requirements: varying vec2 vUv; uniform float uTime; uniform vec3 uColor; output gl_FragColor.
+Animate with uTime. Use uColor for brand tinting. No texture samplers. Max 5 loop iterations.`,
+      `Effect: "${effectName}" — for a dark business website hero background. Output only GLSL.`,
+      { model: "haiku", maxTokens: 600, jsonMode: false }
     ) as string
-
-    return glsl.replace(/^```(?:glsl|c|cpp)?\n?/i, "").replace(/\n?```$/i, "").trim()
-  } catch {
-    return ""
-  }
+    return glsl.replace(/^```(?:glsl|c|cpp)?\n?/i,"").replace(/\n?```$/i,"").trim()
+  } catch { return "" }
 }
 
-// ── #2 — Compliance verifier ──────────────────────────────────────────────────
+// ── #2 Compliance verifier ────────────────────────────────────────────────────
 
 export async function verifyCompliance(html: string, directives: SiteDirectives): Promise<string[]> {
   const violations: string[] = []
-
-  if (directives.darkMode === false && /(--bg:\s*#0[0-2]|background:\s*#0[0-2])/i.test(html)) {
-    violations.push("DARK_BG: Light theme was requested but dark background CSS detected")
-  }
-  if (directives.darkMode === true && /(background:\s*(#fff|white)|--bg:\s*(#fff|white))/i.test(html)) {
-    violations.push("LIGHT_BG: Dark mode was requested but light background CSS detected")
-  }
-  if (directives.animationsEnabled === false && /gsap\.|ScrollTrigger|WebGLRenderer/i.test(html)) {
-    violations.push("ANIMATIONS_FOUND: Animations were disabled but GSAP/WebGL code exists in HTML")
-  }
-  for (const section of directives.sections) {
-    const kw = section.toLowerCase().replace(/[-_\s]/g, "")
-    if (!html.toLowerCase().replace(/[-_\s]/g, "").includes(kw)) {
-      violations.push(`SECTION_MISSING: Required section "${section}" not found in HTML`)
-    }
-  }
-  for (const item of directives.mustInclude) {
-    const kw = item.toLowerCase().split(/\s+/)[0]
-    if (!html.toLowerCase().includes(kw)) {
-      violations.push(`MUST_INCLUDE_MISSING: "${item}" was required but not found`)
-    }
-  }
+  if (directives.darkMode === false && /(--bg:\s*#0[0-2]|background:\s*#0[0-2])/i.test(html))
+    violations.push("DARK_BG: Light theme requested but dark background detected")
+  if (directives.animationsEnabled === false && /gsap\.|ScrollTrigger|WebGLRenderer/i.test(html))
+    violations.push("ANIMATIONS_FOUND: Animations disabled but GSAP/WebGL code found")
   for (const item of directives.mustExclude) {
     const kw = item.toLowerCase().split(/\s+/)[0]
-    if (kw.length > 3 && html.toLowerCase().includes(kw)) {
-      violations.push(`MUST_EXCLUDE_PRESENT: "${item}" was excluded but appears in HTML`)
-    }
+    if (kw.length > 3 && html.toLowerCase().includes(kw))
+      violations.push(`MUST_EXCLUDE: "${item}" found in HTML but excluded by user`)
   }
-
   return violations
 }
 
-// ── #4 — Diff-mode section editor ────────────────────────────────────────────
+// ── #4 Diff section editor ────────────────────────────────────────────────────
 
-const SECTION_MAP: Record<string, string[]> = {
-  nav:          ["nav", "navigation", "header", "menu", "top bar"],
-  hero:         ["hero", "banner", "above the fold", "headline", "main section", "top section"],
-  proof:        ["social proof", "marquee", "trust bar", "logos", "trust"],
-  services:     ["service", "offering", "what we do", "solution", "horizontal scroll"],
-  about:        ["about", "stats", "numbers", "our story", "company", "count up"],
-  process:      ["process", "how it works", "steps", "workflow", "our approach"],
-  testimonials: ["testimonial", "review", "what clients", "what customers"],
-  cta:          ["cta", "call to action", "get started", "final cta", "bottom cta"],
-  footer:       ["footer", "bottom", "links"],
+const SECTION_MAP: Record<string, SectionType> = {
+  nav: "nav", navigation: "nav", header: "nav", menu: "nav",
+  hero: "hero", banner: "hero", headline: "hero",
+  proof: "proof", marquee: "proof", trust: "proof",
+  services: "services", offerings: "services", "what we do": "services",
+  features: "features",
+  about: "about", story: "about", company: "about",
+  process: "process", "how it works": "process", steps: "process",
+  testimonials: "testimonials", reviews: "testimonials",
+  pricing: "pricing", plans: "pricing", packages: "pricing",
+  cta: "cta", "call to action": "cta", contact: "cta",
+  footer: "footer",
 }
 
-function detectSection(editRequest: string): string {
+function detectSection(editRequest: string): SectionType {
   const lower = editRequest.toLowerCase()
-  for (const [section, keywords] of Object.entries(SECTION_MAP)) {
-    if (keywords.some(kw => lower.includes(kw))) return section
+  for (const [kw, sec] of Object.entries(SECTION_MAP)) {
+    if (lower.includes(kw)) return sec
   }
   return "hero"
 }
 
-function extractSection(html: string, sectionName: string): { content: string; start: number; end: number } | null {
-  if (sectionName === "nav") {
+function extractSectionHtml(html: string, sectionType: SectionType): { content: string; start: number; end: number } | null {
+  if (sectionType === "nav") {
     const m = html.match(/<nav[\s\S]*?<\/nav>/i)
     if (!m || m.index === undefined) return null
     return { content: m[0], start: m.index, end: m.index + m[0].length }
   }
-  if (sectionName === "footer") {
+  if (sectionType === "footer") {
     const m = html.match(/<footer[\s\S]*?<\/footer>/i)
     if (!m || m.index === undefined) return null
     return { content: m[0], start: m.index, end: m.index + m[0].length }
   }
-
   const allSections = [...html.matchAll(/<section[\s\S]*?<\/section>/gi)]
-  const orderMap: Record<string, number> = {
-    hero: 0, proof: 1, services: 2, about: 3, process: 4, testimonials: 5, cta: 6
-  }
-  const idx = orderMap[sectionName] ?? 0
+  const orderMap: Record<string, number> = { hero:0,proof:1,services:2,features:2,about:3,stats:3,process:4,testimonials:5,pricing:5,gallery:4,cta:6 }
+  const idx = orderMap[sectionType] ?? 0
   const target = allSections[idx]
   if (!target || target.index === undefined) return null
   return { content: target[0], start: target.index, end: target.index + target[0].length }
@@ -917,274 +534,119 @@ export async function editSiteSection(
   editRequest: string,
   context: { business: { name: string; type: string }; brandColor: string; directives?: SiteDirectives }
 ): Promise<string> {
-  const sectionName = detectSection(editRequest)
-  const extracted   = extractSection(currentHtml, sectionName)
+  const sectionType = detectSection(editRequest)
+  const extracted   = extractSectionHtml(currentHtml, sectionType)
   if (!extracted) return currentHtml
 
-  const brandInt         = `0x${context.brandColor.replace("#", "")}`
-  const constraintBlock  = context.directives ? buildConstraintBlock(context.directives) : ""
+  const font    = getFontPair(context.business.type)
+  const techniques = selectTechniques(context.business.type, [sectionType], context.directives?.animationsEnabled ?? null)
+  const sysPrompt  = buildSectionSystemPrompt(techniques, context.directives, undefined, context.brandColor, font)
+  const brandInt   = `0x${context.brandColor.replace("#","")}`
 
-  const raw = await runAgent(
-    `You are an expert frontend engineer making a targeted edit to a single HTML section.
-Output ONLY the replacement section HTML — no explanation, no markdown fences, no surrounding page code.
-${constraintBlock}
-Preserve all CSS class naming conventions and design system from the original.
-Replace BRAND_COLOR_PLACEHOLDER → ${context.brandColor} and BRAND_INT_PLACEHOLDER → ${brandInt}.`,
-    `Business: ${context.business.name} (${context.business.type})
-Edit request: "${editRequest}"
-Target: ${sectionName} section
+  const raw = await runAgent(sysPrompt,
+    `Edit request: "${editRequest}"
+Business: ${context.business.name} (${context.business.type})
+Brand color: ${context.brandColor} | Int: ${brandInt}
 
-Current section HTML:
-${extracted.content.slice(0, 6000)}
+Current ${sectionType} HTML:
+${extracted.content.slice(0,5000)}
 
-Rewrite this section to fulfill the edit request exactly.
-Output ONLY the replacement section HTML — starting with <${sectionName === "nav" ? "nav" : sectionName === "footer" ? "footer" : "section"}.`,
-    { model: "sonnet", maxTokens: 6000, jsonMode: false }
+Rewrite this section to fulfill the edit request. Output ONLY the replacement HTML.`,
+    { model: "sonnet", maxTokens: 5000, jsonMode: false }
   ) as string
 
-  const cleaned   = raw.replace(/^```(?:html)?\n?/i, "").replace(/\n?```$/i, "").trim()
+  const cleaned = raw.replace(/^```(?:html)?\n?/i,"").replace(/\n?```$/i,"").trim()
   if (!cleaned || cleaned.length < 100) return currentHtml
 
-  const processed = cleaned
-    .replace(/BRAND_COLOR_PLACEHOLDER/g, context.brandColor)
-    .replace(/BRAND_INT_PLACEHOLDER/g, brandInt)
-
-  return currentHtml.slice(0, extracted.start) + processed + currentHtml.slice(extracted.end)
+  return currentHtml.slice(0, extracted.start) + cleaned + currentHtml.slice(extracted.end)
 }
 
-// ── #40 — CRO analysis + auto-fix ────────────────────────────────────────────
+// ── #40 CRO analysis ──────────────────────────────────────────────────────────
 
 export async function runCROAnalysis(html: string, businessName: string): Promise<CROResult> {
   const issues: CROIssue[] = []
-
-  // Heuristic checks (fast, no AI)
-  if (!/<h1[\s\S]{0,400}(get|save|grow|free|start|discover|transform|your)/i.test(html)) {
+  if (!/<h1[\s\S]{0,400}(get|save|grow|free|start|discover|transform|your)/i.test(html))
     issues.push({ severity: "high", issue: "Hero headline doesn't lead with a benefit", fix: "Rewrite H1 to open with the primary customer benefit in the first 5 words" })
-  }
-  if (!/<a[\s\S]{0,60}btn-primary/.test(html.slice(0, 4000))) {
-    issues.push({ severity: "critical", issue: "No primary CTA above the fold", fix: "Add a btn-primary CTA link inside the hero section" })
-  }
-  if (!/(4\.\d|5\.0|\d{2,}★|\d{3,}\+\s*(client|customer|review|project))/i.test(html.slice(0, 6000))) {
-    issues.push({ severity: "high", issue: "No social proof visible early in page", fix: "Add star rating and client count to hero badges or just below hero" })
-  }
-  if (!/(tel:|phone|\(\d{3}\)|\d{3}[-.\s]\d{3})/i.test(html)) {
-    issues.push({ severity: "medium", issue: "No phone number found", fix: "Add a phone number to the nav CTA and footer" })
-  }
-  if (!/<meta name="description"/i.test(html)) {
-    issues.push({ severity: "medium", issue: "Missing meta description (SEO)", fix: "Add a meta description tag to the <head> element" })
-  }
-
+  if (!/<a[\s\S]{0,60}btn-primary/.test(html.slice(0,4000)))
+    issues.push({ severity: "critical", issue: "No primary CTA above the fold", fix: "Add btn-primary CTA inside hero section" })
+  if (!/(4\.\d|5\.0|\d{2,}★|\d{3,}\+\s*(client|customer|review|project))/i.test(html.slice(0,6000)))
+    issues.push({ severity: "high", issue: "No social proof early in page", fix: "Add star rating and client count to hero badges" })
+  if (!/(tel:|phone|\(\d{3}\)|\d{3}[-.\s]\d{3})/i.test(html))
+    issues.push({ severity: "medium", issue: "No phone number found", fix: "Add phone number to nav and footer" })
+  if (!/<meta name="description"/i.test(html))
+    issues.push({ severity: "medium", issue: "Missing meta description", fix: "Add meta description to <head>" })
   if (issues.length === 0) return { issues: [], fixedHtml: html, score: 9.2 }
-
   try {
     const fixedRaw = await runAgent(
-      "You are a CRO expert. Apply the listed fixes to this website HTML. Output ONLY the complete corrected HTML document.",
-      `Business: ${businessName}
-Fixes to apply:
-${issues.map((iss, i) => `${i + 1}. [${iss.severity.toUpperCase()}] ${iss.fix}`).join("\n")}
-
-Current HTML:
-${html.slice(0, 9000)}
-${html.length > 9000 ? "\n[HTML truncated — apply fixes to the sections above and reconstruct the full document]" : ""}
-
-Output the complete fixed HTML.`,
+      "CRO expert. Apply all listed fixes to this HTML. Output ONLY the corrected HTML document.",
+      `Business: ${businessName}\nFixes:\n${issues.map((iss,i)=>`${i+1}. ${iss.fix}`).join("\n")}\n\nHTML:\n${html.slice(0,9000)}`,
       { model: "sonnet", maxTokens: 10000, jsonMode: false }
     ) as string
-
-    const match    = fixedRaw.match(/(<!DOCTYPE[\s\S]+<\/html>)/i)
-    const fixedHtml = match?.[1]?.trim() ?? html
-
-    return { issues, fixedHtml, score: 8.5 }
-  } catch {
-    return { issues, fixedHtml: html, score: 7.5 }
-  }
+    const match = fixedRaw.match(/(<!DOCTYPE[\s\S]+<\/html>)/i)
+    return { issues, fixedHtml: match?.[1]?.trim() ?? html, score: 8.5 }
+  } catch { return { issues, fixedHtml: html, score: 7.5 } }
 }
 
-// ── #39 — Competitor analysis ─────────────────────────────────────────────────
+// ── #39 Competitor analysis ───────────────────────────────────────────────────
 
-export async function analyzeCompetitor(
-  competitorUrl: string,
-  business: { name: string; type: string }
-): Promise<string> {
+export async function analyzeCompetitor(competitorUrl: string, business: { name: string; type: string }): Promise<string> {
   try {
     const controller = new AbortController()
     setTimeout(() => controller.abort(), 9000)
-
-    const res = await fetch(competitorUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; AutopilotSiteBuilder/1.0)", Accept: "text/html" },
-      signal: controller.signal,
-    })
+    const res = await fetch(competitorUrl, { headers: { "User-Agent": "Mozilla/5.0" }, signal: controller.signal })
     if (!res.ok) return ""
-
     const rawHtml = await res.text()
-    const text = rawHtml
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
-      .replace(/<style[\s\S]*?<\/style>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 5000)
-
+    const text = rawHtml.replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<style[\s\S]*?<\/style>/gi,"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim().slice(0,5000)
     const analysis = await runAgent(
-      "You analyze competitor websites and return strategic intelligence to help a rival site outperform them.",
-      `Competitor URL: ${competitorUrl}
-Our business: ${business.name} (${business.type})
-
-Competitor page text:
-${text}
-
-Extract:
-1. Their main headline/value proposition
-2. Sections they include
-3. CTAs they use (exact wording if possible)
-4. Weaknesses: what's generic, missing, or poorly written?
-5. Three specific ways our site should outperform them (stronger copy, missing sections, better trust signals, clearer CTA)
-
-Format as bullet points under each category.`,
-      { model: "haiku", maxTokens: 900 }
+      "Analyze competitor websites. Extract intelligence to help a rival outperform them.",
+      `Competitor: ${competitorUrl}\nOur business: ${business.name} (${business.type})\nText:\n${text}\n\nExtract: headline, sections, CTAs, weaknesses, 3 ways to outperform.`,
+      { model: "haiku", maxTokens: 800 }
     ) as string
-
-    return `━━━ COMPETITOR INTELLIGENCE (${competitorUrl}) ━━━
-${analysis}
-
-DIRECTIVE: Your generated site MUST outperform this competitor on all five dimensions above.
-Write stronger copy, include sections they're missing, and use more compelling CTAs.`
-  } catch {
-    return ""
-  }
-}
-
-// ── Improvement pass ──────────────────────────────────────────────────────────
-
-async function improveWebsite(
-  html: string,
-  score: number,
-  business: { name: string; type: string },
-  brandColor: string,
-  brandInt: string,
-  maxTokens: number,
-  directives?: SiteDirectives
-): Promise<string> {
-  if (directives?.animationsEnabled === false) return html
-
-  const checks = [
-    !html.includes("ShaderMaterial")                                          && "Add ShaderMaterial GLSL shader to Three.js hero plane",
-    !(html.includes("splitAndAnimate") || html.includes(".char"))             && "Add splitAndAnimate() letter-by-letter animation to hero headline and section headings",
-    !html.includes("lerp(")                                                   && "Add lerp() smooth custom cursor",
-    !html.includes("mapRange(")                                               && "Add mapRange() driving hero opacity from scroll position",
-    !html.includes("IntersectionObserver")                                    && "Add IntersectionObserver [data-reveal] on all section headings and cards",
-    !html.includes("ScrollTrigger")                                           && "Add GSAP ScrollTrigger stagger animations on every section",
-    !(html.includes("WebGLRenderer") || html.includes("IcosahedronGeometry")) && "Add Three.js WebGL hero canvas with icosahedron",
-    !(html.includes("page-loader") || html.includes("loader-bar"))           && "Add luxury page load sequence with animated percentage counter",
-    !html.includes("magnetic")                                                && "Add magnetic button effect to all CTA buttons",
-    !(html.includes("tilt-card") || html.includes("rotateY("))               && "Add 3D card tilt to service and testimonial cards",
-    !(html.includes("h-track") || html.includes("h-scroll"))                 && "Add GSAP horizontal scroll section for services",
-    !(html.includes("wipe-reveal") || html.includes("clip-path"))            && "Add clip-path wipe reveal to section headings",
-    !html.includes("chip")                                                    && "Add chip label above every section heading",
-    !html.includes("marquee")                                                 && "Add CSS marquee social proof bar",
-    !html.includes("hamburger")                                               && "Add hamburger mobile menu",
-    !html.includes("scrub")                                                   && "Add scrub:1 to GSAP ScrollTrigger for scroll-position-driven animation",
-    html.length < 45000                                                       && "HTML too short — expand all sections with substantially more content",
-  ].filter(Boolean) as string[]
-
-  if (checks.length === 0) return html
-
-  const improved = await runAgent(
-    buildSystemPrompt(_qualityBaseline, _totalGenerated, directives),
-    `Website for ${business.name} (${business.type}) scored ${score.toFixed(1)}/10.
-Baseline: ${_qualityBaseline.toFixed(1)}/10 — must beat it.
-
-ISSUES TO FIX:
-${checks.map((c, i) => `${i + 1}. ${c}`).join("\n")}
-
-Current HTML (first 8000 chars — rewrite the complete document with all fixes):
-${html.slice(0, 8000)}
-
-SITE_TITLE: ${business.name} — [Subtitle]
-SITE_SLUG: [slug]
-SITE_HTML:
-<!DOCTYPE html>
-...complete improved document...
-</html>`,
-    { jsonMode: false, maxTokens, model: "sonnet" }
-  )
-
-  const result = extractResult(improved)
-  return postProcess(result.html, brandColor, brandInt)
+    return `━━━ COMPETITOR INTEL (${competitorUrl}) ━━━\n${analysis}\nDIRECTIVE: outperform this competitor on all dimensions above.`
+  } catch { return "" }
 }
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
 export interface GenerateWebsiteParams {
-  business: {
-    name:        string
-    type:        string
-    description: string
-    location:    string
-    phone?:      string | null
-    website?:    string | null
-  }
+  business: { name: string; type: string; description: string; location: string; phone?: string | null; website?: string | null }
   brandVoice:         Record<string, unknown>
   brandColor:         string
   services:           string[]
   tagline?:           string
   reviews?:           Array<{ reviewerName: string; rating: number; reviewText: string }>
   researchContext?:   string
-  // #1 #3 — command-driven
   directives?:        SiteDirectives
-  // #17 — pre-generated shader
   shaderGlsl?:        string
-  // #10 — style cloned from reference URL
   styleCloneContext?: string
-  // #30 — vision analysis of reference image
   imageContext?:      string
-  // #39 — competitor intelligence
   competitorContext?: string
-  // #4 — diff editing
   currentHtml?:       string
   editSection?:       string
-  // #40 — CRO pass
   runCRO?:            boolean
-  // #36 — live business data
-  businessLiveData?:  {
-    leadCount:     number
-    reviewCount:   number
-    avgRating:     number
-    recentContent: string[]
-    totalRevenue?: string
-  }
+  businessLiveData?:  { leadCount: number; reviewCount: number; avgRating: number; recentContent: string[]; totalRevenue?: string }
 }
 
 export interface GenerateWebsiteResult {
-  html:                 string
-  title:                string
-  slug:                 string
-  qualityScore:         number
-  iterations:           number
-  researchUsed:         boolean
-  directives:           SiteDirectives | null
-  complianceViolations: string[]
-  croResult:            CROResult | null
+  html: string; title: string; slug: string
+  qualityScore: number; iterations: number; researchUsed: boolean
+  directives: SiteDirectives | null; complianceViolations: string[]; croResult: CROResult | null
 }
 
-// ── Main export ───────────────────────────────────────────────────────────────
+// ── Main export — section-by-section pipeline (Item A) ───────────────────────
 
 export async function generateWebsite(params: GenerateWebsiteParams): Promise<GenerateWebsiteResult> {
-  const {
-    business, brandColor, services, tagline, reviews = [],
-    researchContext, directives, shaderGlsl, styleCloneContext,
-    imageContext, competitorContext, currentHtml, editSection,
-    runCRO, businessLiveData,
-  } = params
+  const { business, brandColor, services, tagline, reviews = [], researchContext,
+    directives, shaderGlsl, styleCloneContext, imageContext, competitorContext,
+    currentHtml, editSection, runCRO, businessLiveData } = params
 
-  const brandInt = `0x${brandColor.replace("#", "")}`
+  const brandInt = `0x${brandColor.replace("#","")}`
 
-  // #4 — Diff editing: skip full generation and edit only the target section
+  // #4 — Diff edit: bypass full generation
   if (editSection && currentHtml) {
     const editedHtml = await editSiteSection(currentHtml, editSection, {
       business: { name: business.name, type: business.type },
-      brandColor,
-      directives,
+      brandColor, directives,
     })
     const violations = directives ? await verifyCompliance(editedHtml, directives) : []
     return {
@@ -1194,159 +656,97 @@ export async function generateWebsite(params: GenerateWebsiteParams): Promise<Ge
     }
   }
 
-  const reviewText = reviews.length > 0
-    ? reviews.slice(0, 4).map(r => `• ${r.reviewerName}: "${r.reviewText}" (${r.rating}/5)`).join("\n")
-    : "(Generate 3 realistic testimonials from real-sounding clients in the business's city)"
+  // ── Step 1: Plan sections by business type ──────────────────────────────────
+  const sectionPlan = planSections(business.type, directives)
 
-  const serviceList = services.length > 0
-    ? services.slice(0, 6).join(" | ")
-    : `Core ${business.type} services`
+  // ── Step 2: Select techniques ───────────────────────────────────────────────
+  const techniques = selectTechniques(business.type, sectionPlan, directives?.animationsEnabled ?? null)
 
+  // ── Step 3: Font pair ───────────────────────────────────────────────────────
+  const font = getFontPair(business.type)
+
+  // ── Step 4: Research context merge ─────────────────────────────────────────
   const contextParts: string[] = []
-
-  if (researchContext) {
-    contextParts.push(`━━━ RESEARCH & REAL BUSINESS DATA ━━━\nUse this real information — prefer it over generic content:\n${researchContext}`)
+  if (researchContext)    contextParts.push(researchContext)
+  if (styleCloneContext)  contextParts.push(styleCloneContext)
+  if (imageContext)       contextParts.push(imageContext)
+  if (competitorContext)  contextParts.push(competitorContext)
+  if (businessLiveData?.recentContent?.length) {
+    contextParts.push(`Live content topics: ${businessLiveData.recentContent.slice(0,3).join(", ")}`)
   }
-  if (styleCloneContext) contextParts.push(styleCloneContext)
-  if (imageContext)      contextParts.push(`━━━ REFERENCE IMAGE DESIGN INTENT ━━━\n${imageContext}`)
-  if (competitorContext) contextParts.push(competitorContext)
+  const mergedContext = contextParts.join("\n\n").slice(0, 2000)
 
-  // #36 — Live business data
-  if (businessLiveData) {
-    const lines = ["━━━ LIVE BUSINESS DATA (embed in social proof and stats) ━━━"]
-    if (businessLiveData.leadCount > 0)    lines.push(`• ${businessLiveData.leadCount} active leads in CRM`)
-    if (businessLiveData.reviewCount > 0)  lines.push(`• ${businessLiveData.reviewCount} reviews, avg ${businessLiveData.avgRating.toFixed(1)}/5`)
-    if (businessLiveData.totalRevenue)     lines.push(`• Revenue milestone: ${businessLiveData.totalRevenue}`)
-    if (businessLiveData.recentContent.length > 0) {
-      lines.push(`• Recent content topics: ${businessLiveData.recentContent.slice(0, 3).join(", ")}`)
-    }
-    lines.push("Use these real numbers in stat counters, hero badges, and social proof sections.")
-    contextParts.push(lines.join("\n"))
-  }
-
-  // #38 — Agent-fed blog section
-  if (businessLiveData?.recentContent && businessLiveData.recentContent.length >= 2) {
-    contextParts.push(`━━━ BLOG SECTION (Content Factory output) ━━━
-Add a blog preview section with these recent posts as cards (title, excerpt, Read More CTA):
-${businessLiveData.recentContent.slice(0, 3).map((c, i) => `${i + 1}. ${c}`).join("\n")}`)
+  const sectionParams = {
+    business: { name: business.name, type: business.type, location: business.location, phone: business.phone, description: business.description },
+    brandColor, brandInt, services,
+    tagline, reviews,
+    font: { display: font.display, body: font.body },
+    techniques, directives, shaderGlsl,
+    researchContext: mergedContext || undefined,
+    competitorContext: competitorContext || undefined,
+    businessLiveData,
   }
 
-  const combinedContext = contextParts.join("\n\n")
+  // ── Step 5: Generate CSS design system ─────────────────────────────────────
+  const designCss = await generateDesignCss({
+    business: { name: business.name, type: business.type, location: business.location },
+    brandColor, tagline, font, techniques, directives,
+  })
 
-  const userPrompt = `Build a complete, award-winning website for this business using ALL 15 techniques from the system prompt.
+  // ── Step 6: Generate sections in batches of 3 (rate-limit safe) ────────────
+  const sectionResults: Array<{ type: SectionType; html: string }> = []
 
-BUSINESS:
-Name: ${business.name}
-Type: ${business.type}
-Location: ${business.location || "Nationwide"}
-Phone: ${business.phone || "(realistic local placeholder)"}
-Tagline: ${tagline || "(generate a powerful specific tagline)"}
-Brand Color: ${brandColor} → Three.js int: ${brandInt}
-Services: ${serviceList}
-${business.description ? `About: ${business.description}` : ""}
-
-${combinedContext ? combinedContext + "\n" : ""}TESTIMONIALS:
-${reviewText}
-
-SUBSTITUTIONS:
-  BRAND_COLOR_PLACEHOLDER → ${brandColor}
-  BRAND_INT_PLACEHOLDER   → ${brandInt}
-  Select the premium font pair from the PREMIUM FONT PAIRING table that best matches "${business.type}".
-  Import both fonts via @import at the top of <style>.
-  Set --font-display and --font-body CSS variables to the chosen fonts.
-  Apply font-family: var(--font-display) to ALL headings and font-family: var(--font-body) to body/p/buttons.
-
-QUALITY: Must beat ${(_qualityBaseline + 0.2).toFixed(1)}/10. Include all 15 techniques, 9 sections (unless overridden), real copy, SEO meta tags + JSON-LD.
-
-SITE_TITLE: ${business.name} — [Compelling Subtitle]
-SITE_SLUG: ${makeSlug(business.name)}
-SITE_HTML:
-<!DOCTYPE html>
-...complete website...
-</html>`
-
-  const hasAnthropic = !!(process.env.ANTHROPIC_API_KEY)
-  // Groq free tier: 6K TPM. Keep output at 8K so total request stays within limits.
-  // 8K output tokens ≈ 32KB of HTML — plenty for a complete site with all 15 techniques.
-  const maxTokens = hasAnthropic ? 12000 : 8000
-
-  const raw   = await runAgent(
-    buildSystemPrompt(_qualityBaseline, _totalGenerated, directives, shaderGlsl),
-    userPrompt,
-    { jsonMode: false, maxTokens, model: "sonnet" }
-  )
-  const pass1 = extractResult(raw)
-  let   html  = postProcess(pass1.html, brandColor, brandInt)
-  let   iterations = 1
-
-  let qualityScore = await scoreGeneratedSite(html, business.name, business.type)
-
-  // Improvement pass runs regardless of provider — Groq can do it too
-  if (qualityScore < _qualityBaseline) {
-    const improved = await improveWebsite(
-      html, qualityScore, business, brandColor, brandInt,
-      Math.min(maxTokens, 16000), directives
+  for (let i = 0; i < sectionPlan.length; i += 3) {
+    const batch = sectionPlan.slice(i, i + 3)
+    const batchResults = await Promise.allSettled(
+      batch.map(type => generateSectionHtml(type, sectionParams))
     )
-    if (improved.length > html.length * 0.6) {
-      html = improved
-      qualityScore = await scoreGeneratedSite(html, business.name, business.type)
-      iterations = 2
+    for (let j = 0; j < batch.length; j++) {
+      const result = batchResults[j]
+      sectionResults.push({
+        type: batch[j],
+        html: result.status === "fulfilled" ? result.value : `<section class="${batch[j]}-section"><p>Section generation failed — retry</p></section>`,
+      })
     }
   }
 
-  // #2 — Compliance check + patch (runs on all providers)
+  // ── Step 7: Generate shared JS ──────────────────────────────────────────────
+  const sharedJs = await generateSharedJs({
+    business: { name: business.name, type: business.type },
+    brandColor, brandInt, techniques, sections: sectionPlan, directives,
+  })
+
+  // ── Step 8: Assemble ────────────────────────────────────────────────────────
+  const title = `${business.name} — ${business.type} in ${business.location || "USA"}`
+  const slug  = makeSlug(business.name)
+
+  let html = assembleHtml({
+    business: { name: business.name, type: business.type, location: business.location, phone: business.phone },
+    brandColor, font, designCss,
+    sections: sectionResults,
+    sharedJs, title, slug,
+  })
+
+  // ── Step 9: Compliance check ────────────────────────────────────────────────
   const complianceViolations = directives ? await verifyCompliance(html, directives) : []
 
-  if (complianceViolations.length > 0) {
-    try {
-      const patchedRaw = await runAgent(
-        buildSystemPrompt(_qualityBaseline, _totalGenerated, directives, shaderGlsl),
-        `Fix these compliance violations in the generated site:
-${complianceViolations.map((v, i) => `${i + 1}. ${v}`).join("\n")}
-
-Current HTML (fix violations and output complete corrected site):
-${html.slice(0, 8000)}
-
-SITE_TITLE: ${pass1.title}
-SITE_SLUG: ${pass1.slug}
-SITE_HTML:
-<!DOCTYPE html>...`,
-        { jsonMode: false, maxTokens: Math.min(maxTokens, 16000), model: "sonnet" }
-      )
-      const patchResult = extractResult(patchedRaw)
-      if (patchResult.html.length > html.length * 0.5) {
-        html = postProcess(patchResult.html, brandColor, brandInt)
-      }
-    } catch {
-      // Non-blocking
-    }
-  }
-
+  // ── Step 10: Score ──────────────────────────────────────────────────────────
+  const qualityScore = await scoreGeneratedSite(html, business.name, business.type)
   raiseQualityBaseline(qualityScore)
 
-  // #40 — CRO pass (optional)
+  // ── Step 11: CRO pass (optional) ────────────────────────────────────────────
   let croResult: CROResult | null = null
   if (runCRO) {
     try {
       croResult = await runCROAnalysis(html, business.name)
-      if (croResult.fixedHtml && croResult.fixedHtml.length > html.length * 0.5) {
-        html = croResult.fixedHtml
-      }
-    } catch {
-      // Non-blocking
-    }
+      if (croResult.fixedHtml && croResult.fixedHtml.length > html.length * 0.5) html = croResult.fixedHtml
+    } catch { /* non-blocking */ }
   }
 
   return {
-    html,
-    title:        pass1.title,
-    slug:         pass1.slug,
-    qualityScore,
-    iterations,
+    html, title, slug, qualityScore, iterations: 1,
     researchUsed: !!(researchContext || styleCloneContext || imageContext || competitorContext),
-    directives:   directives ?? null,
-    complianceViolations,
-    croResult,
+    directives: directives ?? null, complianceViolations, croResult,
   }
 }
 
@@ -1359,48 +759,30 @@ export interface MultiPageSite {
 
 export async function generateMultiPageSite(params: GenerateWebsiteParams): Promise<MultiPageSite> {
   const home = await generateWebsite(params)
-
   const rootMatch = home.html.match(/:root\s*\{[\s\S]*?\}/)
   const sharedDesignSystem = rootMatch ? rootMatch[0] : ""
-
   const navMatch    = home.html.match(/<nav[\s\S]*?<\/nav>/i)
   const footerMatch = home.html.match(/<footer[\s\S]*?<\/footer>/i)
   const sharedNav    = navMatch    ? navMatch[0]    : ""
   const sharedFooter = footerMatch ? footerMatch[0] : ""
 
   const pageConfigs = [
-    { slug: `${home.slug}-about`,    title: `${params.business.name} — About Us`,  focus: "about page: company story, team, values, mission.", section: "About" },
-    { slug: `${home.slug}-services`, title: `${params.business.name} — Services`,  focus: "services page: detailed descriptions, pricing tiers, process, FAQs.", section: "Services" },
-    { slug: `${home.slug}-contact`,  title: `${params.business.name} — Contact`,   focus: "contact page: form, phone, email, address, hours, map placeholder.", section: "Contact" },
+    { slug: `${home.slug}-about`,    title: `${params.business.name} — About`,    focus: "about page: story, team, values, credentials" },
+    { slug: `${home.slug}-services`, title: `${params.business.name} — Services`, focus: "services page: descriptions, pricing, process, FAQ" },
+    { slug: `${home.slug}-contact`,  title: `${params.business.name} — Contact`,  focus: "contact page: form, phone, email, address, hours, map" },
   ]
 
   const pageResults = await Promise.allSettled(
-    pageConfigs.map(async ({ slug, title, focus, section }) => {
+    pageConfigs.map(async ({ slug, title, focus }) => {
       const raw = await runAgent(
-        `You are an expert frontend engineer. Build a complete inner page matching the home page's design system.
-Output EXACTLY:
-PAGE_HTML:
-<!DOCTYPE html>
-[complete page]
-</html>`,
-        `Business: ${params.business.name} (${params.business.type})
-Page: ${section} — ${focus}
-
-SHARED CSS: ${sharedDesignSystem}
-SHARED NAV: ${sharedNav.slice(0, 3000)}
-SHARED FOOTER: ${sharedFooter.slice(0, 2000)}
-RESEARCH: ${params.researchContext ?? "(none)"}
-
-Build a complete, polished ${section} page. Same fonts, colors, CSS vars as home.
-Link to home: <a href="index.html">Home</a>
-Slug: ${slug}
-Title: ${title}`,
-        { model: "sonnet", maxTokens: 10000, jsonMode: false }
+        `Build a complete inner page for an existing website. Same design system as home.
+Output: PAGE_HTML:\n<!DOCTYPE html>\n[page]\n</html>`,
+        `Business: ${params.business.name} (${params.business.type})\nFocus: ${focus}\nCSS: ${sharedDesignSystem}\nNav: ${sharedNav.slice(0,2000)}\nFooter: ${sharedFooter.slice(0,1500)}\nSlug: ${slug}\nTitle: ${title}`,
+        { model: "sonnet", maxTokens: 8000, jsonMode: false }
       ) as string
-
       const htmlStart = raw.indexOf("PAGE_HTML:")
       let pageHtml = htmlStart >= 0 ? raw.slice(htmlStart + 10).trim() : raw.trim()
-      pageHtml = pageHtml.replace(/^```(?:html)?\n?/i, "").replace(/\n?```$/i, "").trim()
+      pageHtml = pageHtml.replace(/^```(?:html)?\n?/i,"").replace(/\n?```$/i,"").trim()
       return { slug, title, html: pageHtml }
     })
   )
