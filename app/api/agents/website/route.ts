@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+
+export const maxDuration = 300
 import { prisma } from "@/lib/prisma"
 import {
   generateWebsite,

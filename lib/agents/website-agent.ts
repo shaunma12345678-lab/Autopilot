@@ -633,7 +633,133 @@ export interface GenerateWebsiteResult {
   directives: SiteDirectives | null; complianceViolations: string[]; croResult: CROResult | null
 }
 
-// ── Main export — section-by-section pipeline (Item A) ───────────────────────
+// ── Single-call system prompt builder (lean — uses technique library) ─────────
+// System prompt: ~2,500 tokens (was 10,000+). Frees 6K+ tokens for HTML output.
+
+function buildGenerationSystemPrompt(
+  techniques: TechniqueKey[],
+  sections: SectionType[],
+  font: { import: string; display: string; body: string },
+  brandColor: string,
+  qualityBaseline: number,
+  generationCount: number,
+  directives?: SiteDirectives,
+  shaderGlsl?: string,
+): string {
+  const mandate = generationCount === 0
+    ? "Build the highest-quality website you are capable of — target 9+/10."
+    : `QUALITY MANDATE: previous sites scored ${qualityBaseline.toFixed(1)}/10. You MUST exceed ${(qualityBaseline+.2).toFixed(1)}/10. No ceiling.`
+
+  const constraints = directives ? buildConstraintBlock(directives, shaderGlsl) : ""
+
+  const techBlock = buildTechniqueBlock(techniques)
+
+  return `You are the world's best frontend engineer. You build complete single-file HTML websites that match the quality of Linear (linear.app), Vercel (vercel.com), Framer (framer.com), and Awwwards SOTY winners like Igloo Inc.
+
+${mandate}
+
+${constraints}━━━ OUTPUT FORMAT — output ONLY this, nothing else ━━━
+SITE_TITLE: [compelling title]
+SITE_SLUG: [url-slug]
+SITE_HTML:
+<!DOCTYPE html>
+[complete website]
+</html>
+
+━━━ CDN (always include these 3 script tags in <head>) ━━━
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+
+━━━ FONTS + CSS FOUNDATION ━━━
+@import url('${font.import}');
+:root {
+  --brand: BRAND_COLOR; --brand-dark: color-mix(in srgb,var(--brand) 62%,black);
+  --brand-glow: color-mix(in srgb,var(--brand) 22%,transparent);
+  --brand-subtle: color-mix(in srgb,var(--brand) 8%,transparent);
+  --text:#f1f5f9; --text-muted:#8892a4; --bg:#070710; --bg-alt:#0c0c1a;
+  --surface:rgba(255,255,255,.035); --border:rgba(255,255,255,.06);
+  --radius:12px; --radius-lg:24px; --radius-pill:999px;
+  --shadow-brand:0 0 60px var(--brand-glow);
+  --font-display:'${font.display}',serif; --font-body:'${font.body}',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth} body{background:var(--bg);color:var(--text);overflow-x:hidden;font-family:var(--font-body);-webkit-font-smoothing:antialiased}
+section{padding:clamp(7rem,14vw,14rem) clamp(1.5rem,6vw,7rem)}
+h1{font-family:var(--font-display);font-size:clamp(4.5rem,11vw,13rem);line-height:.92;letter-spacing:-.04em;font-weight:700}
+h2{font-family:var(--font-display);font-size:clamp(3rem,6.5vw,8rem);line-height:.95;letter-spacing:-.03em;font-weight:700}
+h3{font-family:var(--font-display);font-size:clamp(1.5rem,2.8vw,2.5rem);line-height:1.1;letter-spacing:-.02em;font-weight:600}
+p{font-family:var(--font-body);font-size:clamp(.975rem,1.1vw,1.05rem);line-height:1.75;color:var(--text-muted)}
+a{color:inherit;text-decoration:none} img{max-width:100%}
+.text-gradient{background:linear-gradient(135deg,var(--brand),color-mix(in srgb,var(--brand) 55%,#fff));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.text-outline{-webkit-text-stroke:1.5px currentColor;color:transparent;opacity:.35}
+.overline{font-family:var(--font-body);font-size:.6rem;letter-spacing:.3em;text-transform:uppercase;font-weight:600;color:var(--brand);display:inline-block;margin-bottom:1.2rem}
+.chip{display:inline-block;padding:.3rem 1rem;border:1px solid var(--brand);border-radius:var(--radius-pill);font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:var(--brand);margin-bottom:1.2rem;background:var(--brand-subtle)}
+.btn-primary{display:inline-flex;align-items:center;gap:.5rem;padding:.875rem 2.2rem;background:var(--brand);color:#fff;font-weight:700;font-size:.95rem;letter-spacing:.02em;border-radius:var(--radius-pill);border:none;cursor:pointer;transition:transform .25s,box-shadow .25s,filter .25s;will-change:transform;font-family:var(--font-body)}
+.btn-primary:hover{transform:translateY(-2px) scale(1.02);box-shadow:var(--shadow-brand);filter:brightness(1.1)}
+.btn-ghost{display:inline-flex;align-items:center;gap:.5rem;padding:.875rem 2.2rem;background:transparent;color:var(--text);font-weight:600;font-size:.95rem;border:1.5px solid var(--border);border-radius:var(--radius-pill);cursor:pointer;transition:border-color .25s,background .25s;font-family:var(--font-body)}
+.btn-ghost:hover{border-color:var(--brand);background:var(--brand-glow)}
+.btn-arrow .arr{display:inline-block;transition:transform .3s ease} .btn-arrow:hover .arr{transform:translateX(5px)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem 2rem;backdrop-filter:blur(14px);transition:transform .35s cubic-bezier(.25,.46,.45,.94),box-shadow .35s,border-color .35s;will-change:transform}
+.card:hover{transform:translateY(-10px);box-shadow:0 28px 70px var(--brand-glow),0 0 0 1px var(--brand);border-color:var(--brand)}
+body::after{content:'';position:fixed;inset:0;z-index:9997;pointer-events:none;opacity:.22;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+━━━ SECTION PLAN — build these sections in this order ━━━
+${sections.map((s,i)=>`${i+1}. ${s.toUpperCase()}`).join("\n")}
+
+━━━ TECHNIQUE REFERENCE ━━━
+${techBlock}
+
+━━━ TYPOGRAPHY RULES (non-negotiable) ━━━
+• Hero h1 MUST be two lines: <span class="text-outline">Line One</span> / <span class="text-gradient">Line Two</span>
+• All h2 use class="section-headline wipe-reveal", all preceded by <div class="overline"> or <div class="chip">
+• Body paragraphs use class="reveal-blur", headings use [data-reveal]
+• Every .card gets class="tilt-card", every primary CTA gets class="magnetic btn-arrow"
+• data-cursor-text="VIEW" on image/gallery sections, "DRAG" on h-track, "EXPLORE" on hero
+
+━━━ CONTENT RULES (non-negotiable) ━━━
+• Hero: 3-6 words per line, bold specific claim, one sentence sub (no filler)
+• All stats: specific real numbers ("1,847 Roofs" not "Many projects")
+• Testimonials: first name + last initial, city, specific outcome with a dollar amount or % where relevant
+• No: "world-class" "industry-leading" "passionate about" "dedicated to" "cutting-edge" "seamless"
+• CTAs: action + outcome ("Get Your Free Estimate" not "Contact Us")
+• Section h2: bold statement or specific question (not generic label)
+
+━━━ CODE RULES ━━━
+• No inline comments. Concise production code.
+• Use all CSS vars — never hardcode hex colors
+• Replace BRAND_COLOR with actual brand hex, BRAND_INT with Three.js 0xRRGGBB hex
+• Complete implementation — every section fully realized, no placeholders`
+}
+
+// ── Output extractor ──────────────────────────────────────────────────────────
+
+function extractResult(raw: unknown): { html: string; title: string; slug: string } {
+  const text = typeof raw === "string" ? raw : JSON.stringify(raw)
+  const titleMatch = text.match(/SITE_TITLE:\s*(.+)/i)
+  const slugMatch  = text.match(/SITE_SLUG:\s*([a-z0-9-]+)/i)
+  const htmlMatch  = text.match(/SITE_HTML:\s*\r?\n?(<!DOCTYPE[\s\S]+)/i)
+  if (htmlMatch?.[1]) return { html: htmlMatch[1].trim(), title: titleMatch?.[1]?.trim() ?? "Business Website", slug: slugMatch?.[1]?.trim() ?? "website" }
+  const bareHtml = text.match(/(<!DOCTYPE[\s\S]+<\/html>)/i)
+  if (bareHtml?.[1]) return { html: bareHtml[1].trim(), title: titleMatch?.[1]?.trim() ?? "Business Website", slug: slugMatch?.[1]?.trim() ?? "website" }
+  if (raw && typeof raw === "object" && "html" in (raw as object)) {
+    const r = raw as Record<string,string>
+    return { html: r.html, title: r.title ?? "Website", slug: r.slug ?? "site" }
+  }
+  throw new Error("No HTML generated. Try again.")
+}
+
+// ── Post-process brand color placeholders ─────────────────────────────────────
+
+function postProcess(html: string, brandColor: string, brandInt: string): string {
+  return html
+    .replace(/BRAND_COLOR_PLACEHOLDER/g, brandColor)
+    .replace(/BRAND_INT_PLACEHOLDER/g, brandInt)
+    .replace(/BRAND_COLOR/g, brandColor)
+    .replace(/BRAND_INT/g, brandInt)
+}
+
+// ── Main export — single smart call with lean prompt ─────────────────────────
 
 export async function generateWebsite(params: GenerateWebsiteParams): Promise<GenerateWebsiteResult> {
   const { business, brandColor, services, tagline, reviews = [], researchContext,
@@ -656,85 +782,112 @@ export async function generateWebsite(params: GenerateWebsiteParams): Promise<Ge
     }
   }
 
-  // ── Step 1: Plan sections by business type ──────────────────────────────────
-  const sectionPlan = planSections(business.type, directives)
+  // Plan sections + select techniques + font pair
+  const sections   = planSections(business.type, directives)
+  const techniques = selectTechniques(business.type, sections, directives?.animationsEnabled ?? null)
+  const font       = getFontPair(business.type)
 
-  // ── Step 2: Select techniques ───────────────────────────────────────────────
-  const techniques = selectTechniques(business.type, sectionPlan, directives?.animationsEnabled ?? null)
-
-  // ── Step 3: Font pair ───────────────────────────────────────────────────────
-  const font = getFontPair(business.type)
-
-  // ── Step 4: Research context merge ─────────────────────────────────────────
+  // Merge all research context
   const contextParts: string[] = []
-  if (researchContext)    contextParts.push(researchContext)
-  if (styleCloneContext)  contextParts.push(styleCloneContext)
-  if (imageContext)       contextParts.push(imageContext)
-  if (competitorContext)  contextParts.push(competitorContext)
-  if (businessLiveData?.recentContent?.length) {
-    contextParts.push(`Live content topics: ${businessLiveData.recentContent.slice(0,3).join(", ")}`)
-  }
-  const mergedContext = contextParts.join("\n\n").slice(0, 2000)
+  if (researchContext)   contextParts.push(researchContext)
+  if (styleCloneContext) contextParts.push(styleCloneContext)
+  if (imageContext)      contextParts.push(imageContext)
+  if (competitorContext) contextParts.push(competitorContext)
+  if (businessLiveData?.recentContent?.length)
+    contextParts.push(`Live content: ${businessLiveData.recentContent.slice(0,3).join(", ")}`)
+  if (businessLiveData?.reviewCount)
+    contextParts.push(`Reviews: ${businessLiveData.reviewCount} avg ${businessLiveData.avgRating.toFixed(1)}/5`)
+  const mergedContext = contextParts.join("\n").slice(0, 1500)
 
-  const sectionParams = {
-    business: { name: business.name, type: business.type, location: business.location, phone: business.phone, description: business.description },
-    brandColor, brandInt, services,
-    tagline, reviews,
-    font: { display: font.display, body: font.body },
-    techniques, directives, shaderGlsl,
-    researchContext: mergedContext || undefined,
-    competitorContext: competitorContext || undefined,
-    businessLiveData,
-  }
+  const reviewText = reviews.length > 0
+    ? reviews.slice(0,4).map(r=>`• ${r.reviewerName}: "${r.reviewText}" (${r.rating}/5)`).join("\n")
+    : "(generate 3 specific real-sounding testimonials from the business's city)"
 
-  // ── Step 5: Generate CSS design system ─────────────────────────────────────
-  const designCss = await generateDesignCss({
-    business: { name: business.name, type: business.type, location: business.location },
-    brandColor, tagline, font, techniques, directives,
-  })
+  const serviceList = services.slice(0,6).join(" | ") || `Core ${business.type} services`
 
-  // ── Step 6: Generate sections in batches of 3 (rate-limit safe) ────────────
-  const sectionResults: Array<{ type: SectionType; html: string }> = []
+  const systemPrompt = buildGenerationSystemPrompt(
+    techniques, sections, font, brandColor,
+    _qualityBaseline, _totalGenerated, directives, shaderGlsl
+  )
 
-  for (let i = 0; i < sectionPlan.length; i += 3) {
-    const batch = sectionPlan.slice(i, i + 3)
-    const batchResults = await Promise.allSettled(
-      batch.map(type => generateSectionHtml(type, sectionParams))
-    )
-    for (let j = 0; j < batch.length; j++) {
-      const result = batchResults[j]
-      sectionResults.push({
-        type: batch[j],
-        html: result.status === "fulfilled" ? result.value : `<section class="${batch[j]}-section"><p>Section generation failed — retry</p></section>`,
-      })
+  const userPrompt = `Build the complete website for:
+Name: ${business.name}
+Type: ${business.type}
+Location: ${business.location || "Nationwide"}
+Phone: ${business.phone || "(use realistic local placeholder)"}
+Tagline: ${tagline || "(generate a bold specific tagline for this business)"}
+Brand color: ${brandColor} → Three.js int: ${brandInt}
+Services: ${serviceList}
+${business.description ? `About: ${business.description}` : ""}
+${mergedContext ? `\nContext:\n${mergedContext}` : ""}
+
+Reviews for testimonials section:
+${reviewText}
+
+Replace BRAND_COLOR with ${brandColor}, BRAND_INT with ${brandInt}
+Use font-family: '${font.display}' for headings, '${font.body}' for body text.
+
+SITE_TITLE: ${business.name} — [Compelling Subtitle]
+SITE_SLUG: ${makeSlug(business.name)}
+SITE_HTML:
+<!DOCTYPE html>
+...`
+
+  // Groq free tier: 8K output tokens ≈ 32KB of complete HTML
+  const hasAnthropic = !!(process.env.ANTHROPIC_API_KEY)
+  const maxTokens    = hasAnthropic ? 12000 : 8000
+
+  const raw    = await runAgent(systemPrompt, userPrompt, { jsonMode: false, maxTokens, model: "sonnet" })
+  const pass1  = extractResult(raw)
+  let   html   = postProcess(pass1.html, brandColor, brandInt)
+  let   iterations = 1
+
+  // Score
+  let qualityScore = await scoreGeneratedSite(html, business.name, business.type)
+
+  // Improvement pass if score is below baseline (checks for missing techniques)
+  if (qualityScore < _qualityBaseline) {
+    const missing = [
+      !html.includes("ShaderMaterial")    && "add Three.js ShaderMaterial GLSL shader to hero canvas",
+      !html.includes("revealWords")       && "add revealWords() word-level clip-path reveal on .hero-headline",
+      !html.includes("ScrollTrigger")     && "add GSAP ScrollTrigger stagger animations on sections",
+      !html.includes("tilt-card")         && "add .tilt-card 3D tilt on all .card elements",
+      !html.includes("page-loader")       && "add page-loader div with JS counter 0→100%",
+      !html.includes("text-gradient")     && "add .text-gradient and .text-outline split on hero h1",
+      !html.includes("body::after")       && "add CSS grain texture body::after SVG overlay",
+      !html.includes("magnetic")          && "add magnetic button effect on .btn-primary elements",
+      html.length < 20000                 && "site is too short — expand all sections with complete content",
+    ].filter(Boolean).join("; ")
+
+    if (missing) {
+      try {
+        const improved = await runAgent(systemPrompt,
+          `The site for ${business.name} scored ${qualityScore.toFixed(1)}/10 — below the ${_qualityBaseline.toFixed(1)} baseline.
+Fix these specific issues: ${missing}
+
+Current HTML (first 6000 chars):
+${html.slice(0,6000)}
+[Rewrite the complete site with all issues fixed]
+
+SITE_TITLE: ${pass1.title}
+SITE_SLUG: ${pass1.slug}
+SITE_HTML:
+<!DOCTYPE html>...`,
+          { jsonMode: false, maxTokens: Math.min(maxTokens, 10000), model: "sonnet" }
+        )
+        const result = extractResult(improved)
+        if (result.html.length > html.length * 0.5) {
+          html = postProcess(result.html, brandColor, brandInt)
+          qualityScore = await scoreGeneratedSite(html, business.name, business.type)
+          iterations = 2
+        }
+      } catch { /* non-blocking */ }
     }
   }
 
-  // ── Step 7: Generate shared JS ──────────────────────────────────────────────
-  const sharedJs = await generateSharedJs({
-    business: { name: business.name, type: business.type },
-    brandColor, brandInt, techniques, sections: sectionPlan, directives,
-  })
-
-  // ── Step 8: Assemble ────────────────────────────────────────────────────────
-  const title = `${business.name} — ${business.type} in ${business.location || "USA"}`
-  const slug  = makeSlug(business.name)
-
-  let html = assembleHtml({
-    business: { name: business.name, type: business.type, location: business.location, phone: business.phone },
-    brandColor, font, designCss,
-    sections: sectionResults,
-    sharedJs, title, slug,
-  })
-
-  // ── Step 9: Compliance check ────────────────────────────────────────────────
   const complianceViolations = directives ? await verifyCompliance(html, directives) : []
-
-  // ── Step 10: Score ──────────────────────────────────────────────────────────
-  const qualityScore = await scoreGeneratedSite(html, business.name, business.type)
   raiseQualityBaseline(qualityScore)
 
-  // ── Step 11: CRO pass (optional) ────────────────────────────────────────────
   let croResult: CROResult | null = null
   if (runCRO) {
     try {
@@ -744,7 +897,8 @@ export async function generateWebsite(params: GenerateWebsiteParams): Promise<Ge
   }
 
   return {
-    html, title, slug, qualityScore, iterations: 1,
+    html, title: pass1.title, slug: pass1.slug,
+    qualityScore, iterations,
     researchUsed: !!(researchContext || styleCloneContext || imageContext || competitorContext),
     directives: directives ?? null, complianceViolations, croResult,
   }
