@@ -215,27 +215,84 @@ SITE_HTML:
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
-Google Fonts via CSS @import only — never <link> tags
+Google Fonts: @import in <style> — TWO fonts always: one display/heading, one body. Use the premium pair for the industry.
 
-━━━ CSS FOUNDATION ━━━
+━━━ PREMIUM FONT PAIRING — pick the exact pair for the business type ━━━
+Luxury · Real Estate · Interior Design · Jewelry:
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Jost:wght@300;400;500&display=swap');
+  --font-display: 'Cormorant Garamond', serif;  --font-body: 'Jost', sans-serif;
+
+Bold · Construction · Sports · Auto · Security:
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap');
+  --font-display: 'Bebas Neue', sans-serif;  --font-body: 'Plus Jakarta Sans', sans-serif;
+
+Tech · SaaS · AI · Software · Startup:
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500&display=swap');
+  --font-display: 'Space Grotesk', sans-serif;  --font-body: 'Inter', sans-serif;
+
+Creative · Agency · Design · Media · Film:
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500&display=swap');
+  --font-display: 'Syne', sans-serif;  --font-body: 'DM Sans', sans-serif;
+
+Legal · Finance · Consulting · Insurance · Medical:
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Source+Sans+3:wght@400;600&display=swap');
+  --font-display: 'Playfair Display', serif;  --font-body: 'Source Sans 3', sans-serif;
+
+Food · Hospitality · Restaurant · Wellness · Spa:
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500&display=swap');
+  --font-display: 'DM Serif Display', serif;  --font-body: 'DM Sans', sans-serif;
+
+Fashion · Streetwear · Music · Entertainment:
+  @import url('https://fonts.googleapis.com/css2?family=Syne+Mono&family=Plus+Jakarta+Sans:wght@400;600&display=swap');
+  --font-display: 'Syne Mono', monospace;  --font-body: 'Plus Jakarta Sans', sans-serif;
+
+Default (anything else):
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@400;700;900&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap');
+  --font-display: 'Fraunces', serif;  --font-body: 'Plus Jakarta Sans', sans-serif;
+
+━━━ CSS FOUNDATION — $10,000-level typographic standards ━━━
 :root {
   --brand: BRAND_COLOR_PLACEHOLDER;
   --brand-dark: color-mix(in srgb, var(--brand) 62%, black);
   --brand-glow: color-mix(in srgb, var(--brand) 22%, transparent);
-  --text: #f1f5f9; --text-muted: #94a3b8;
-  --bg: #070710; --bg-alt: #0d0d1a;
-  --surface: rgba(255,255,255,0.04); --border: rgba(255,255,255,0.07);
-  --radius: 14px; --radius-lg: 28px; --radius-pill: 999px;
-  --shadow-brand: 0 0 50px var(--brand-glow);
+  --brand-subtle: color-mix(in srgb, var(--brand) 8%, transparent);
+  --text: #f1f5f9; --text-muted: #8892a4;
+  --bg: #070710; --bg-alt: #0c0c1a;
+  --surface: rgba(255,255,255,0.035); --border: rgba(255,255,255,0.06);
+  --radius: 12px; --radius-lg: 24px; --radius-pill: 999px;
+  --shadow-brand: 0 0 60px var(--brand-glow);
+  --font-display: 'Fraunces', serif;
+  --font-body: 'Plus Jakarta Sans', sans-serif;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
-body { background: var(--bg); color: var(--text); overflow-x: hidden; }
-section { padding: clamp(5rem, 11vw, 10rem) clamp(1.5rem, 6vw, 7rem); }
-h1 { font-size: clamp(3.2rem, 7.5vw, 8rem); line-height: 1.02; }
-h2 { font-size: clamp(2.2rem, 4.5vw, 4.5rem); line-height: 1.08; }
+body { background: var(--bg); color: var(--text); overflow-x: hidden; font-family: var(--font-body); font-size: 1rem; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+section { padding: clamp(7rem, 14vw, 14rem) clamp(1.5rem, 6vw, 7rem); }
+
+/* HEADLINE SCALE — Awwwards-level. Large, tight, negative-tracked. */
+h1 { font-family: var(--font-display); font-size: clamp(4.5rem, 11vw, 13rem); line-height: 0.92; letter-spacing: -0.04em; font-weight: 700; }
+h2 { font-family: var(--font-display); font-size: clamp(3rem, 6.5vw, 8rem); line-height: 0.95; letter-spacing: -0.03em; font-weight: 700; }
+h3 { font-family: var(--font-display); font-size: clamp(1.5rem, 2.8vw, 2.5rem); line-height: 1.1; letter-spacing: -0.02em; font-weight: 600; }
+p { font-family: var(--font-body); font-size: clamp(0.975rem, 1.1vw, 1.05rem); line-height: 1.75; color: var(--text-muted); }
 a { color: inherit; text-decoration: none; }
 img { max-width: 100%; }
+
+/* PREMIUM TEXT EFFECTS — use these on hero headline words */
+.text-gradient {
+  background: linear-gradient(135deg, var(--brand) 0%, color-mix(in srgb, var(--brand) 55%, #fff) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.text-outline {
+  -webkit-text-stroke: 1.5px currentColor; color: transparent;
+  opacity: 0.35;
+}
+/* Mix gradient + outline for split hero effect:
+   Line 1 of h1 → class="text-outline"  (subtle, large)
+   Line 2 of h1 → class="text-gradient" (vivid, brand color)
+   This is the #1 typographic technique on Awwwards-winning sites. */
+
+/* Overline chip — above every section heading */
+.overline { font-family: var(--font-body); font-size: 0.6rem; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 600; color: var(--brand); display: inline-block; margin-bottom: 1.2rem; }
 
 ━━━ TECHNIQUE 1 — SCROLL TRACKING ━━━
 <div id="scroll-bar" style="position:fixed;top:0;left:0;height:3px;background:var(--brand);z-index:1000;width:0;transition:width 0.08s linear;pointer-events:none;will-change:width"></div>
@@ -308,27 +365,59 @@ gsap.from('.hero-sub',     { opacity:0, y:24, duration:0.85, ease:'power3.out', 
 gsap.from('.hero-cta',     { opacity:0, y:28, duration:0.85, ease:'back.out(1.7)', delay:1.1, stagger:0.14 });
 gsap.from('.hero-badges',  { opacity:0, y:20, duration:0.7, ease:'power2.out', delay:1.4 });
 
-━━━ TECHNIQUE 5 — TEXT SPLITTING ━━━
-function splitAndAnimate(selector, opts={}) {
+━━━ TECHNIQUE 5 — KINETIC TYPOGRAPHY (Awwwards standard) ━━━
+// WORD REVEAL — clip-path slide up (used by Igloo, Cartier, Active Theory)
+// Each word masked inside its own overflow:hidden container.
+// Result: words emerge from below like theatre curtain — not a basic fade.
+function revealWords(selector, opts={}) {
   document.querySelectorAll(selector).forEach(el => {
-    const words = el.textContent.split(' ');
-    el.style.perspective = '800px';
-    el.innerHTML = words.map(w =>
-      '<span style="display:inline-block;overflow:hidden;vertical-align:top;margin-right:.22em">' +
-      [...w].map(c => '<span class="char" style="display:inline-block;will-change:transform">' + (c||'') + '</span>').join('') +
-      '</span>'
-    ).join('');
-    const chars = el.querySelectorAll('.char');
-    gsap.from(chars, {
-      opacity:0, y:'105%', rotationX:-85,
-      duration:opts.dur||0.65, stagger:opts.stag||0.026,
-      ease:opts.ease||'power4.out', delay:opts.delay||0,
-      scrollTrigger:opts.scroll ? { trigger:el, start:'top 88%', once:true } : undefined
+    // Preserve existing HTML (spans with classes like text-gradient stay intact)
+    const nodes = Array.from(el.childNodes);
+    el.innerHTML = '';
+    nodes.forEach(node => {
+      if (node.nodeType === 3) { // text node — split into words
+        node.textContent.split(/(\s+)/).forEach(part => {
+          if (!part.trim()) { el.appendChild(document.createTextNode(part)); return; }
+          const wrap = document.createElement('span');
+          wrap.style.cssText = 'display:inline-block;overflow:hidden;vertical-align:bottom;margin-right:.12em';
+          const inner = document.createElement('span');
+          inner.className = 'word-inner';
+          inner.style.cssText = 'display:inline-block;will-change:transform';
+          inner.textContent = part;
+          wrap.appendChild(inner);
+          el.appendChild(wrap);
+        });
+      } else { // element node (e.g. <span class="text-gradient">) — wrap as single unit
+        const wrap = document.createElement('span');
+        wrap.style.cssText = 'display:inline-block;overflow:hidden;vertical-align:bottom;margin-right:.12em';
+        const inner = document.createElement('span');
+        inner.className = 'word-inner';
+        inner.style.cssText = 'display:inline-block;will-change:transform';
+        inner.appendChild(node.cloneNode(true));
+        wrap.appendChild(inner);
+        el.appendChild(wrap);
+      }
+    });
+    gsap.from(el.querySelectorAll('.word-inner'), {
+      y: '115%', opacity: 0,
+      duration: opts.dur || 1.1,
+      stagger: opts.stag || 0.07,
+      ease: opts.ease || 'power4.out',
+      delay: opts.delay || 0,
+      scrollTrigger: opts.scroll ? { trigger: el, start: 'top 85%', once: true } : undefined
     });
   });
 }
-splitAndAnimate('.hero-headline', { delay:0.3 });
-splitAndAnimate('.section-headline', { scroll:true, dur:0.6, stag:0.022 });
+revealWords('.hero-headline', { delay: 0.25, dur: 1.3, stag: 0.09 });
+revealWords('.section-headline', { scroll: true, dur: 1.1, stag: 0.07 });
+
+// BLUR REVEAL on body text and subheadings
+gsap.utils.toArray('.reveal-blur').forEach(el => {
+  gsap.from(el, {
+    opacity: 0, filter: 'blur(12px)', y: 20, duration: 1.2, ease: 'power3.out',
+    scrollTrigger: { trigger: el, start: 'top 88%', once: true }
+  });
+});
 
 ━━━ TECHNIQUE 6 — MAP RANGE ━━━
 const mapRange = (v,a,b,c,d) => c + ((Math.min(Math.max(v,a),b)-a)/(b-a))*(d-c);
@@ -438,20 +527,37 @@ try {
   if(_canvas) _canvas.style.background='radial-gradient(ellipse at 50% 55%, BRAND_COLOR_PLACEHOLDER 0%, #070710 68%)';
 }
 
-Hero HTML:
-<section class="hero" data-cursor="image">
+Hero HTML — MANDATORY STRUCTURE (every hero must follow this):
+<section class="hero" data-cursor="image" style="position:relative;min-height:100svh;display:flex;align-items:center;overflow:hidden">
   <canvas id="hero-canvas" style="position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none"></canvas>
-  <div class="hero-content" style="position:relative;z-index:1;will-change:transform,opacity">
-    <div class="hero-eyebrow">...</div>
-    <h1 class="hero-headline">...</h1>
-    <p class="hero-sub">...</p>
-    <div class="hero-cta-group hero-cta">
-      <a class="btn-primary magnetic btn-arrow">Get Started <span class="arr">→</span></a>
+  <div class="hero-content" style="position:relative;z-index:1;will-change:transform,opacity;padding:0 clamp(1.5rem,6vw,7rem);max-width:1400px;width:100%">
+    <!-- Overline: short uppercase label -->
+    <div class="overline hero-eyebrow">Trusted Since 2018 · 3,200+ Clients Served</div>
+    <!-- Hero headline: TWO LINES. Line 1 = outline text (decorative). Line 2 = gradient text (vivid). -->
+    <h1 class="hero-headline" style="margin:1rem 0 2rem">
+      <span class="text-outline" style="display:block">The Standard</span>
+      <span class="text-gradient" style="display:block">Everyone Compares To</span>
+    </h1>
+    <!-- Subheading: one sentence max. Blur-reveal class. -->
+    <p class="hero-sub reveal-blur" style="max-width:520px;font-size:clamp(1.05rem,1.5vw,1.25rem);line-height:1.65;margin-bottom:2.5rem">
+      Write one powerful, specific sentence about what makes this business different. No filler.
+    </p>
+    <!-- CTA row -->
+    <div class="hero-cta-group hero-cta" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center;margin-bottom:3rem">
+      <a class="btn-primary magnetic btn-arrow">Get Your Free Quote <span class="arr">→</span></a>
       <a class="btn-ghost">See Our Work</a>
     </div>
-    <div class="hero-badges">...</div>
+    <!-- Trust badges row — real specific numbers -->
+    <div class="hero-badges reveal-blur" style="display:flex;flex-wrap:wrap;gap:2.5rem;padding-top:2rem;border-top:1px solid var(--border)">
+      <div><div style="font-family:var(--font-display);font-size:2.2rem;font-weight:700;letter-spacing:-.03em;color:var(--brand)">3,200+</div><div style="font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">Clients Served</div></div>
+      <div><div style="font-family:var(--font-display);font-size:2.2rem;font-weight:700;letter-spacing:-.03em;color:var(--brand)">4.9★</div><div style="font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">Average Rating</div></div>
+      <div><div style="font-family:var(--font-display);font-size:2.2rem;font-weight:700;letter-spacing:-.03em;color:var(--brand)">18yrs</div><div style="font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">In Business</div></div>
+    </div>
   </div>
 </section>
+
+IMPORTANT: Use display font for ALL h1, h2, h3. Use outline + gradient split on EVERY hero headline.
+Write real specific numbers in badges. One-sentence subheading max. No generic filler copy.
 
 ━━━ BUTTON STYLES ━━━
 .btn-primary { display:inline-flex;align-items:center;gap:.5rem;padding:.875rem 2.2rem;background:var(--brand);color:#fff;font-weight:700;font-size:.95rem;letter-spacing:.02em;border-radius:var(--radius-pill);border:none;cursor:pointer;transition:transform .25s,box-shadow .25s,filter .25s;will-change:transform; }
@@ -637,11 +743,25 @@ Always implement the closest GSAP equivalent.
 Include in <head>: <title>, <meta name="description">, <meta property="og:title">, <meta property="og:description">
 Include before </body>: JSON-LD schema (LocalBusiness or Organization)
 
-━━━ CONTENT STANDARDS ━━━
-- Real compelling marketing copy — no generic filler
-- Specific believable stats ("1,400+ Roofs Installed" not "Many projects")
-- Real-sounding testimonials from the business's city/industry
-- Action-driven CTAs ("Get Your Free Estimate", "Talk to an Expert")`
+━━━ TYPOGRAPHY RULES — non-negotiable ━━━
+1. Import TWO Google Fonts — display font for headings, body font for paragraphs/buttons.
+   Pick the premium pair from the PREMIUM FONT PAIRING table above that best fits the business type.
+2. Apply: h1,h2,h3,.hero-headline,.section-headline { font-family: var(--font-display); }
+          body,p,.btn-primary,.nav-links,input,textarea { font-family: var(--font-body); }
+3. Every hero headline MUST use the outline + gradient split pattern (line 1 = .text-outline, line 2 = .text-gradient)
+4. Every section heading must be massive — h2 at clamp(3rem, 6.5vw, 8rem) minimum
+5. Add class="reveal-blur" to every p.hero-sub, every stat label, and the hero badges div
+6. Negative letter-spacing on ALL headings: h1 → -0.04em, h2 → -0.03em, h3 → -0.02em
+7. Section padding must be generous: clamp(7rem, 14vw, 14rem) top/bottom
+
+━━━ CONTENT STANDARDS — $10,000 copywriting level ━━━
+- Hero headline: 3–6 words max per line. Bold claim, no clichés.
+- Subheading: ONE sentence. Specific differentiator. No "we are committed to excellence."
+- Stats: specific and credible ("1,847 Roofs Installed" not "Many projects"). Real numbers.
+- Testimonials: first name + last initial, real city, specific outcome ("saved us $4,200 on our roof")
+- CTAs: action + outcome ("Get Your Free Roof Estimate", "Book a 15-min Strategy Call")
+- Section headlines: statement or question, never generic ("Why Phoenix Homeowners Choose Us" not "Our Services")
+- NO: "world-class", "industry-leading", "cutting-edge", "seamless", "passionate about", "dedicated to"`
 }
 
 // ── Output extractor ──────────────────────────────────────────────────────────
@@ -1131,8 +1251,10 @@ ${reviewText}
 SUBSTITUTIONS:
   BRAND_COLOR_PLACEHOLDER → ${brandColor}
   BRAND_INT_PLACEHOLDER   → ${brandInt}
-  DISPLAY_FONT            → best Google Font for "${business.type}"
-  BODY_FONT               → matching body font
+  Select the premium font pair from the PREMIUM FONT PAIRING table that best matches "${business.type}".
+  Import both fonts via @import at the top of <style>.
+  Set --font-display and --font-body CSS variables to the chosen fonts.
+  Apply font-family: var(--font-display) to ALL headings and font-family: var(--font-body) to body/p/buttons.
 
 QUALITY: Must beat ${(_qualityBaseline + 0.2).toFixed(1)}/10. Include all 15 techniques, 9 sections (unless overridden), real copy, SEO meta tags + JSON-LD.
 
