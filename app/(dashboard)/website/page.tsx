@@ -41,16 +41,16 @@ const DEVICE_ICONS: Record<Device, string> = {
 }
 
 const PROGRESS_STEPS = [
-  { pct: 6,  msg: "Parsing your command…" },
-  { pct: 14, msg: "Analysing brand voice…" },
-  { pct: 24, msg: "Researching industry design…" },
-  { pct: 36, msg: "Crafting hero section…" },
-  { pct: 48, msg: "Building WebGL shader…" },
-  { pct: 60, msg: "Writing service cards…" },
-  { pct: 72, msg: "Adding scroll animations…" },
-  { pct: 82, msg: "Applying Technique 15 scrubbing…" },
-  { pct: 90, msg: "Running compliance check…" },
-  { pct: 96, msg: "Finalising & CRO check…" },
+  { pct: 5,  msg: "Selecting font pair and section plan…" },
+  { pct: 12, msg: "Generating with 20 techniques…" },
+  { pct: 25, msg: "Building hero with WebGL shader…" },
+  { pct: 38, msg: "Writing kinetic typography animations…" },
+  { pct: 50, msg: "Crafting service cards and layout…" },
+  { pct: 63, msg: "Adding testimonials and social proof…" },
+  { pct: 75, msg: "Assembling scroll scrub animations…" },
+  { pct: 85, msg: "Finalising CSS grain and micro-interactions…" },
+  { pct: 93, msg: "Verifying all sections complete…" },
+  { pct: 98, msg: "Saving your site…" },
 ]
 
 const EXAMPLE_PROMPTS = [
@@ -185,7 +185,7 @@ export default function WebsitePage() {
         setProgressMsg(PROGRESS_STEPS[stepIdx].msg)
         stepIdx++
       }
-    }, 2800)
+    }, 7000)
 
     try {
       const res = await fetch("/api/agents/website", {

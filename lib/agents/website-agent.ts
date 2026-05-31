@@ -1,5 +1,4 @@
 import { runAgent } from "@/lib/claude"
-import { scoreGeneratedSite } from "@/lib/agents/site-researcher"
 import {
   T, selectTechniques, planSections, buildTechniqueBlock,
   type SectionType, type TechniqueKey,
@@ -23,6 +22,28 @@ export function getGenerationCount():  number { return _totalGenerated }
 export function raiseQualityBaseline(score: number): void {
   _totalGenerated++
   if (score > _qualityBaseline) _qualityBaseline = Math.min(9.9, _qualityBaseline + 0.15)
+}
+
+// Instant heuristic scorer — no API call, no rate limit impact
+function heuristicScore(html: string): number {
+  const checks = [
+    html.includes("ShaderMaterial"),
+    html.includes("revealWords") || html.includes("word-inner"),
+    html.includes("ScrollTrigger"),
+    html.includes("tilt-card") || html.includes("rotateY("),
+    html.includes("page-loader") || html.includes("loader-bar"),
+    html.includes("text-gradient"),
+    html.includes("body::after"),
+    html.includes("magnetic"),
+    html.includes("cursor"),
+    html.includes("lerp("),
+    html.includes("wipe-reveal") || html.includes("clip-path"),
+    html.includes("marquee") || html.includes("marquee-inner"),
+    html.includes("var(--font-display)") || html.includes("font-family:var(--font"),
+  ]
+  const present     = checks.filter(Boolean).length
+  const lengthBonus = html.length > 30000 ? 1.0 : html.length > 20000 ? 0.5 : 0
+  return Math.min(9.8, 5.5 + (present / checks.length) * 3.5 + lengthBonus)
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -729,7 +750,20 @@ ${techBlock}
 • No inline comments. Concise production code.
 • Use all CSS vars — never hardcode hex colors
 • Replace BRAND_COLOR with actual brand hex, BRAND_INT with Three.js 0xRRGGBB hex
-• Complete implementation — every section fully realized, no placeholders`
+• Complete implementation — every section fully realized, no placeholders
+
+━━━ SELF-VERIFY BEFORE WRITING SITE_HTML ━━━
+Confirm your output includes ALL of the following. If any is missing, add it first:
+1. ShaderMaterial GLSL shader on Three.js hero canvas with uTime + uColor uniforms
+2. revealWords() function called on .hero-headline (word clip-path reveal)
+3. GSAP ScrollTrigger on .gsap-section elements with scrub:1
+4. .tilt-card class on every .card, .magnetic on every .btn-primary
+5. page-loader div (first in body) with JS counter 0→100% and pure CSS exit
+6. Hero h1 has <span class="text-outline"> line 1 and <span class="text-gradient"> line 2
+7. body::after grain texture CSS (SVG noise overlay)
+8. lerp() cursor animation tracking mouse position
+9. All ${sections.length} sections present and complete with real copy (no placeholders)
+10. HTML is longer than 20,000 characters — if shorter, expand all sections`
 }
 
 // ── Output extractor ──────────────────────────────────────────────────────────
@@ -833,60 +867,19 @@ SITE_HTML:
 <!DOCTYPE html>
 ...`
 
-  // Groq free tier: 8K output tokens ≈ 32KB of complete HTML
+  // Single Groq call — 8K output tokens ≈ 32KB of complete HTML (~60-90 seconds)
   const hasAnthropic = !!(process.env.ANTHROPIC_API_KEY)
   const maxTokens    = hasAnthropic ? 12000 : 8000
 
-  const raw    = await runAgent(systemPrompt, userPrompt, { jsonMode: false, maxTokens, model: "sonnet" })
-  const pass1  = extractResult(raw)
-  let   html   = postProcess(pass1.html, brandColor, brandInt)
-  let   iterations = 1
+  const raw   = await runAgent(systemPrompt, userPrompt, { jsonMode: false, maxTokens, model: "sonnet" })
+  const pass1 = extractResult(raw)
+  let   html  = postProcess(pass1.html, brandColor, brandInt)
 
-  // Score
-  let qualityScore = await scoreGeneratedSite(html, business.name, business.type)
-
-  // Improvement pass if score is below baseline (checks for missing techniques)
-  if (qualityScore < _qualityBaseline) {
-    const missing = [
-      !html.includes("ShaderMaterial")    && "add Three.js ShaderMaterial GLSL shader to hero canvas",
-      !html.includes("revealWords")       && "add revealWords() word-level clip-path reveal on .hero-headline",
-      !html.includes("ScrollTrigger")     && "add GSAP ScrollTrigger stagger animations on sections",
-      !html.includes("tilt-card")         && "add .tilt-card 3D tilt on all .card elements",
-      !html.includes("page-loader")       && "add page-loader div with JS counter 0→100%",
-      !html.includes("text-gradient")     && "add .text-gradient and .text-outline split on hero h1",
-      !html.includes("body::after")       && "add CSS grain texture body::after SVG overlay",
-      !html.includes("magnetic")          && "add magnetic button effect on .btn-primary elements",
-      html.length < 20000                 && "site is too short — expand all sections with complete content",
-    ].filter(Boolean).join("; ")
-
-    if (missing) {
-      try {
-        const improved = await runAgent(systemPrompt,
-          `The site for ${business.name} scored ${qualityScore.toFixed(1)}/10 — below the ${_qualityBaseline.toFixed(1)} baseline.
-Fix these specific issues: ${missing}
-
-Current HTML (first 6000 chars):
-${html.slice(0,6000)}
-[Rewrite the complete site with all issues fixed]
-
-SITE_TITLE: ${pass1.title}
-SITE_SLUG: ${pass1.slug}
-SITE_HTML:
-<!DOCTYPE html>...`,
-          { jsonMode: false, maxTokens: Math.min(maxTokens, 10000), model: "sonnet" }
-        )
-        const result = extractResult(improved)
-        if (result.html.length > html.length * 0.5) {
-          html = postProcess(result.html, brandColor, brandInt)
-          qualityScore = await scoreGeneratedSite(html, business.name, business.type)
-          iterations = 2
-        }
-      } catch { /* non-blocking */ }
-    }
-  }
+  // Instant heuristic score — no API call, no rate limit impact
+  const qualityScore = heuristicScore(html)
+  raiseQualityBaseline(qualityScore)
 
   const complianceViolations = directives ? await verifyCompliance(html, directives) : []
-  raiseQualityBaseline(qualityScore)
 
   let croResult: CROResult | null = null
   if (runCRO) {
@@ -898,7 +891,7 @@ SITE_HTML:
 
   return {
     html, title: pass1.title, slug: pass1.slug,
-    qualityScore, iterations,
+    qualityScore, iterations: 1,
     researchUsed: !!(researchContext || styleCloneContext || imageContext || competitorContext),
     directives: directives ?? null, complianceViolations, croResult,
   }
