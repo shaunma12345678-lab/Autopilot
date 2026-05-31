@@ -1462,6 +1462,7 @@ function SitesPanel({ password }: { password: string }) {
   const [genError, setGenError]         = useState("")
   const [progress, setProgress]         = useState(0)
   const [progressMsg, setProgressMsg]   = useState("")
+  const [genElapsed, setGenElapsed]     = useState(0)
   const [prompt, setPrompt]             = useState("")
   const [imageRefUrl, setImageRefUrl]   = useState("")
   const [questions, setQuestions]       = useState<string[]>([])
@@ -1526,7 +1527,9 @@ function SitesPanel({ password }: { password: string }) {
       return editSection(userPrompt.trim())
     }
 
-    setGenerating(true); setGenError(""); setProgress(0); setProgressMsg(""); setQuestions([])
+    setGenerating(true); setGenError(""); setProgress(0); setProgressMsg(""); setQuestions([]); setGenElapsed(0)
+    const _startTime = Date.now()
+    const _elapsedTimer = setInterval(() => setGenElapsed(Math.floor((Date.now() - _startTime) / 1000)), 1000)
     setChatHistory(prev => [...prev, { role: "user", text: userPrompt }])
 
     const historyText = chatHistory
@@ -1634,11 +1637,13 @@ function SitesPanel({ password }: { password: string }) {
         }
       }
     } catch (e) {
+      clearInterval(_elapsedTimer)
       setGenError(e instanceof Error ? e.message : "Failed")
       setChatHistory(prev => [...prev, { role: "ai", text: "Something went wrong. Please try again." }])
     } finally {
+      clearInterval(_elapsedTimer)
       setGenerating(false)
-      setTimeout(() => { setProgress(0); setProgressMsg("") }, 1400)
+      setTimeout(() => { setProgress(0); setProgressMsg(""); setGenElapsed(0) }, 1400)
     }
   }
 
@@ -1783,18 +1788,27 @@ function SitesPanel({ password }: { password: string }) {
                 <div className="w-7 h-7 rounded-lg bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center shrink-0">
                   <span className="text-xs text-indigo-400">AP</span>
                 </div>
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl rounded-bl-md px-4 py-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="flex gap-1">
-                      {[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />)}
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl rounded-bl-md px-4 py-3 min-w-[260px]">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex gap-1">
+                        {[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />)}
+                      </div>
+                      <span className="text-xs text-gray-300">{progressMsg || "Building your website…"}</span>
                     </div>
-                    <span className="text-xs text-gray-400">{progressMsg || "Building your website…"}</span>
+                    <span className="text-xs text-gray-600 tabular-nums shrink-0">
+                      {genElapsed > 0 ? `${Math.floor(genElapsed / 60)}:${String(genElapsed % 60).padStart(2,"0")}` : "0:00"}
+                    </span>
                   </div>
-                  {progress > 0 && (
-                    <div className="w-48 h-1 bg-gray-800 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${progress}%`, background: "linear-gradient(90deg,#4f46e5,#7c3aed)" }} />
-                    </div>
-                  )}
+                  <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{ width: `${Math.max(progress, 3)}%`, background: "linear-gradient(90deg,#4f46e5,#7c3aed)" }}
+                    />
+                  </div>
+                  <p className="text-xs text-gray-700 mt-1.5">
+                    {genElapsed < 30 ? "Usually takes 1–2 minutes…" : genElapsed < 90 ? "Almost there — AI is writing your site…" : "This is a complex site — nearly done…"}
+                  </p>
                 </div>
               </div>
             )}

@@ -128,8 +128,8 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        // Step 1: Parse prompt
-        send("progress", { msg: "Parsing your description…", pct: 5 })
+        // Step 1: Parse business info from prompt
+        send("progress", { msg: "Understanding your business…", pct: 8 })
         const parsed = await parsePrompt(prompt, history)
 
         if (parsed.needsMoreInfo || !parsed.name) {
@@ -142,73 +142,84 @@ export async function POST(request: NextRequest) {
           return
         }
 
-        // Step 2: CSS scraping
-        send("progress", { msg: "Deep-scraping existing site code…", pct: 12 })
+        send("progress", { msg: `Got it — building site for ${parsed.name}…`, pct: 18 })
 
-        // Step 3: Vision analysis (if imageUrl provided)
+        // Step 2: Run research + directive parsing in parallel (both fast)
         let visionContext = ""
         if (imageUrl) {
-          send("progress", { msg: "Analyzing with AI vision…", pct: 22 })
-          visionContext = await analyzeScreenshot(imageUrl)
+          visionContext = await analyzeScreenshot(imageUrl).catch(() => "")
         }
 
-        // Step 4: Research pipeline (URL scraping + CSS + Tavily — parallel)
-        send("progress", { msg: "Extracting CSS design system…", pct: 22 })
-        let researchContext = ""
-        let researchMeta    = { urlScraped: false, tavilyUsed: false }
+        let researchContext  = ""
+        let researchMeta     = { urlScraped: false, tavilyUsed: false }
         let designSystemData: { colors: string[]; fonts: string[]; framework: string } | null = null
 
-        try {
-          const research = await buildResearchContext(
+        const [researchResult, directivesResult] = await Promise.allSettled([
+          buildResearchContext(
             prompt,
             { name: parsed.name, type: parsed.type, location: parsed.location },
             visionContext || undefined
-          )
+          ).catch(() => null),
+          parseUserCommand(prompt).catch(() => null),
+        ])
+
+        if (researchResult.status === "fulfilled" && researchResult.value) {
+          const research = researchResult.value
           researchContext = research.combined
           researchMeta    = { urlScraped: research.urlScraped, tavilyUsed: research.tavilyUsed }
-
           if (research.designSystem) {
-            designSystemData = {
-              colors:    research.designSystem.colors,
-              fonts:     research.designSystem.fonts,
-              framework: research.designSystem.framework,
-            }
-            send("design_system", {
-              colors:    research.designSystem.colors,
-              fonts:     research.designSystem.fonts,
-              framework: research.designSystem.framework,
-            })
+            designSystemData = { colors: research.designSystem.colors, fonts: research.designSystem.fonts, framework: research.designSystem.framework }
+            send("design_system", designSystemData)
           }
-        } catch {
-          // Research is best-effort — never block generation
         }
 
-        // Step 5: Parse style directives from the user's full prompt
-        send("progress", { msg: "Parsing style directives…", pct: 44 })
-        const directives = await parseUserCommand(prompt).catch(() => null)
+        const directives = directivesResult.status === "fulfilled" ? directivesResult.value : null
 
-        // Step 6: Generate site
-        send("progress", { msg: "Generating with 15 techniques…", pct: 55 })
-        const result = await generateWithRetry({
-          business: {
-            name:        parsed.name,
-            type:        parsed.type,
-            description: parsed.description,
-            location:    parsed.location,
-            phone:       parsed.phone    || null,
-            website:     parsed.website  || null,
-          },
-          brandVoice:      {},
-          brandColor:      parsed.brandColor,
-          services:        parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
-          tagline:         parsed.tagline || undefined,
-          reviews:         [],
-          researchContext: researchContext || undefined,
-          directives:      directives ?? undefined,
-        })
+        // Step 3: Generate — send heartbeat every 8s so UI shows live progress
+        send("progress", { msg: "Generating your website with 20 techniques…", pct: 35 })
 
-        // Step 7: Done
-        send("progress", { msg: "Finalizing…", pct: 95 })
+        const generationMsgs = [
+          { pct: 42, msg: "Building hero section with WebGL shader…" },
+          { pct: 50, msg: "Writing kinetic word-reveal animations…" },
+          { pct: 58, msg: "Crafting service cards and layout…" },
+          { pct: 66, msg: "Adding testimonials with real copy…" },
+          { pct: 74, msg: "Assembling scroll-scrub animations…" },
+          { pct: 82, msg: "Applying grain texture and micro-interactions…" },
+          { pct: 88, msg: "Finalising typography and CTAs…" },
+          { pct: 93, msg: "Almost done — verifying all sections…" },
+        ]
+        let msgIdx = 0
+        const heartbeat = setInterval(() => {
+          if (msgIdx < generationMsgs.length) {
+            const m = generationMsgs[msgIdx++]
+            send("progress", { msg: m.msg, pct: m.pct })
+          }
+        }, 8000)
+
+        let result: Awaited<ReturnType<typeof generateWithRetry>>
+        try {
+          result = await generateWithRetry({
+            business: {
+              name:        parsed.name,
+              type:        parsed.type,
+              description: parsed.description,
+              location:    parsed.location,
+              phone:       parsed.phone    || null,
+              website:     parsed.website  || null,
+            },
+            brandVoice:      {},
+            brandColor:      parsed.brandColor,
+            services:        parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
+            tagline:         parsed.tagline || undefined,
+            reviews:         [],
+            researchContext: researchContext || undefined,
+            directives:      directives ?? undefined,
+          })
+        } finally {
+          clearInterval(heartbeat)
+        }
+
+        send("progress", { msg: "Saving your site…", pct: 97 })
         send("complete", {
           html:         result.html,
           title:        result.title,
