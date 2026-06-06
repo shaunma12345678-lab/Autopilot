@@ -26,30 +26,70 @@ export async function proxy(request: NextRequest) {
     }
   )
 
+  // Refresh session — must happen before any other logic
   const { data: { user } } = await supabase.auth.getUser()
 
-  const isDashboardRoute =
-    request.nextUrl.pathname.startsWith("/dashboard") ||
-    request.nextUrl.pathname.startsWith("/content") ||
-    request.nextUrl.pathname.startsWith("/reputation") ||
-    request.nextUrl.pathname.startsWith("/leads") ||
-    request.nextUrl.pathname.startsWith("/reports") ||
-    request.nextUrl.pathname.startsWith("/settings") ||
-    request.nextUrl.pathname.startsWith("/billing") ||
-    request.nextUrl.pathname.startsWith("/onboarding")
+  const { pathname } = request.nextUrl
 
-  if (isDashboardRoute && !user) {
-    return NextResponse.redirect(new URL("/login", request.url))
+  // Helper: copy refreshed session cookies onto any response we return.
+  // Without this, token refreshes made during getUser() are silently discarded
+  // whenever we return a redirect instead of supabaseResponse.
+  function withSessionCookies(response: NextResponse): NextResponse {
+    supabaseResponse.cookies.getAll().forEach(c =>
+      response.cookies.set(c.name, c.value, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/",
+      })
+    )
+    return response
   }
 
-  // Logged-in users hitting /, /login, or /signup go straight to dashboard
-  if (
-    user &&
-    (request.nextUrl.pathname === "/" ||
-     request.nextUrl.pathname === "/login" ||
-     request.nextUrl.pathname === "/signup")
-  ) {
-    return NextResponse.redirect(new URL("/dashboard", request.url))
+  // Logged-in users hitting /, /login, or /signup → dashboard
+  if (user && (pathname === "/" || pathname === "/login" || pathname === "/signup")) {
+    return withSessionCookies(
+      NextResponse.redirect(new URL("/dashboard", request.url))
+    )
+  }
+
+  // Routes that are always public (no login required)
+  const publicPaths = [
+    "/",
+    "/login",
+    "/signup",
+    "/api/webhooks",
+    "/api/auth",
+    // Foreclosure tool — admin accesses directly without login
+    "/foreclosure-leads",
+    "/api/leads/foreclosure-search",
+    "/api/leads/at-risk-search",
+    "/api/leads/foreclosure-outreach",
+    "/api/leads/foreclosure-send",
+  ]
+
+  const isPublic =
+    publicPaths.some(p => pathname === p || pathname.startsWith(p + "/")) ||
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/fonts") ||
+    pathname.startsWith("/js") ||
+    /\.(ico|svg|png|jpg|jpeg|webp|gif|woff2?)$/.test(pathname)
+
+  // Protected dashboard routes — redirect unauthenticated users to login
+  const isDashboardRoute =
+    pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/content") ||
+    pathname.startsWith("/reputation") ||
+    pathname.startsWith("/leads") ||
+    pathname.startsWith("/reports") ||
+    pathname.startsWith("/settings") ||
+    pathname.startsWith("/billing") ||
+    pathname.startsWith("/onboarding")
+
+  if (isDashboardRoute && !user) {
+    return withSessionCookies(
+      NextResponse.redirect(new URL("/login", request.url))
+    )
   }
 
   return supabaseResponse

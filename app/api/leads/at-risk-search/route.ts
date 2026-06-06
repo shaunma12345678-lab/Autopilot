@@ -4,11 +4,8 @@
 // code violations, HOA liens, and county delinquency lists.
 
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { webSearch, webSearchDeep, extractPageContent } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
-import { getPropertyDetail } from "@/lib/attom"
-
 export interface AtRiskLead {
   id: string
   address: string
@@ -111,10 +108,6 @@ function buildDeepAtRiskQueries(area: {
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     if (!process.env.TAVILY_API_KEY) {
       return Response.json(
         { error: "TAVILY_API_KEY is not configured. At-risk scanning requires web search." },

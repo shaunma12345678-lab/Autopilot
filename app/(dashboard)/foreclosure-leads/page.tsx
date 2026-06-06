@@ -21,12 +21,15 @@ interface ServiceStatus {
 export default async function ForeclosureLeadsPage() {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
 
-  const business = await prisma.business.findFirst({ where: { userId: user.id } })
+  // Get business — use the user's business if logged in, otherwise any business (admin direct access)
+  const business = user
+    ? await prisma.business.findFirst({ where: { userId: user.id } })
+    : await prisma.business.findFirst()
+
   if (!business) redirect("/onboarding")
 
-  const gmailConnected = await hasGmailConnected(user.id)
+  const gmailConnected = user ? await hasGmailConnected(user.id) : false
 
   const services: ServiceStatus[] = [
     {

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { prisma } from "@/lib/prisma"
 import { sendViaGmail } from "@/lib/gmail"
 import { Resend } from "resend"
 
@@ -147,9 +148,10 @@ interface SendTarget {
 
 export async function POST(request: NextRequest) {
   try {
+    // Get user ID for Gmail/SMS — fall back to first user in DB for direct admin access
     const supabase = await createSupabaseServerClient()
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
+    const userId = user?.id ?? (await prisma.user.findFirst({ select: { id: true } }))?.id ?? ""
 
     const body = await request.json()
     const {
@@ -185,7 +187,7 @@ export async function POST(request: NextRequest) {
       if ((channel === "email" || channel === "both") && target.email && emailLetter) {
         const subject = personalize(emailSubject || `A personal note about your property at ${target.address}`)
         const html = buildEmailHtml(personalize(emailLetter), fromName)
-        const r = await sendEmail(user.id, target.email, subject, html)
+        const r = await sendEmail(userId, target.email, subject, html)
         emailStatus = r.success ? `sent via ${r.provider}` : `failed: ${r.error}`
         r.success ? emailSent++ : emailFailed++
       } else if (channel !== "sms" && !target.email) {
@@ -193,7 +195,7 @@ export async function POST(request: NextRequest) {
       }
 
       if ((channel === "sms" || channel === "both") && target.phone && smsText) {
-        const r = await sendSMS(user.id, target.phone, personalize(smsText), target.carrier)
+        const r = await sendSMS(userId, target.phone, personalize(smsText), target.carrier)
         smsStatus = r.success ? `sent via ${r.provider}` : `failed: ${r.error}`
         r.success ? smsSent++ : smsFailed++
       } else if (channel !== "email" && !target.phone) {
@@ -211,13 +213,13 @@ export async function POST(request: NextRequest) {
 }
 
 // GET /api/leads/foreclosure-send — return which providers are configured
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  const userId = user?.id ?? (await prisma.user.findFirst({ select: { id: true } }))?.id ?? ""
 
   const { hasGmailConnected } = await import("@/lib/gmail")
-  const gmailConnected = await hasGmailConnected(user.id)
+  const gmailConnected = userId ? await hasGmailConnected(userId) : false
 
   return Response.json({
     email: {

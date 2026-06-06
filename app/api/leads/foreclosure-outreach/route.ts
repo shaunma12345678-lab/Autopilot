@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import {
   generateOutreach,
   type ForeclosureLead,
@@ -9,10 +8,6 @@ import {
 // Generate personalized yellow letter, phone script, and SMS for a lead.
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const { lead, style = "empathetic" }: { lead: ForeclosureLead; style?: "empathetic" | "direct" | "professional" } = body
 

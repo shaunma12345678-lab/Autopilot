@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 import {
   searchForeclosuresByZip,
@@ -86,11 +85,6 @@ function hashStr(s: string): number {
 // Uses ATTOM if configured (deep 6-pass), otherwise free public-records scraper via Tavily.
 export async function POST(request: NextRequest) {
   try {
-
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const {
       searchType,       // "zip" | "city" | "county"
@@ -245,17 +239,13 @@ export async function POST(request: NextRequest) {
 // PUT /api/leads/foreclosure-search — save selected leads to CRM
 export async function PUT(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const { businessId, leads }: { businessId: string; leads: ForeclosureLead[] } = body
 
     if (!businessId || !Array.isArray(leads) || leads.length === 0)
       return Response.json({ error: "businessId and leads array required" }, { status: 400 })
 
-    const business = await prisma.business.findFirst({ where: { id: businessId, userId: user.id } })
+    const business = await prisma.business.findFirst({ where: { id: businessId } })
     if (!business) return Response.json({ error: "Business not found" }, { status: 404 })
 
     const created = await Promise.all(
