@@ -1,11 +1,10 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { getSessionOrAdminUser } from "@/lib/auth-helper"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 
 export default async function ReportsPage() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
+  const user = await getSessionOrAdminUser()
+  if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
   if (!business) redirect("/onboarding")

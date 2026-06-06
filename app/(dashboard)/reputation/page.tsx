@@ -1,12 +1,11 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { getSessionOrAdminUser } from "@/lib/auth-helper"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 import ReputationManager from "@/components/dashboard/ReputationManager"
 
 export default async function ReputationPage() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
+  const user = await getSessionOrAdminUser()
+  if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
   if (!business) redirect("/onboarding")
