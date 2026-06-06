@@ -196,7 +196,7 @@ export async function POST(request: NextRequest) {
       searchType, zipCode, city, state, county, daysBack: safeDays, maxLeads: safeMax,
     })
     if (freeLeads.length > 0) {
-      const leads = freeLeads.map(fl => zeroKeyLeadToForeclosureLead({ ...fl, dataMode: "live" as const }))
+      const leads = freeLeads.map(fl => zeroKeyLeadToForeclosureLead({ ...fl, dataMode: "live" as const, sourceLabel: "Tavily Web Search" }))
       leads.sort((a, b) => b.score - a.score)
       return Response.json({ leads, total, fetched: leads.length, dataSource: "tavily-public-records" })
     }
