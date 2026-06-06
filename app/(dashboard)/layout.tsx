@@ -12,12 +12,13 @@ export default async function DashboardLayout({
 }) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
 
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    include: { businesses: { take: 1 } },
-  })
+  // Fall back to first user in DB for direct admin access (no login required)
+  const dbUser = user
+    ? await prisma.user.findUnique({ where: { id: user.id }, include: { businesses: { take: 1 } } })
+    : await prisma.user.findFirst({ include: { businesses: { take: 1 } } })
+
+  if (!dbUser) redirect("/onboarding")
 
   const business = dbUser?.businesses[0]
   const needsOnboarding = !business
