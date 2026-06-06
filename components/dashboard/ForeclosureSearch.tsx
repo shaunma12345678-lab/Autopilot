@@ -581,7 +581,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId }: {
 
 // ─── Bulk campaign sender ─────────────────────────────────────────────────────
 
-function CampaignTab({ leads, businessId }: { leads: ForeclosureLead[]; businessId: string }) {
+function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead[]; businessId: string; apiHeaders: Record<string, string> }) {
   const withContact = leads.filter(l => l.email || l.phone)
   const [selected, setSelected]   = useState<Set<number>>(new Set())
   const [channel, setChannel]     = useState<"email"|"sms"|"both">("email")
@@ -629,7 +629,7 @@ function CampaignTab({ leads, businessId }: { leads: ForeclosureLead[]; business
     try {
       const res = await fetch("/api/leads/foreclosure-send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders,
         body: JSON.stringify({ targets, channel, emailSubject: subject, emailLetter: message, smsText, fromName, fromPhone }),
       })
       const data = await res.json()
@@ -871,7 +871,7 @@ function AtRiskTab({ businessId }: { businessId: string }) {
 
 // ─── Main foreclosure search tab ──────────────────────────────────────────────
 
-function ForeclosureTab({ businessId }: { businessId: string }) {
+function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: string; apiBase: string; apiHeaders: Record<string, string> }) {
   const defaultP: AreaParams = { searchType: "zip", zipCode: "", city: "", state: "", county: "", daysBack: 90, maxLeads: 100, enrichContacts: false }
   const [p, setP]             = useState<AreaParams>(defaultP)
   const [loading, setLoading] = useState(false)
@@ -897,9 +897,7 @@ function ForeclosureTab({ businessId }: { businessId: string }) {
     if (p.searchType === "county" && (!p.county || !p.state)) { setError("Enter county and state."); return }
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
     try {
-      const res = await fetch("/api/leads/foreclosure-search", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p),
-      })
+      const res = await fetch(apiBase, { method: "POST", headers: apiHeaders, body: JSON.stringify(p) })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? "Search failed")
       setResult(data)
@@ -910,7 +908,7 @@ function ForeclosureTab({ businessId }: { businessId: string }) {
   const saveSingle = async (lead: ForeclosureLead) => {
     setSaving(true)
     try {
-      const res = await fetch("/api/leads/foreclosure-search", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ businessId, leads: [lead] }) })
+      const res = await fetch(apiBase, { method: "PUT", headers: apiHeaders, body: JSON.stringify({ businessId, leads: [lead] }) })
       if (res.ok) setSavedIds(prev => new Set([...prev, lead.attomId]))
     } catch { /* silent */ }
     setSaving(false)
@@ -921,7 +919,7 @@ function ForeclosureTab({ businessId }: { businessId: string }) {
     setSaving(true)
     const leads = result.leads.filter(l => selected.has(l.attomId))
     try {
-      const res = await fetch("/api/leads/foreclosure-search", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ businessId, leads }) })
+      const res = await fetch(apiBase, { method: "PUT", headers: apiHeaders, body: JSON.stringify({ businessId, leads }) })
       if (res.ok) { setSavedIds(prev => new Set([...prev, ...leads.map(l => l.attomId)])); setSelected(new Set()) }
     } catch { /* silent */ }
     setSaving(false)
@@ -1083,9 +1081,15 @@ function ForeclosureTab({ businessId }: { businessId: string }) {
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
-export default function ForeclosureSearch({ businessId }: { businessId: string }) {
+export default function ForeclosureSearch({ businessId, adminPw }: { businessId: string; adminPw?: string }) {
   const [tab, setTab] = useState<"foreclosure"|"atrisk"|"campaign">("foreclosure")
   const [campaignLeads, setCampaignLeads] = useState<ForeclosureLead[]>([])
+
+  // When running inside the admin panel, route all API calls through admin endpoints
+  const apiBase = adminPw ? "/api/admin/foreclosure" : "/api/leads/foreclosure-search"
+  const apiHeaders: Record<string, string> = adminPw
+    ? { "Content-Type": "application/json", "x-admin-password": adminPw }
+    : { "Content-Type": "application/json" }
 
   const TABS = [
     { id: "foreclosure", label: "🏚 Pre-Foreclosure", desc: "Active NOD / Lis Pendens / NOS" },
@@ -1106,9 +1110,9 @@ export default function ForeclosureSearch({ businessId }: { businessId: string }
         ))}
       </div>
 
-      {tab === "foreclosure" && <ForeclosureTab businessId={businessId} />}
+      {tab === "foreclosure" && <ForeclosureTab businessId={businessId} apiBase={apiBase} apiHeaders={apiHeaders} />}
       {tab === "atrisk"      && <AtRiskTab businessId={businessId} />}
-      {tab === "campaign"    && <CampaignTab leads={campaignLeads} businessId={businessId} />}
+      {tab === "campaign"    && <CampaignTab leads={campaignLeads} businessId={businessId} apiHeaders={apiHeaders} />}
 
       <style>{`
         .label { display:block; font-size:11px; color:#6b7280; margin-bottom:6px; font-weight:500 }
