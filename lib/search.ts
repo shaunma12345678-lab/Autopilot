@@ -2,10 +2,11 @@
 // Set TAVILY_API_KEY in your .env to enable live search.
 
 export interface SearchResult {
-  title:   string
-  url:     string
-  content: string
-  score:   number
+  title:      string
+  url:        string
+  content:    string
+  score:      number
+  rawContent?: string
 }
 
 export interface SearchResponse {
@@ -48,6 +49,66 @@ export async function webSearch(query: string, maxResults = 5): Promise<SearchRe
       content: r.content as string,
       score:   (r.score as number) ?? 0,
     })),
+  }
+}
+
+// Deep search — includes full raw page content for each result.
+// Use sparingly for high-value queries (legal notice pages, county recorders, auction listings).
+export async function webSearchDeep(query: string, maxResults = 5): Promise<SearchResponse> {
+  const apiKey = process.env.TAVILY_API_KEY
+  if (!apiKey) return { query, results: [] }
+
+  const res = await fetch("https://api.tavily.com/search", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key:             apiKey,
+      query,
+      max_results:         maxResults,
+      search_depth:        "advanced",
+      include_answer:      true,
+      include_raw_content: true,
+    }),
+  })
+
+  if (!res.ok) {
+    console.error("[search-deep] Tavily error:", res.status, await res.text())
+    return { query, results: [] }
+  }
+
+  const data = await res.json()
+  return {
+    query,
+    answer:  data.answer,
+    results: (data.results ?? []).map((r: Record<string, unknown>) => ({
+      title:      r.title as string,
+      url:        r.url as string,
+      content:    r.content as string,
+      score:      (r.score as number) ?? 0,
+      rawContent: r.raw_content as string | undefined,
+    })),
+  }
+}
+
+// Extract full content from specific URLs via Tavily extract endpoint.
+export async function extractPageContent(urls: string[]): Promise<Array<{ url: string; content: string }>> {
+  const apiKey = process.env.TAVILY_API_KEY
+  if (!apiKey || urls.length === 0) return []
+
+  try {
+    const res = await fetch("https://api.tavily.com/extract", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ api_key: apiKey, urls }),
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    return (data.results ?? []).map((r: Record<string, unknown>) => ({
+      url:     r.url as string,
+      content: ((r.raw_content ?? r.content ?? "") as string).slice(0, 8000),
+    }))
+  } catch {
+    return []
   }
 }
 

@@ -5,7 +5,7 @@
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
-import { webSearch } from "@/lib/search"
+import { webSearch, webSearchDeep, extractPageContent } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
 import { getPropertyDetail } from "@/lib/attom"
 
@@ -53,6 +53,13 @@ function buildQueries(area: {
 }): string[] {
   const place =
     area.searchType === "zip"
+      ? `"${area.zipCode}"`
+      : area.searchType === "city"
+      ? `"${area.city}" "${area.state}"`
+      : `"${area.county} county" "${area.state}"`
+
+  const cityOrZip =
+    area.searchType === "zip"
       ? area.zipCode!
       : area.searchType === "city"
       ? `${area.city} ${area.state}`
@@ -61,16 +68,44 @@ function buildQueries(area: {
   const year = new Date().getFullYear()
 
   return [
-    // Tax delinquency (most reliable early signal)
-    `"${place}" property tax delinquent list ${year}`,
-    `"${place}" delinquent real estate taxes ${year} county`,
-    // Code violations (vacant/distressed)
-    `"${place}" code violation abandoned property ${year}`,
-    // HOA and judgment liens (debt accumulation before foreclosure)
-    `"${place}" HOA lien filed property ${year}`,
-    `"${place}" judgment lien property owner ${year}`,
-    // Court pre-foreclosure filings not yet indexed in major databases
-    `"${place}" site:courtrecords.gov OR site:pubrecord.com foreclosure ${year}`,
+    // Tax delinquency (most reliable early-distress signal)
+    `${place} property tax delinquent list ${year} address owner`,
+    `${place} delinquent real estate taxes ${year} county records`,
+    // Code violations and vacant/distressed properties
+    `${place} code violation notice property ${year} owner address`,
+    `${place} abandoned vacant property ${year} owner`,
+    // HOA and judgment liens
+    `${place} HOA lien filed property owner ${year}`,
+    `${place} judgment lien property real estate ${year}`,
+    // Court pre-foreclosure filings
+    `${cityOrZip} court civil action property owner ${year} debt`,
+    // Delinquency aggregators
+    `${cityOrZip} tax lien property list ${year} address`,
+  ]
+}
+
+function buildDeepAtRiskQueries(area: {
+  searchType: string
+  zipCode?: string
+  city?: string
+  state?: string
+  county?: string
+}): string[] {
+  const year = new Date().getFullYear()
+  const countyOrCity =
+    area.searchType === "zip"
+      ? `zip ${area.zipCode}`
+      : area.searchType === "city"
+      ? `${area.city} ${area.state}`
+      : `${area.county} county ${area.state}`
+
+  return [
+    // County tax delinquency lists — published online, contain addresses
+    `${countyOrCity} property tax delinquent list ${year} address owner`,
+    // Legal notice publications for judgment/HOA liens
+    `${countyOrCity} legal notice judgment lien HOA ${year} property address`,
+    // County assessor / treasurer records with delinquent owners
+    `${countyOrCity} county assessor treasurer delinquent property ${year}`,
   ]
 }
 
@@ -97,24 +132,50 @@ export async function POST(request: NextRequest) {
       maxLeads?: number
     }
 
-    const queries = buildQueries({ searchType, zipCode, city, state, county })
+    const queries     = buildQueries({ searchType, zipCode, city, state, county })
+    const deepQueries = buildDeepAtRiskQueries({ searchType, zipCode, city, state, county })
 
-    // Run all searches in parallel, collect raw results
-    const searchResults = await Promise.allSettled(
-      queries.map((q) => webSearch(q, 8))
-    )
+    // ── Phase 1: Standard searches ───────────────────────────────────────────
+    const allSnippets: Array<{ query: string; title: string; url: string; content: string }> = []
+    const topUrls: string[] = []
 
-    const allSnippets = searchResults
+    const searchResults = await Promise.allSettled(queries.map((q) => webSearch(q, 8)))
+    searchResults
       .filter((r) => r.status === "fulfilled")
-      .flatMap((r) => {
+      .forEach((r) => {
         const result = (r as PromiseFulfilledResult<Awaited<ReturnType<typeof webSearch>>>).value
-        return result.results.map((sr) => ({
-          query: result.query,
-          title: sr.title,
-          url: sr.url,
-          content: sr.content.slice(0, 600),
-        }))
+        result.results.forEach((sr) => {
+          allSnippets.push({ query: result.query, title: sr.title, url: sr.url, content: sr.content.slice(0, 1500) })
+          if (topUrls.length < 12) topUrls.push(sr.url)
+        })
       })
+
+    // ── Phase 2: Deep search with full page content ───────────────────────────
+    for (const q of deepQueries.slice(0, 3)) {
+      try {
+        const result = await webSearchDeep(q, 5)
+        result.results.forEach((sr) => {
+          const content = sr.rawContent ? sr.rawContent.slice(0, 4000) : sr.content.slice(0, 1500)
+          allSnippets.push({ query: q, title: sr.title, url: sr.url, content })
+          if (topUrls.length < 20) topUrls.push(sr.url)
+        })
+        await new Promise((r) => setTimeout(r, 300))
+      } catch { /* continue */ }
+    }
+
+    // ── Phase 3: Extract content from county/government pages ────────────────
+    const extractionCandidates = [...new Set(topUrls)]
+      .filter((u) => /county|assessor|treasurer|taxdelinquent|publicrecord|legalnotice|courtrecord|lien/i.test(u))
+      .slice(0, 5)
+
+    if (extractionCandidates.length > 0) {
+      const pages = await extractPageContent(extractionCandidates)
+      pages.forEach((p) => {
+        if (p.content.length > 100) {
+          allSnippets.push({ query: "direct page extraction", title: p.url, url: p.url, content: p.content.slice(0, 5000) })
+        }
+      })
+    }
 
     if (allSnippets.length === 0) {
       return Response.json({
@@ -124,7 +185,6 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // AI extraction: parse all snippets for property addresses + distress signals
     const areaDesc =
       searchType === "zip"
         ? `ZIP ${zipCode}`
@@ -132,24 +192,24 @@ export async function POST(request: NextRequest) {
         ? `${city}, ${state}`
         : `${county} County, ${state}`
 
-    const extractUser = `Extract ALL distressed property leads from these web search results for ${areaDesc}.
+    const extractUser = `Extract ALL distressed property leads from these web search results and page content for ${areaDesc}.
 
 For each property found, identify:
-- Street address
+- Street address (required)
 - Owner name (if mentioned)
 - City, state, zip
 - Type of distress signal
 - Summary of the signal
 - Source URL
 
-Search results:
-${allSnippets.map((s, i) => `[${i + 1}] Query: "${s.query}"\nTitle: ${s.title}\nURL: ${s.url}\nContent: ${s.content}`).join("\n\n")}
+Sources (${allSnippets.length} total):
+${allSnippets.map((s, i) => `[${i + 1}] Query: "${s.query}"\nPage: ${s.title}\nURL: ${s.url}\nContent:\n${s.content}`).join("\n\n---\n\n")}
 
 Return JSON array (empty array if none found):
 [{
   "address": "full street address",
-  "city": "city name",
-  "state": "2-letter state",
+  "city": "city name (infer from context if needed)",
+  "state": "2-letter state (use ${state || ""} if not specified)",
   "zip": "zip if known, else ''",
   "ownerName": "owner name if mentioned, else ''",
   "signalType": "tax_delinquent|code_violation|hoa_lien|judgment_lien|court_filing|vacant_distressed|multiple_signals",
@@ -157,7 +217,8 @@ Return JSON array (empty array if none found):
   "sourceUrl": "URL where this was found"
 }]
 
-Only include properties with a real street address. Deduplicate if the same address appears multiple times (merge signal types).`
+Include EVERY property with a street address. If a page lists 10 properties, extract all 10.
+Deduplicate if the same address appears multiple times (merge signal types).`
 
     let rawLeads: Array<{
       address: string
@@ -172,8 +233,9 @@ Only include properties with a real street address. Deduplicate if the same addr
 
     try {
       rawLeads = (await runAgent(EXTRACT_SYSTEM, extractUser, {
-        jsonMode: true,
-        maxTokens: 4000,
+        jsonMode:  true,
+        maxTokens: 8000,
+        model:     "sonnet",
       })) as unknown as typeof rawLeads
     } catch {
       return Response.json({ leads: [], total: 0, message: "AI extraction failed — try again." })
