@@ -42,9 +42,12 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", request.url))
   }
 
+  // Logged-in users hitting /, /login, or /signup go straight to dashboard
   if (
-    (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup") &&
-    user
+    user &&
+    (request.nextUrl.pathname === "/" ||
+     request.nextUrl.pathname === "/login" ||
+     request.nextUrl.pathname === "/signup")
   ) {
     return NextResponse.redirect(new URL("/dashboard", request.url))
   }
