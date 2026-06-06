@@ -34,6 +34,12 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: "Real Estate",
+    items: [
+      { href: "/foreclosure-leads", label: "Pre-Foreclosure Leads", icon: "🏚" },
+    ],
+  },
+  {
     label: "Customers",
     items: [
       { href: "/reputation",  label: "Reputation",  icon: "★" },

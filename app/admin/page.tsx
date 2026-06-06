@@ -1965,7 +1965,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2034,6 +2034,7 @@ export default function AdminPage() {
     { id: "bos-agents",   label: "Business OS" },
     { id: "automations",  label: "Automations" },
     { id: "sites",        label: "🌐 Website Builder" },
+    { id: "real-estate",  label: "🏚 Real Estate" },
     { id: "queue",        label: "Job Queue" },
     { id: "integrations", label: "Integrations" },
     { id: "sandbox",      label: "AI Sandbox" },
@@ -2095,6 +2096,77 @@ export default function AdminPage() {
         <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-6">
           {tab === "bos-agents" && <BOSAgentsPanel password={pw} />}
           {tab === "automations" && <AutomationsPanel password={pw} onConnect={() => setTab("integrations")} />}
+          {tab === "real-estate" && (
+            <div className="space-y-6">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">🏚 Real Estate — Pre-Foreclosure Leads</h2>
+                  <p className="text-sm text-gray-400 mt-1">Find distressed homeowners before anyone else. NOD, Lis Pendens, Notice of Sale, at-risk signals, AI scoring, outreach generation.</p>
+                </div>
+                <a href="/foreclosure-leads" target="_blank" rel="noreferrer"
+                  className="px-5 py-2.5 rounded-xl text-sm font-bold text-white shrink-0 transition-all hover:opacity-90"
+                  style={{ background: "linear-gradient(135deg,#4f46e5,#7c3aed)" }}>
+                  Open Tool →
+                </a>
+              </div>
+
+              {/* Feature grid */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {[
+                  { icon: "🔍", title: "Deep Search", desc: "6-pass ATTOM enrichment: foreclosure + ownership + AVM + sale history + all liens + AI contact discovery" },
+                  { icon: "📊", title: "40-Signal AI Scoring", desc: "Every lead scored across equity, distress depth, stage, owner motivation, and investability" },
+                  { icon: "🏆", title: "Top Deals Ranking", desc: "AI ranks best Grade A/B deals by profit potential. See which to pursue first at a glance." },
+                  { icon: "⚡", title: "At-Risk Scanner (Pre-NOD)", desc: "Finds tax-delinquent, HOA-liened, code-violated properties before the foreclosure is even filed" },
+                  { icon: "✉", title: "Outreach Generator", desc: "3 styles: Empathetic / Direct / Professional. Generates personalized letter, phone script, and SMS" },
+                  { icon: "📤", title: "Campaign Sender", desc: "Bulk email via Gmail (free) or SMS via TextBelt/Twilio. Edit before sending. Track results." },
+                ].map(f => (
+                  <div key={f.title} className="bg-gray-800/60 border border-gray-700/40 rounded-xl p-4">
+                    <p className="text-xl mb-2">{f.icon}</p>
+                    <p className="text-sm font-semibold text-white">{f.title}</p>
+                    <p className="text-xs text-gray-500 mt-1 leading-relaxed">{f.desc}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Setup status */}
+              <div className="bg-gray-800/40 border border-gray-700/40 rounded-xl p-5">
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Setup Status</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    { label: "Foreclosure Data", configured: !!(process.env.NEXT_PUBLIC_HAS_ATTOM || process.env.NEXT_PUBLIC_HAS_TAVILY), detail: "Add TAVILY_API_KEY (free) or ATTOM_API_KEY" },
+                    { label: "AI Scoring", configured: true, detail: "Groq/Claude configured ✓" },
+                    { label: "Email Sending", configured: true, detail: "Connect Gmail at /integrations" },
+                    { label: "SMS Sending", configured: true, detail: "TextBelt ($0.01/text) or email-to-SMS free" },
+                  ].map(s => (
+                    <div key={s.label} className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${s.configured ? "bg-emerald-400" : "bg-amber-400"}`} />
+                        <span className="text-xs font-semibold text-white">{s.label}</span>
+                      </div>
+                      <p className="text-[11px] text-gray-600 pl-4">{s.detail}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 pt-4 border-t border-gray-700/40">
+                  <p className="text-xs text-gray-500">
+                    <span className="text-white font-semibold">Free setup (2 min):</span> Sign up at{" "}
+                    <a href="https://app.tavily.com/sign-up" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">app.tavily.com</a>{" "}
+                    → copy API key → add <code className="text-amber-300 bg-gray-900 px-1 rounded">TAVILY_API_KEY</code> to Vercel env vars → redeploy.
+                    Connect Gmail at{" "}
+                    <a href="/integrations" className="text-indigo-400 hover:underline">/integrations</a> for free email sending.
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-center">
+                <a href="/foreclosure-leads" target="_blank" rel="noreferrer"
+                  className="inline-flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90"
+                  style={{ background: "linear-gradient(135deg,#4f46e5,#7c3aed)" }}>
+                  Launch Pre-Foreclosure Tool →
+                </a>
+              </div>
+            </div>
+          )}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}
