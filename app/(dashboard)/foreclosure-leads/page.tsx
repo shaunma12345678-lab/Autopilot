@@ -1,6 +1,5 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
-import { redirect } from "next/navigation"
 import ForeclosureSearch from "@/components/dashboard/ForeclosureSearch"
 import { hasGmailConnected } from "@/lib/gmail"
 
@@ -22,12 +21,10 @@ export default async function ForeclosureLeadsPage() {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Get business — use the user's business if logged in, otherwise any business (admin direct access)
+  // Get business — session user's, otherwise first in DB. Never redirect — tool works without one.
   const business = user
     ? await prisma.business.findFirst({ where: { userId: user.id } })
     : await prisma.business.findFirst()
-
-  if (!business) redirect("/onboarding")
 
   const gmailConnected = user ? await hasGmailConnected(user.id) : false
 
@@ -125,7 +122,7 @@ export default async function ForeclosureLeadsPage() {
         )}
       </div>
 
-      <ForeclosureSearch businessId={business.id} />
+      <ForeclosureSearch businessId={business?.id ?? ""} />
     </div>
   )
 }

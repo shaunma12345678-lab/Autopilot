@@ -8,7 +8,7 @@ export default async function ReputationPage() {
   if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const reviews = await prisma.review.findMany({
     where: { businessId: business.id },

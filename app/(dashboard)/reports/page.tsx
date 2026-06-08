@@ -7,7 +7,7 @@ export default async function ReportsPage() {
   if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const now = new Date()
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)

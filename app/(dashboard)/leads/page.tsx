@@ -8,7 +8,7 @@ export default async function LeadsPage() {
   if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const leads = await prisma.lead.findMany({
     where: { businessId: business.id },

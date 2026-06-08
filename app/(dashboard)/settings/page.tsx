@@ -8,7 +8,7 @@ export default async function SettingsPage() {
   if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   return (
     <div className="p-8 max-w-3xl mx-auto">

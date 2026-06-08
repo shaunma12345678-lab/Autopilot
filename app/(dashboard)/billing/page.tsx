@@ -11,7 +11,7 @@ export default async function BillingPage() {
   if (!dbUser) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const [contentCount, reviewCount] = await Promise.all([
     prisma.content.count({ where: { businessId: business.id } }),

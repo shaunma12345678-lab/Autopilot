@@ -20,7 +20,7 @@ export default async function AgentChatPage({ params }: { params: Promise<{ agen
   if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const { agentSlug } = await params
   const agentDef = BOS_AGENT_BY_SLUG.get(agentSlug)

@@ -8,7 +8,7 @@ export default async function ContentPage() {
   if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const content = await prisma.content.findMany({
     where: { businessId: business.id },

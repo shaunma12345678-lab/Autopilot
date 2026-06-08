@@ -20,9 +20,30 @@ export default async function DashboardLayout({
     : await prisma.user.findFirst()
 
   // Separate query — not via include
-  const business = dbUser
+  let business = dbUser
     ? await prisma.business.findFirst({ where: { userId: dbUser.id } })
     : null
+
+  // Auto-create a default business on first visit so the admin never sees the onboarding gate
+  if (dbUser && !business) {
+    try {
+      business = await prisma.business.create({
+        data: {
+          userId:         dbUser.id,
+          name:           (dbUser as { name?: string }).name ?? "My Business",
+          type:           "Other",
+          description:    "",
+          location:       "",
+          brandVoice:     {},
+          socialProfiles: {},
+          activeAgents:   [],
+        },
+      })
+    } catch {
+      // If creation fails (e.g. already exists from a race), try fetching again
+      business = await prisma.business.findFirst({ where: { userId: dbUser.id } })
+    }
+  }
 
   const planLabel = dbUser?.plan ?? "FREE"
   const planColors: Record<string, string> = {
