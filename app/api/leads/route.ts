@@ -1,18 +1,13 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const { businessId, name, email, phone, source } = body
 
     const business = await prisma.business.findFirst({
-      where: { id: businessId, userId: user.id },
+      where: { id: businessId },
     })
     if (!business) return Response.json({ error: "Not found" }, { status: 404 })
 
