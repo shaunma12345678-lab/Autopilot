@@ -1,5 +1,16 @@
-import { redirect } from "next/navigation"
-
 export default function Page() {
-  redirect("/foreclosure-leads")
+  return (
+    <iframe
+      src="/experience.html"
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        border: "none",
+        display: "block",
+      }}
+      title="Autopilot"
+    />
+  )
 }

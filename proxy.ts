@@ -26,19 +26,8 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  // Refresh session on every request (must happen before any redirect logic)
+  // Refresh session on every request — keeps tokens alive without forcing login
   await supabase.auth.getUser()
-
-  const { pathname } = request.nextUrl
-
-  // Everyone hits / → go straight to the tool, no login gate
-  if (pathname === "/") {
-    const dest = NextResponse.redirect(new URL("/foreclosure-leads", request.url))
-    supabaseResponse.cookies.getAll().forEach(c =>
-      dest.cookies.set(c.name, c.value, { httpOnly: true, secure: true, sameSite: "lax", path: "/" })
-    )
-    return dest
-  }
 
   return supabaseResponse
 }
