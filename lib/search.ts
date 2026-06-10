@@ -144,59 +144,104 @@ export async function webSearchSerper(query: string, maxResults = 8): Promise<Se
   }
 }
 
-// DuckDuckGo HTML — zero API key, zero cost. Used when no TAVILY_API_KEY or SERPER_API_KEY is set.
-// Parses DuckDuckGo's redirect hrefs to recover the actual destination URL.
+// ── Zero-key search engines (no API key ever required) ───────────────────────
+// DDG and Bing are used in tandem: DDG first, Bing auto-fallback when DDG
+// returns nothing (e.g. blocked from data-center IPs on some hosting providers).
+
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+async function _ddgHtml(query: string, maxResults: number): Promise<SearchResponse> {
+  const res = await fetch("https://html.duckduckgo.com/html/", {
+    method: "POST",
+    headers: {
+      "Content-Type":    "application/x-www-form-urlencoded",
+      "User-Agent":      BROWSER_UA,
+      "Accept":          "text/html,application/xhtml+xml",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    body:   new URLSearchParams({ q: query, kl: "us-en" }).toString(),
+    signal: AbortSignal.timeout(12000),
+  })
+  if (!res.ok) return { query, results: [] }
+  const html = await res.text()
+
+  const clean = (s: string) =>
+    s.replace(/<[^>]+>/g, "")
+     .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+     .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim()
+
+  const links    = [...html.matchAll(/class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)]
+  const snippets = [...html.matchAll(/class="result__snippet"[^>]*>([\s\S]*?)(?:<\/a>|<\/div>)/gi)]
+
+  const results: SearchResult[] = []
+  for (let i = 0; i < Math.min(links.length, maxResults); i++) {
+    const href  = links[i][1]
+    const title = clean(links[i][2])
+    const snip  = clean(snippets[i]?.[1] ?? "")
+    let url = ""
+    if (href.includes("uddg=")) {
+      const m = href.match(/uddg=([^&]+)/)
+      if (m) { try { url = decodeURIComponent(m[1]) } catch { /* skip */ } }
+    } else if (href.startsWith("//")) {
+      url = `https:${href}`
+    } else if (href.startsWith("http")) {
+      url = href
+    }
+    if (url && title) results.push({ title, url, content: snip, score: 1 - i * 0.1 })
+  }
+  return { query, results }
+}
+
+async function _bingHtml(query: string, maxResults: number): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q: query, setlang: "en-US", form: "QBLH" })
+  const res = await fetch(`https://www.bing.com/search?${params}`, {
+    headers: {
+      "User-Agent":      BROWSER_UA,
+      "Accept":          "text/html,application/xhtml+xml",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(12000),
+  })
+  if (!res.ok) return { query, results: [] }
+  const html = await res.text()
+
+  const clean = (s: string) =>
+    s.replace(/<[^>]+>/g, "")
+     .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+     .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim()
+
+  // Bing wraps each organic result in <li class="b_algo">
+  const blocks = [...html.matchAll(/<li[^>]*class="[^"]*\bb_algo\b[^"]*"[^>]*>([\s\S]*?)(?=<li[^>]*class="[^"]*\bb_algo\b|<\/ol>)/gi)]
+  const results: SearchResult[] = []
+
+  for (let i = 0; i < Math.min(blocks.length, maxResults); i++) {
+    const block = blocks[i][1]
+    const urlM    = block.match(/<h2[^>]*>\s*<a[^>]+href="(https?:\/\/[^"#]+)"/)
+    const titleM  = block.match(/<h2[^>]*>([\s\S]*?)<\/h2>/)
+    const snippM  = block.match(/<p[^>]*>([\s\S]*?)<\/p>/)
+    const url   = urlM?.[1] ?? ""
+    const title = clean(titleM?.[1] ?? "")
+    const snip  = clean(snippM?.[1] ?? "")
+    if (url && title) results.push({ title, url, content: snip, score: 1 - i * 0.1 })
+  }
+  return { query, results }
+}
+
+// DuckDuckGo HTML with Bing automatic fallback.
+// If DDG returns 0 results (e.g. blocked from cloud IPs), Bing is tried immediately.
+// No API key required for either engine.
 export async function webSearchDDG(query: string, maxResults = 8): Promise<SearchResponse> {
   try {
-    const res = await fetch("https://html.duckduckgo.com/html/", {
-      method: "POST",
-      headers: {
-        "Content-Type":  "application/x-www-form-urlencoded",
-        "User-Agent":    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept":        "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      body:   new URLSearchParams({ q: query, kl: "us-en" }).toString(),
-      signal: AbortSignal.timeout(15000),
-    })
-    if (!res.ok) return { query, results: [] }
-    const html = await res.text()
-
-    const linkMatches    = [...html.matchAll(/class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)]
-    const snippetMatches = [...html.matchAll(/class="result__snippet"[^>]*>([\s\S]*?)(?:<\/a>|<\/div>)/gi)]
-
-    const clean = (s: string) =>
-      s.replace(/<[^>]+>/g, "")
-       .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-       .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim()
-
-    const results: SearchResult[] = []
-    for (let i = 0; i < Math.min(linkMatches.length, maxResults); i++) {
-      const href  = linkMatches[i][1]
-      const title = clean(linkMatches[i][2])
-      const snippet = clean(snippetMatches[i]?.[1] ?? "")
-
-      // DDG wraps all result links as //duckduckgo.com/l/?uddg=ENCODED_ACTUAL_URL
-      let url = ""
-      if (href.includes("uddg=")) {
-        const m = href.match(/uddg=([^&]+)/)
-        if (m) { try { url = decodeURIComponent(m[1]) } catch { /* skip */ } }
-      } else if (href.startsWith("//")) {
-        url = `https:${href}`
-      } else if (href.startsWith("http")) {
-        url = href
-      }
-
-      if (url && title) results.push({ title, url, content: snippet, score: 1 - i * 0.1 })
-    }
-    return { query, results }
+    const ddg = await _ddgHtml(query, maxResults)
+    if (ddg.results.length > 0) return ddg
+    return await _bingHtml(query, maxResults)
   } catch {
-    return { query, results: [] }
+    try { return await _bingHtml(query, maxResults) } catch { return { query, results: [] } }
   }
 }
 
 // Auto-selects the best available search backend.
-// Priority: Tavily (deepest, raw content) → Serper (Google, free 2.5k/mo) → DuckDuckGo (zero-key).
+// Priority: Tavily (deepest, raw content) → Serper (Google, free 2.5k/mo) → DDG+Bing (zero-key).
 export async function webSearchAny(query: string, maxResults = 8): Promise<SearchResponse> {
   if (process.env.TAVILY_API_KEY)  return webSearch(query, maxResults)
   if (process.env.SERPER_API_KEY)  return webSearchSerper(query, maxResults)
