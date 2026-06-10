@@ -32,11 +32,11 @@ export default async function ForeclosureLeadsPage() {
     {
       key: "data",
       label: "Foreclosure Data",
-      configured: !!process.env.ATTOM_API_KEY || !!process.env.TAVILY_API_KEY,
-      tier: process.env.ATTOM_API_KEY ? "ATTOM (deep)" : process.env.TAVILY_API_KEY ? "Free public records" : "Not configured",
-      signupUrl: "https://app.tavily.com/sign-up",
-      envVar: "TAVILY_API_KEY",
-      note: process.env.ATTOM_API_KEY ? "ATTOM configured — full equity/lien data" : "Add TAVILY_API_KEY free at tavily.com → 1,000 searches/month",
+      configured: true,
+      tier: process.env.ATTOM_API_KEY ? "ATTOM (deep)" : process.env.TAVILY_API_KEY ? "Tavily (enhanced)" : process.env.SERPER_API_KEY ? "Serper/Google (free)" : "DuckDuckGo (free)",
+      signupUrl: "https://serper.dev",
+      envVar: "SERPER_API_KEY",
+      note: process.env.ATTOM_API_KEY ? "ATTOM configured — full equity/lien data" : process.env.TAVILY_API_KEY ? "Tavily configured — enhanced results" : "Active with free DuckDuckGo search. Add SERPER_API_KEY (free, serper.dev) or TAVILY_API_KEY for better results.",
     },
     {
       key: "ai",
@@ -109,14 +109,13 @@ export default async function ForeclosureLeadsPage() {
           ))}
         </div>
 
-        {!process.env.TAVILY_API_KEY && !process.env.ATTOM_API_KEY && (
-          <div className="mt-3 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
-            <p className="text-xs text-amber-300 font-semibold">One step to activate live searches:</p>
-            <p className="text-[11px] text-amber-400/80 mt-1">
-              1. Go to <a href="https://app.tavily.com/sign-up" target="_blank" rel="noreferrer" className="underline">app.tavily.com/sign-up</a> (free, takes 2 minutes)<br />
-              2. Copy your API key<br />
-              3. Add <code className="text-amber-300 bg-amber-500/10 px-1 rounded">TAVILY_API_KEY=tvly-xxxx</code> to your .env.local and Vercel env vars<br />
-              4. Redeploy — free public records search will be live
+        {!process.env.TAVILY_API_KEY && !process.env.ATTOM_API_KEY && !process.env.SERPER_API_KEY && (
+          <div className="mt-3 bg-gray-800/60 border border-gray-700/40 rounded-xl px-4 py-3">
+            <p className="text-xs text-white font-semibold">Tip: upgrade search quality (optional)</p>
+            <p className="text-[11px] text-gray-400 mt-1">
+              Currently using DuckDuckGo (free, always works). For more results:<br />
+              • <a href="https://serper.dev" target="_blank" rel="noreferrer" className="text-indigo-400 underline">serper.dev</a> — free 2,500 searches/month, set <code className="text-indigo-300 bg-gray-700 px-1 rounded">SERPER_API_KEY</code><br />
+              • <a href="https://app.tavily.com/sign-up" target="_blank" rel="noreferrer" className="text-indigo-400 underline">tavily.com</a> — free 1,000 searches/month, set <code className="text-indigo-300 bg-gray-700 px-1 rounded">TAVILY_API_KEY</code>
             </p>
           </div>
         )}

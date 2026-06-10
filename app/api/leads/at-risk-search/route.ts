@@ -4,7 +4,7 @@
 // code violations, HOA liens, and county delinquency lists.
 
 import { NextRequest } from "next/server"
-import { webSearch, webSearchDeep, extractPageContent } from "@/lib/search"
+import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
 export interface AtRiskLead {
   id: string
@@ -108,13 +108,6 @@ function buildDeepAtRiskQueries(area: {
 
 export async function POST(request: NextRequest) {
   try {
-    if (!process.env.TAVILY_API_KEY) {
-      return Response.json(
-        { error: "TAVILY_API_KEY is not configured. At-risk scanning requires web search." },
-        { status: 503 }
-      )
-    }
-
     const body = await request.json()
     const { searchType, zipCode, city, state, county, maxLeads = 50 } = body as {
       searchType: string
@@ -132,11 +125,11 @@ export async function POST(request: NextRequest) {
     const allSnippets: Array<{ query: string; title: string; url: string; content: string }> = []
     const topUrls: string[] = []
 
-    const searchResults = await Promise.allSettled(queries.map((q) => webSearch(q, 8)))
+    const searchResults = await Promise.allSettled(queries.map((q) => webSearchAny(q, 8)))
     searchResults
       .filter((r) => r.status === "fulfilled")
       .forEach((r) => {
-        const result = (r as PromiseFulfilledResult<Awaited<ReturnType<typeof webSearch>>>).value
+        const result = (r as PromiseFulfilledResult<Awaited<ReturnType<typeof webSearchAny>>>).value
         result.results.forEach((sr) => {
           allSnippets.push({ query: result.query, title: sr.title, url: sr.url, content: sr.content.slice(0, 1500) })
           if (topUrls.length < 12) topUrls.push(sr.url)
@@ -146,7 +139,7 @@ export async function POST(request: NextRequest) {
     // ── Phase 2: Deep search with full page content ───────────────────────────
     for (const q of deepQueries.slice(0, 3)) {
       try {
-        const result = await webSearchDeep(q, 5)
+        const result = await webSearchDeepOrAny(q, 5)
         result.results.forEach((sr) => {
           const content = sr.rawContent ? sr.rawContent.slice(0, 4000) : sr.content.slice(0, 1500)
           allSnippets.push({ query: q, title: sr.title, url: sr.url, content })

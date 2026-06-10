@@ -11,7 +11,7 @@
 //  - Court docket sites (judicial foreclosure states)
 //  - Local newspaper legal notice sections
 
-import { webSearch, webSearchDeep, extractPageContent } from "@/lib/search"
+import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
 
 export interface FreeLead {
@@ -115,10 +115,6 @@ export async function searchFreeForeclosures(params: {
   daysBack: number
   maxLeads: number
 }): Promise<{ leads: FreeLead[]; total: number; source: "tavily" | "none" }> {
-  if (!process.env.TAVILY_API_KEY) {
-    return { leads: [], total: 0, source: "none" }
-  }
-
   const queries     = buildSearchQueries(params)
   const deepQueries = buildDeepQueries(params)
 
@@ -128,7 +124,7 @@ export async function searchFreeForeclosures(params: {
 
   for (let i = 0; i < queries.length; i += 2) {
     const batch = queries.slice(i, i + 2)
-    const results = await Promise.allSettled(batch.map(q => webSearch(q, 8)))
+    const results = await Promise.allSettled(batch.map(q => webSearchAny(q, 8)))
     results.forEach((r, idx) => {
       if (r.status === "fulfilled") {
         r.value.results.forEach(sr => {
@@ -147,7 +143,7 @@ export async function searchFreeForeclosures(params: {
 
   for (let i = 0; i < Math.min(deepQueries.length, 4); i++) {
     try {
-      const result = await webSearchDeep(deepQueries[i], 5)
+      const result = await webSearchDeepOrAny(deepQueries[i], 5)
       result.results.forEach(sr => {
         // Use rawContent when available (full page text) — up to 4,000 chars
         const content = sr.rawContent

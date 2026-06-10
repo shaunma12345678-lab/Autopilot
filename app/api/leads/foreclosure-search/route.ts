@@ -120,13 +120,6 @@ export async function POST(request: NextRequest) {
 
     // ── FREE PATH: use public records scraper when ATTOM is not configured ────
     if (!process.env.ATTOM_API_KEY) {
-      if (!process.env.TAVILY_API_KEY) {
-        return Response.json({
-          error: "No data source configured. Add TAVILY_API_KEY (free at tavily.com) or ATTOM_API_KEY to search for foreclosures.",
-          setupRequired: true,
-        }, { status: 503 })
-      }
-
       const { leads: freeLeads, total, source } = await searchFreeForeclosures({
         searchType, zipCode, city, state, county, daysBack: safeDays, maxLeads: safeMax,
       })
@@ -139,7 +132,7 @@ export async function POST(request: NextRequest) {
         total,
         fetched: leads.length,
         dataSource: "free-public-records",
-        note: "Results from public records search. Add ATTOM_API_KEY for deeper data (equity, liens, AVM).",
+        note: "Results from public records web search. Add TAVILY_API_KEY (free) or SERPER_API_KEY (free) for better results, or ATTOM_API_KEY for full equity/liens/AVM data.",
       })
     }
 
