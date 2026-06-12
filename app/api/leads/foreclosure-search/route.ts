@@ -120,19 +120,26 @@ export async function POST(request: NextRequest) {
 
     // ── FREE PATH: use public records scraper when ATTOM is not configured ────
     if (!process.env.ATTOM_API_KEY) {
-      const { leads: freeLeads, total, source } = await searchFreeForeclosures({
+      const { leads: freeLeads, total, sourceCounts } = await searchFreeForeclosures({
         searchType, zipCode, city, state, county, daysBack: safeDays, maxLeads: safeMax,
       })
 
       const leads: ForeclosureLead[] = freeLeads.map(freeLeadToForeclosureLead)
       leads.sort((a, b) => b.score - a.score)
 
+      const sourceList = Object.entries(sourceCounts ?? {})
+        .map(([src, n]) => `${src} (${n})`)
+        .join(", ")
+
       return Response.json({
         leads,
         total,
-        fetched: leads.length,
-        dataSource: "free-public-records",
-        note: "Results from public records web search. Add TAVILY_API_KEY (free) or SERPER_API_KEY (free) for better results, or ATTOM_API_KEY for full equity/liens/AVM data.",
+        fetched:    leads.length,
+        dataSource: "direct-sources",
+        sources:    sourceCounts ?? {},
+        note:       sourceList
+          ? `Sources: ${sourceList}. Add ATTOM_API_KEY for full equity/liens/AVM data.`
+          : "No leads found — try a broader area or different date range.",
       })
     }
 

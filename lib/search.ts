@@ -112,6 +112,45 @@ export async function extractPageContent(urls: string[]): Promise<Array<{ url: s
   }
 }
 
+// Google Custom Search JSON API — own your Google search directly, no middlemen.
+// Free: 100 queries/day. Setup (5 min):
+//   1. console.cloud.google.com → Enable "Custom Search JSON API"
+//   2. programmablesearchengine.google.com → New engine → "Search entire web" → Copy CX ID
+//   3. console.cloud.google.com → Credentials → Create API Key
+//   4. Set GOOGLE_SEARCH_API_KEY and GOOGLE_CSE_ID env vars
+export async function webSearchGoogleCSE(query: string, maxResults = 10): Promise<SearchResponse> {
+  const apiKey = process.env.GOOGLE_SEARCH_API_KEY
+  const cx     = process.env.GOOGLE_CSE_ID
+  if (!apiKey || !cx) return { query, results: [] }
+  try {
+    const params = new URLSearchParams({
+      key: apiKey,
+      cx,
+      q:   query,
+      num: String(Math.min(maxResults, 10)),
+      gl:  "us",
+      hl:  "en",
+    })
+    const res = await fetch(
+      `https://www.googleapis.com/customsearch/v1?${params}`,
+      { signal: AbortSignal.timeout(10000) }
+    )
+    if (!res.ok) return { query, results: [] }
+    const data = await res.json()
+    const results: SearchResult[] = (data.items ?? []).map(
+      (item: Record<string, unknown>, i: number) => ({
+        title:   String(item.title   ?? ""),
+        url:     String(item.link    ?? ""),
+        content: String(item.snippet ?? ""),
+        score:   1 - i * 0.05,
+      })
+    )
+    return { query, results }
+  } catch {
+    return { query, results: [] }
+  }
+}
+
 // Serper.dev — Google results (free 2,500 queries/month, no credit card required).
 // Sign up at serper.dev in ~60 seconds, then set SERPER_API_KEY env var.
 export async function webSearchSerper(query: string, maxResults = 8): Promise<SearchResponse> {
@@ -241,10 +280,12 @@ export async function webSearchDDG(query: string, maxResults = 8): Promise<Searc
 }
 
 // Auto-selects the best available search backend.
-// Priority: Tavily (deepest, raw content) → Serper (Google, free 2.5k/mo) → DDG+Bing (zero-key).
+// Priority: Tavily → Google CSE (own key) → Serper → DDG+Bing (zero-key fallback).
 export async function webSearchAny(query: string, maxResults = 8): Promise<SearchResponse> {
-  if (process.env.TAVILY_API_KEY)  return webSearch(query, maxResults)
-  if (process.env.SERPER_API_KEY)  return webSearchSerper(query, maxResults)
+  if (process.env.TAVILY_API_KEY)   return webSearch(query, maxResults)
+  if (process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_CSE_ID)
+    return webSearchGoogleCSE(query, maxResults)
+  if (process.env.SERPER_API_KEY)   return webSearchSerper(query, maxResults)
   return webSearchDDG(query, maxResults)
 }
 

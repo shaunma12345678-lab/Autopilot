@@ -12,7 +12,8 @@
 //  - Local newspaper legal notice sections
 
 import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/search"
-import { runAgent } from "@/lib/claude"
+import { searchDirectSources }                                  from "@/lib/direct-foreclosure-sources"
+import { runAgent }                                             from "@/lib/claude"
 
 export interface FreeLead {
   address: string
@@ -114,7 +115,18 @@ export async function searchFreeForeclosures(params: {
   county?: string
   daysBack: number
   maxLeads: number
-}): Promise<{ leads: FreeLead[]; total: number; source: "tavily" | "none" }> {
+}): Promise<{ leads: FreeLead[]; total: number; source: "tavily" | "none"; sourceCounts?: Record<string, number> }> {
+  // ── Phase 0: Direct data sources — Zillow, Redfin, ArcGIS Hub, auction.com ───
+  // These query the actual listing/record systems directly, no search engine needed.
+  // Runs in parallel with search phases below.
+  const directPromise = searchDirectSources({
+    searchType: params.searchType,
+    zipCode:    params.zipCode,
+    city:       params.city,
+    state:      params.state,
+    county:     params.county,
+  })
+
   const queries     = buildSearchQueries(params)
   const deepQueries = buildDeepQueries(params)
 
@@ -234,24 +246,34 @@ Return JSON array ([] if truly nothing found):
       model:     "sonnet",
     })) as unknown as FreeLead[]
   } catch {
-    return { leads: [], total: 0, source: "tavily" }
+    rawLeads = []
   }
 
-  if (!Array.isArray(rawLeads)) return { leads: [], total: 0, source: "tavily" }
+  if (!Array.isArray(rawLeads)) rawLeads = []
 
-  // Deduplicate by normalized address
+  // ── Await Phase 0 and merge with AI-extracted leads ──────────────────────────
+  const { leads: directLeads, sourceCounts } = await directPromise
+
+  // Combine: direct sources first (highest quality), then AI-extracted web results
+  // Deduplicate across both sets by normalized address+city
   const seen = new Set<string>()
-  const unique = rawLeads.filter(l => {
+  const merged = [...directLeads, ...rawLeads].filter(l => {
     if (!l.address?.trim()) return false
-    const key = (l.address + l.city).toLowerCase().replace(/\s+/g, "")
+    const key = (l.address + l.city).toLowerCase().replace(/[\s,#.-]/g, "")
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
 
+  // Add "web-search" to source counts if AI extraction found anything
+  if (rawLeads.length > 0) {
+    sourceCounts["Web search"] = rawLeads.length
+  }
+
   return {
-    leads:  unique.slice(0, params.maxLeads),
-    total:  unique.length,
-    source: "tavily",
+    leads:        merged.slice(0, params.maxLeads),
+    total:        merged.length,
+    source:       "tavily",
+    sourceCounts,
   }
 }
