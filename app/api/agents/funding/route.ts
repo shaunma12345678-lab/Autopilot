@@ -1,13 +1,8 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { analyzeFundingReadiness } from "@/lib/agents/funding-agent"
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const { action, ...params } = body
 

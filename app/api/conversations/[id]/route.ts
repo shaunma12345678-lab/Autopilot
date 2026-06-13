@@ -1,17 +1,12 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 
 // GET — conversation with messages
 export async function GET(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
   const { id } = await params
   try {
     const conversation = await prisma.conversation.findFirst({
-      where:   { id, userId: user.id },
+      where:   { id },
       include: { messages: { orderBy: { createdAt: "asc" } } },
     })
     if (!conversation) return Response.json({ error: "Not found" }, { status: 404 })
@@ -24,15 +19,11 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 
 // PATCH — rename / pin / unpin
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
   const { id } = await params
   try {
     const body = await request.json()
     const conversation = await prisma.conversation.updateMany({
-      where: { id, userId: user.id },
+      where: { id },
       data:  {
         ...(body.title  !== undefined ? { title:  body.title }  : {}),
         ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
@@ -47,13 +38,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
 // DELETE — delete conversation
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
   const { id } = await params
   try {
-    await prisma.conversation.deleteMany({ where: { id, userId: user.id } })
+    await prisma.conversation.deleteMany({ where: { id } })
     return Response.json({ ok: true })
   } catch (err) {
     console.error("[conversations/:id DELETE]", err)

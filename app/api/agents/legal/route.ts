@@ -1,14 +1,9 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 import { generateServiceAgreement, generatePrivacyPolicy, generateNDA, generateTermsOfService } from "@/lib/agents/legal-agent"
 
 export async function POST(request: NextRequest) {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
-  const business = await prisma.business.findFirst({ where: { userId: user.id } })
+  const business = await prisma.business.findFirst({  })
   if (!business) return Response.json({ error: "No business found" }, { status: 404 })
 
   const body = await request.json()

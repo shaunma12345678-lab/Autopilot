@@ -26,28 +26,8 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
-
-  const isDashboardRoute =
-    request.nextUrl.pathname.startsWith("/dashboard") ||
-    request.nextUrl.pathname.startsWith("/content") ||
-    request.nextUrl.pathname.startsWith("/reputation") ||
-    request.nextUrl.pathname.startsWith("/leads") ||
-    request.nextUrl.pathname.startsWith("/reports") ||
-    request.nextUrl.pathname.startsWith("/settings") ||
-    request.nextUrl.pathname.startsWith("/billing") ||
-    request.nextUrl.pathname.startsWith("/onboarding")
-
-  if (isDashboardRoute && !user) {
-    return NextResponse.redirect(new URL("/login", request.url))
-  }
-
-  if (
-    (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup") &&
-    user
-  ) {
-    return NextResponse.redirect(new URL("/dashboard", request.url))
-  }
+  // Refresh session on every request — keeps tokens alive without forcing login
+  await supabase.auth.getUser()
 
   return supabaseResponse
 }

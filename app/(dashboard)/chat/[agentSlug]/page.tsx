@@ -1,10 +1,9 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 import AgentChat from "@/components/agent/AgentChat"
 import { BOS_AGENT_BY_SLUG } from "@/lib/bos-registry"
+import { getSessionOrAdminUser } from "@/lib/auth-helper"
 
-// Accent colors per category
 const CATEGORY_COLORS: Record<string, string> = {
   Finance:           "#10b981",
   Sales:             "#3b82f6",
@@ -17,12 +16,11 @@ const CATEGORY_COLORS: Record<string, string> = {
 }
 
 export default async function AgentChatPage({ params }: { params: Promise<{ agentSlug: string }> }) {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
+  const user = await getSessionOrAdminUser()
+  if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const { agentSlug } = await params
   const agentDef = BOS_AGENT_BY_SLUG.get(agentSlug)

@@ -1,14 +1,23 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { signIn } from "@/app/actions/auth"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 
 export default function LoginPage() {
+  const router = useRouter()
+
+  // Skip login page if already authenticated
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient()
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) router.replace("/dashboard")
+    })
+  }, [router])
   const [error, setError]     = useState("")
   const [loading, setLoading] = useState(false)
-  const router = useRouter()
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()

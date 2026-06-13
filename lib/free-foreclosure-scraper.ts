@@ -1,17 +1,19 @@
 // Free ATTOM replacement — finds pre-foreclosure leads using public record sources.
-// Works with Tavily (free tier: 1,000/month) + Groq/Claude (already configured).
-// No paid data subscriptions required.
+// Uses Tavily web search + deep content extraction + Claude AI extraction.
 //
-// Sources targeted:
-//  - County recorder websites (NOD filings)
-//  - Legal notice aggregators (published NODs / lis pendens)
-//  - Auction.com / Bid4Assets (properties approaching auction)
+// Sources targeted (legally required public publications):
+//  - Legal notice newspapers (NODs are legally required to be published)
+//  - County recorder official search pages
+//  - Auction.com / Bid4Assets / Xome foreclosure listings
+//  - RealtyTrac / Foreclosure.com pre-foreclosure listings
+//  - Zillow pre-foreclosure tagged homes
+//  - HUD / Fannie Mae public REO listings
 //  - Court docket sites (judicial foreclosure states)
-//  - HUD / Fannie Mae public listings
-//  - Real estate listing sites (pre-foreclosure tags)
+//  - Local newspaper legal notice sections
 
-import { webSearch } from "@/lib/search"
-import { runAgent } from "@/lib/claude"
+import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/search"
+import { searchDirectSources }                                  from "@/lib/direct-foreclosure-sources"
+import { runAgent }                                             from "@/lib/claude"
 
 export interface FreeLead {
   address: string
@@ -29,10 +31,11 @@ export interface FreeLead {
   rawSignals: string[]
 }
 
-const EXTRACT_SYSTEM = `You are a real estate data extraction specialist.
-Extract pre-foreclosure property listings from web search results.
-Return valid JSON only. Be conservative — only include entries with a real street address.`
+const EXTRACT_SYSTEM = `You are a real estate data extraction specialist with deep knowledge of US foreclosure law.
+Extract pre-foreclosure property listings from web search results and page content.
+Return valid JSON only. Include every property you can identify — be thorough, not conservative.`
 
+// Standard queries — broad coverage
 function buildSearchQueries(area: {
   searchType: string
   zipCode?: string
@@ -42,29 +45,65 @@ function buildSearchQueries(area: {
   daysBack: number
 }): string[] {
   const year = new Date().getFullYear()
-  const prevYear = year - 1
   const place =
     area.searchType === "zip"
-      ? area.zipCode!
+      ? `"${area.zipCode}"`
       : area.searchType === "city"
       ? `"${area.city}" "${area.state}"`
       : `"${area.county} county" "${area.state}"`
 
+  // Derive county/city name for richer queries
+  const cityOrZip =
+    area.searchType === "zip"
+      ? area.zipCode!
+      : area.searchType === "city"
+      ? `${area.city} ${area.state}`
+      : `${area.county} county ${area.state}`
+
   return [
-    // Public legal notice aggregators (where NODs are published by law)
-    `${place} "notice of default" ${year} foreclosure filing`,
-    `${place} "lis pendens" ${year} filed property`,
-    // Auction sites (properties past NOD stage)
-    `site:auction.com ${place} foreclosure ${year}`,
-    `site:bid4assets.com ${place} real estate ${year}`,
-    // Pre-foreclosure listing sites
-    `${place} "pre-foreclosure" property listing ${year}`,
-    // Court records (judicial foreclosure states)
-    `${place} foreclosure lawsuit filed ${year} property owner`,
-    // Legal newspaper notices
-    `${place} "notice of trustee's sale" OR "notice of sheriff's sale" ${year}`,
-    // Tax delinquency overlap
-    `${place} delinquent property "notice of default" ${year}`,
+    // Legal notice publications — where banks MUST publish NODs by law
+    `${place} "notice of default" ${year} legal notice filed property`,
+    `${place} "notice of trustee's sale" OR "trustee sale" ${year} property address`,
+    // Lis pendens judicial foreclosures
+    `${place} "lis pendens" ${year} foreclosure filed court`,
+    // Auction listing sites with property addresses
+    `site:auction.com "${cityOrZip}" foreclosure property`,
+    `site:xome.com "${cityOrZip}" foreclosure home`,
+    // Pre-foreclosure listing aggregators
+    `site:foreclosure.com "${cityOrZip}" pre-foreclosure`,
+    // Zillow pre-foreclosure homes
+    `site:zillow.com "${cityOrZip}" pre-foreclosure`,
+    // Real estate news with specific addresses
+    `${place} pre-foreclosure home owner ${year} address`,
+  ]
+}
+
+// Deep queries — for raw full-page content from sources most likely to list actual addresses
+function buildDeepQueries(area: {
+  searchType: string
+  zipCode?: string
+  city?: string
+  state?: string
+  county?: string
+}): string[] {
+  const year = new Date().getFullYear()
+  const countyOrCity =
+    area.searchType === "zip"
+      ? `zip ${area.zipCode}`
+      : area.searchType === "city"
+      ? `${area.city} ${area.state}`
+      : `${area.county} county ${area.state}`
+
+  // These queries are designed to hit pages that CONTAIN property address lists
+  return [
+    // County recorder legal notice lists — contain hundreds of addresses
+    `${countyOrCity} county recorder "notice of default" ${year} list`,
+    // Legal newspaper notices (legally required, contain exact addresses + owner names + lenders)
+    `${countyOrCity} legal notices foreclosure "notice of default" ${year}`,
+    // Foreclosure.com area page (shows property addresses directly)
+    `foreclosure.com ${countyOrCity} pre-foreclosure listing ${year}`,
+    // RealtyTrac listing page
+    `realtytrac.com ${countyOrCity} foreclosure homes ${year}`,
   ]
 }
 
@@ -76,31 +115,90 @@ export async function searchFreeForeclosures(params: {
   county?: string
   daysBack: number
   maxLeads: number
-}): Promise<{ leads: FreeLead[]; total: number; source: "tavily" | "none" }> {
-  if (!process.env.TAVILY_API_KEY) {
-    return { leads: [], total: 0, source: "none" }
-  }
+}): Promise<{ leads: FreeLead[]; total: number; source: "tavily" | "none"; sourceCounts?: Record<string, number> }> {
+  // ── Phase 0: Direct data sources — Zillow, Redfin, ArcGIS Hub, auction.com ───
+  // These query the actual listing/record systems directly, no search engine needed.
+  // Runs in parallel with search phases below.
+  const directPromise = searchDirectSources({
+    searchType: params.searchType,
+    zipCode:    params.zipCode,
+    city:       params.city,
+    state:      params.state,
+    county:     params.county,
+  })
 
-  const queries = buildSearchQueries(params)
+  const queries     = buildSearchQueries(params)
+  const deepQueries = buildDeepQueries(params)
 
-  // Run searches in parallel (2 at a time to stay within rate limits)
+  // ── Phase 1: Standard search — broad coverage at 1,500-char snippets ─────────
   const allSnippets: Array<{ query: string; title: string; url: string; content: string }> = []
+  const topUrls: string[] = []
 
   for (let i = 0; i < queries.length; i += 2) {
     const batch = queries.slice(i, i + 2)
-    const results = await Promise.allSettled(batch.map(q => webSearch(q, 7)))
+    const results = await Promise.allSettled(batch.map(q => webSearchAny(q, 8)))
     results.forEach((r, idx) => {
       if (r.status === "fulfilled") {
         r.value.results.forEach(sr => {
-          allSnippets.push({ query: batch[idx], title: sr.title, url: sr.url, content: sr.content.slice(0, 500) })
+          // 1,500 chars — 3x the old limit, much more likely to include addresses
+          allSnippets.push({ query: batch[idx], title: sr.title, url: sr.url, content: sr.content.slice(0, 1500) })
+          if (topUrls.length < 12 && sr.url) topUrls.push(sr.url)
         })
       }
     })
-    if (i + 2 < queries.length) await new Promise(r => setTimeout(r, 400))
+    if (i + 2 < queries.length) await new Promise(r => setTimeout(r, 300))
   }
 
-  if (allSnippets.length === 0) return { leads: [], total: 0, source: "tavily" }
+  // ── Phase 2: Deep search — full raw page content on targeted queries ──────────
+  // This hits legal notice pages, county recorders, listing sites — sources with address lists
+  const deepSnippets: Array<{ query: string; title: string; url: string; content: string }> = []
 
+  for (let i = 0; i < Math.min(deepQueries.length, 4); i++) {
+    try {
+      const result = await webSearchDeepOrAny(deepQueries[i], 5)
+      result.results.forEach(sr => {
+        // Use rawContent when available (full page text) — up to 4,000 chars
+        const content = sr.rawContent
+          ? sr.rawContent.slice(0, 4000)
+          : sr.content.slice(0, 1500)
+        deepSnippets.push({ query: deepQueries[i], title: sr.title, url: sr.url, content })
+        if (topUrls.length < 20 && sr.url) topUrls.push(sr.url)
+      })
+      await new Promise(r => setTimeout(r, 300))
+    } catch {
+      // continue
+    }
+  }
+
+  // ── Phase 3: Direct page extraction on best URLs ──────────────────────────────
+  // Pull full content from the top 6 most promising URLs (legal notice / auction sites)
+  const extractionCandidates = [...new Set(topUrls)]
+    .filter(u =>
+      /auction\.com|foreclosure\.com|realtytrac|zillow|xome|recorder|legalnotice|publicnotice|courtrecord|trustee|deed|foreclosuredaily/i.test(u)
+    )
+    .slice(0, 6)
+
+  const extractedPages: Array<{ query: string; title: string; url: string; content: string }> = []
+
+  if (extractionCandidates.length > 0) {
+    const pages = await extractPageContent(extractionCandidates)
+    pages.forEach(p => {
+      if (p.content.length > 100) {
+        extractedPages.push({
+          query: "direct page extraction",
+          title: p.url,
+          url:   p.url,
+          content: p.content.slice(0, 5000),
+        })
+      }
+    })
+  }
+
+  const allContent = [...allSnippets, ...deepSnippets, ...extractedPages]
+
+  if (allContent.length === 0) return { leads: [], total: 0, source: "tavily" }
+
+  // ── Phase 4: AI extraction from all content ───────────────────────────────────
   const areaDesc =
     params.searchType === "zip"
       ? `ZIP ${params.zipCode}`
@@ -108,60 +206,74 @@ export async function searchFreeForeclosures(params: {
       ? `${params.city}, ${params.state}`
       : `${params.county} County, ${params.state}`
 
-  const extractUser = `Extract every pre-foreclosure property found in these web results for ${areaDesc}.
+  const extractUser = `Extract EVERY pre-foreclosure property you can find in these search results for ${areaDesc}.
 
-Search results:
-${allSnippets.map((s, i) => `[${i + 1}] "${s.query}"\nTitle: ${s.title}\nURL: ${s.url}\nSnippet: ${s.content}`).join("\n\n")}
+Search results and page content (${allContent.length} sources):
+${allContent.map((s, i) => `[${i + 1}] Source: "${s.query}"\nPage: ${s.title}\nURL: ${s.url}\n---\n${s.content}\n---`).join("\n\n")}
 
-For each property with a real street address found, extract:
-- address (street number + street name)
-- city (fill in ${params.city || ""} if not mentioned)
-- state (fill in ${params.state || ""} if not mentioned)
-- zip (use ${params.zipCode || ""} if not mentioned)
-- ownerName (owner name if mentioned, else "")
+For EVERY property found, extract:
+- address (street number + street name — required)
+- city (if not mentioned, use ${params.city || params.zipCode || ""})
+- state (if not mentioned, use ${params.state || ""})
+- zip (use ${params.zipCode || ""} if not specified)
+- ownerName (owner/borrower name if mentioned, else "")
 - foreclosureStage: NOTICE_OF_DEFAULT | LIS_PENDENS | NOTICE_OF_SALE | AUCTION | PRE_FORECLOSURE
-- recordingDate: YYYY-MM-DD format if mentioned, else ""
-- defaultAmount: number (no dollar sign) or null
-- lender: lender name if mentioned, else null
+- recordingDate: YYYY-MM-DD if mentioned, else ""
+- defaultAmount: number or null
+- lender: lender/bank name if mentioned, else null
 - auctionDate: YYYY-MM-DD if mentioned, else null
-- estimatedValue: number or null if mentioned
+- estimatedValue: asking price or estimated value if mentioned, else null
 - sourceUrl: the URL this was found in
-- rawSignals: array of 1-3 short strings describing what signals were found
+- rawSignals: 1-3 short strings about what distress signals were found
 
-Rules:
-- Only include entries with a real street address (house number + street)
-- Deduplicate: if the same address appears twice, keep the one with more data
-- Do NOT invent data — only use what is explicitly stated in the snippets
+Critical rules:
+- Include EVERY property with a street address — be thorough, do not skip any
+- If the same address appears multiple times, keep the entry with the most data
+- If city/state/zip are not explicitly stated but can be inferred from context, fill them in
+- Do NOT invent data — only use what is in the sources
+- If you see a list of properties on a page, extract ALL of them, not just the first few
+- Look for patterns like "123 Main St", "1234 Oak Ave", "456 Elm Blvd" in the text
 
-Return JSON array (empty [] if nothing found):
-[{ "address": "...", "city": "...", "state": "...", "zip": "...", "ownerName": "...", "foreclosureStage": "...", "recordingDate": "...", "defaultAmount": null, "lender": null, "auctionDate": null, "estimatedValue": null, "sourceUrl": "...", "rawSignals": [] }]`
+Return JSON array ([] if truly nothing found):
+[{ "address": "123 Main St", "city": "...", "state": "AZ", "zip": "85001", "ownerName": "...", "foreclosureStage": "NOTICE_OF_DEFAULT", "recordingDate": "", "defaultAmount": null, "lender": null, "auctionDate": null, "estimatedValue": null, "sourceUrl": "...", "rawSignals": ["notice of default filed"] }]`
 
   let rawLeads: FreeLead[] = []
 
   try {
     rawLeads = (await runAgent(EXTRACT_SYSTEM, extractUser, {
-      jsonMode: true,
-      maxTokens: 4000,
+      jsonMode:  true,
+      maxTokens: 8000,
+      model:     "sonnet",
     })) as unknown as FreeLead[]
   } catch {
-    return { leads: [], total: 0, source: "tavily" }
+    rawLeads = []
   }
 
-  if (!Array.isArray(rawLeads)) return { leads: [], total: 0, source: "tavily" }
+  if (!Array.isArray(rawLeads)) rawLeads = []
 
-  // Deduplicate by normalized address
+  // ── Await Phase 0 and merge with AI-extracted leads ──────────────────────────
+  const { leads: directLeads, sourceCounts } = await directPromise
+
+  // Combine: direct sources first (highest quality), then AI-extracted web results
+  // Deduplicate across both sets by normalized address+city
   const seen = new Set<string>()
-  const unique = rawLeads.filter(l => {
+  const merged = [...directLeads, ...rawLeads].filter(l => {
     if (!l.address?.trim()) return false
-    const key = (l.address + l.city).toLowerCase().replace(/\s+/g, "")
+    const key = (l.address + l.city).toLowerCase().replace(/[\s,#.-]/g, "")
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
 
+  // Add "web-search" to source counts if AI extraction found anything
+  if (rawLeads.length > 0) {
+    sourceCounts["Web search"] = rawLeads.length
+  }
+
   return {
-    leads: unique.slice(0, params.maxLeads),
-    total: unique.length,
-    source: "tavily",
+    leads:        merged.slice(0, params.maxLeads),
+    total:        merged.length,
+    source:       "tavily",
+    sourceCounts,
   }
 }

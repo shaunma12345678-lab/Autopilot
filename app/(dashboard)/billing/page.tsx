@@ -1,18 +1,17 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 import BillingManager from "@/components/dashboard/BillingManager"
+import { getSessionOrAdminUser } from "@/lib/auth-helper"
 
 export default async function BillingPage() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
+  const user = await getSessionOrAdminUser()
+  if (!user) redirect("/onboarding")
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
-  if (!dbUser) redirect("/login")
+  if (!dbUser) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const [contentCount, reviewCount] = await Promise.all([
     prisma.content.count({ where: { businessId: business.id } }),

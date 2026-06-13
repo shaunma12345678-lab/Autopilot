@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 import {
   searchForeclosuresByZip,
@@ -86,11 +85,6 @@ function hashStr(s: string): number {
 // Uses ATTOM if configured (deep 6-pass), otherwise free public-records scraper via Tavily.
 export async function POST(request: NextRequest) {
   try {
-
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const {
       searchType,       // "zip" | "city" | "county"
@@ -126,26 +120,26 @@ export async function POST(request: NextRequest) {
 
     // ── FREE PATH: use public records scraper when ATTOM is not configured ────
     if (!process.env.ATTOM_API_KEY) {
-      if (!process.env.TAVILY_API_KEY) {
-        return Response.json({
-          error: "No data source configured. Add TAVILY_API_KEY (free at tavily.com) or ATTOM_API_KEY to search for foreclosures.",
-          setupRequired: true,
-        }, { status: 503 })
-      }
-
-      const { leads: freeLeads, total, source } = await searchFreeForeclosures({
+      const { leads: freeLeads, total, sourceCounts } = await searchFreeForeclosures({
         searchType, zipCode, city, state, county, daysBack: safeDays, maxLeads: safeMax,
       })
 
       const leads: ForeclosureLead[] = freeLeads.map(freeLeadToForeclosureLead)
       leads.sort((a, b) => b.score - a.score)
 
+      const sourceList = Object.entries(sourceCounts ?? {})
+        .map(([src, n]) => `${src} (${n})`)
+        .join(", ")
+
       return Response.json({
         leads,
         total,
-        fetched: leads.length,
-        dataSource: "free-public-records",
-        note: "Results from public records search. Add ATTOM_API_KEY for deeper data (equity, liens, AVM).",
+        fetched:    leads.length,
+        dataSource: "direct-sources",
+        sources:    sourceCounts ?? {},
+        note:       sourceList
+          ? `Sources: ${sourceList}. Add ATTOM_API_KEY for full equity/liens/AVM data.`
+          : "No leads found — try a broader area or different date range.",
       })
     }
 
@@ -245,17 +239,13 @@ export async function POST(request: NextRequest) {
 // PUT /api/leads/foreclosure-search — save selected leads to CRM
 export async function PUT(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const { businessId, leads }: { businessId: string; leads: ForeclosureLead[] } = body
 
     if (!businessId || !Array.isArray(leads) || leads.length === 0)
       return Response.json({ error: "businessId and leads array required" }, { status: 400 })
 
-    const business = await prisma.business.findFirst({ where: { id: businessId, userId: user.id } })
+    const business = await prisma.business.findFirst({ where: { id: businessId } })
     if (!business) return Response.json({ error: "Business not found" }, { status: 404 })
 
     const created = await Promise.all(

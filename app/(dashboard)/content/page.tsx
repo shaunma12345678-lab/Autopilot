@@ -1,15 +1,14 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { getSessionOrAdminUser } from "@/lib/auth-helper"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 import ContentManager from "@/components/dashboard/ContentManager"
 
 export default async function ContentPage() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
+  const user = await getSessionOrAdminUser()
+  if (!user) redirect("/onboarding")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
-  if (!business) redirect("/onboarding")
+  if (!business) redirect("/foreclosure-leads")
 
   const content = await prisma.content.findMany({
     where: { businessId: business.id },

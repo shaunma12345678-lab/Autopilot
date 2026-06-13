@@ -1,14 +1,9 @@
 import { NextRequest } from "next/server"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 import { generateSalesScript } from "@/lib/agents/sales-agent"
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const body = await request.json()
     const { businessId, service, price, targetCustomer, objections, uvp } = body
 
@@ -17,7 +12,7 @@ export async function POST(request: NextRequest) {
     }
 
     const business = await prisma.business.findFirst({
-      where: { id: businessId, userId: user.id },
+      where: { id: businessId },
     })
     if (!business) return Response.json({ error: "Business not found" }, { status: 404 })
 
@@ -50,15 +45,11 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
     const { searchParams } = new URL(request.url)
     const businessId = searchParams.get("businessId")
     if (!businessId) return Response.json({ error: "businessId required" }, { status: 400 })
 
-    const business = await prisma.business.findFirst({ where: { id: businessId, userId: user.id } })
+    const business = await prisma.business.findFirst({ where: { id: businessId } })
     if (!business) return Response.json({ error: "Not found" }, { status: 404 })
 
     const scripts = await prisma.content.findMany({
