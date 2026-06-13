@@ -129,6 +129,9 @@ JSON array only:`
 
 // ── Web search phase ──────────────────────────────────────────────────────────
 
+// TEMP diagnostics — surfaced in sourceCounts to debug the live web phase.
+const __debug = { webResults: 0, webRawChars: 0, regexFound: 0, matched: 0 }
+
 // Returns ALL extracted leads tagged for relevance — caller filters/prioritizes.
 async function runWebSearchPhase(
   loc: SearchLocation,
@@ -158,6 +161,9 @@ async function runWebSearchPhase(
   )
 
   const results = resultBatches.flat().filter(r => r.raw.length > 50)
+  const totalRawChars = results.reduce((a, r) => a + r.raw.length, 0)
+  __debug.webResults += results.length
+  __debug.webRawChars += totalRawChars
   if (results.length === 0) return { regex: [], ai: [] }
 
   // ── Primary: regex extraction (reliable, processes raw content) ─────────
@@ -167,6 +173,7 @@ async function runWebSearchPhase(
   for (const { url, raw } of results) {
     regex.push(...extractAddressesFromContent(raw.slice(0, 400_000), url))
   }
+  __debug.regexFound += regex.length
 
   // ── Secondary: AI extraction over capped content (catches odd formats) ───
   // Groq is rate-limited on the free tier and its SDK backs off 15-60s on 429.
@@ -218,6 +225,8 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   } = params
 
   const notify = (msg: string, count: number) => onProgress?.(msg, count)
+
+  __debug.webResults = 0; __debug.webRawChars = 0; __debug.regexFound = 0; __debug.matched = 0
 
   // ── Resolve search locations (works for ANY zip / city / county) ─────────
   const locations: SearchLocation[] = []
@@ -313,12 +322,18 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   // local publisher wasn't in results), keep ALL found — they're still real,
   // verified foreclosure notices in/near the region, so we never return empty.
   const matched   = allRegex.filter(r => leadMatchesTarget(r, target))
+  __debug.matched = matched.length
   const regexLeads = (matched.length >= 8 ? matched : allRegex).map(r => r.lead)
 
   const allWebLeads = [...regexLeads, ...allAiLeads]
   if (allWebLeads.length > 0) {
     combinedSourceCounts["Legal notices (web)"] = (combinedSourceCounts["Legal notices (web)"] ?? 0) + allWebLeads.length
   }
+  // TEMP debug surfaced in sourceCounts
+  combinedSourceCounts["_dbg_webResults"] = __debug.webResults
+  combinedSourceCounts["_dbg_rawKB"] = Math.round(__debug.webRawChars / 1000)
+  combinedSourceCounts["_dbg_regexFound"] = __debug.regexFound
+  combinedSourceCounts["_dbg_matched"] = __debug.matched
 
   notify(`Found ${allDirectLeads.length + allWebLeads.length} raw leads — deduplicating…`, allDirectLeads.length + allWebLeads.length)
 
