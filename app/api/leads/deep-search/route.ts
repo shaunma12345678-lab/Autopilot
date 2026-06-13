@@ -91,7 +91,13 @@ export async function POST(request: NextRequest) {
     .map(fl => { try { return freeLeadToForeclosureLead(fl) } catch { return null } })
     .filter(Boolean)
 
-  leads.sort((a, b) => (b?.score ?? 0) - (a?.score ?? 0))
+  const PRI_ORDER: Record<string, number> = { HOT: 0, WARM: 1, COLD: 2 }
+  leads.sort((a, b) => {
+    const pa = PRI_ORDER[a?.priority ?? "COLD"] ?? 2
+    const pb = PRI_ORDER[b?.priority ?? "COLD"] ?? 2
+    if (pa !== pb) return pa - pb
+    return (b?.score ?? 0) - (a?.score ?? 0)
+  })
 
   return Response.json({
     leads,

@@ -135,16 +135,18 @@ function TopDealsCard({ leads, onSave, savedIds, businessId }: {
   savedIds: Set<number>
   businessId: string
 }) {
-  const top = useMemo(() =>
-    leads
-      .filter(l => l.dealCalc && ["A","B"].includes(l.dealCalc.dealGrade))
+  const top = useMemo(() => {
+    const PRI_RANK: Record<string, number> = { HOT: 0, WARM: 1, COLD: 2 }
+    // Show HOT leads first, then grade A/B warm leads
+    return [...leads]
+      .filter(l => l.priority === "HOT" || (l.dealCalc && ["A", "B"].includes(l.dealCalc.dealGrade)))
       .sort((a, b) => {
-        const ga = a.dealCalc!.dealGrade, gb = b.dealCalc!.dealGrade
-        if (ga !== gb) return ga < gb ? -1 : 1
-        return (b.dealCalc!.potentialProfit) - (a.dealCalc!.potentialProfit)
+        const pa = PRI_RANK[a.priority] ?? 2, pb = PRI_RANK[b.priority] ?? 2
+        if (pa !== pb) return pa - pb
+        return (b.score ?? 0) - (a.score ?? 0)
       })
       .slice(0, 5)
-  , [leads])
+  }, [leads])
 
   if (top.length === 0) return null
 
@@ -904,14 +906,14 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
 
   const startProgressAnimation = (targetLeads: number) => {
     const MESSAGES = [
-      "Querying Zillow across all county tiles…",
-      "Querying Redfin pre-foreclosure listings…",
-      "Pulling ArcGIS county recorder records…",
-      "Checking auction.com & HUD REO…",
-      "Running 32 targeted legal-notice queries…",
-      "AI extraction pass 1 — parsing results…",
-      "AI extraction pass 2 — finding more…",
-      `Deduplicating and ranking up to ${targetLeads} leads…`,
+      "Querying Zillow & Redfin across all county tiles…",
+      "Pulling HomePath (Fannie Mae) & HomeSteps (Freddie Mac) REO…",
+      "Pulling ArcGIS county recorder public records…",
+      "Checking auction.com, HUD REO, USDA, Bid4Assets…",
+      "Scraping CA legal notice publications (NODs)…",
+      "Running 32 targeted web search queries with Tavily…",
+      "AI extraction — parsing legal notices & recorder data…",
+      `Enriching owner contacts, deduplicating, ranking up to ${targetLeads} leads…`,
     ]
     let step = 0
     setProgressPct(2)
@@ -1039,8 +1041,14 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     )
   }, [result, filterPri, filterMinScore, filterAbsentee, filterTaxDelq, filterMinEq, filterMaxDays, filterStage])
 
+  const PRI_RANK: Record<string, number> = { HOT: 0, WARM: 1, COLD: 2 }
   const sorted = useMemo(() =>
     [...filtered].sort((a, b) => {
+      // Always group by priority first (HOT → WARM → COLD) when sorting by score
+      if (sortCol === "score") {
+        const pa = PRI_RANK[a.priority] ?? 2, pb = PRI_RANK[b.priority] ?? 2
+        if (pa !== pb) return sortDir === "desc" ? pa - pb : pb - pa
+      }
       const av = (a[sortCol] ?? 0) as string|number, bv = (b[sortCol] ?? 0) as string|number
       const c = typeof av === "string" ? av.localeCompare(String(bv)) : Number(av) - Number(bv)
       return sortDir === "asc" ? c : -c

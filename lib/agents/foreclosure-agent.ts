@@ -159,6 +159,12 @@ export function computeScore(
       B.equity += 2
       signals.push(`Bought at $${(lead.purchasePrice / 1000).toFixed(0)}k — major appreciation`)
     }
+  } else if (value > 0 && lead.estimatedEquity === null) {
+    // Equity data unavailable — infer: CA homeowners average ~40% equity.
+    // A distressed homeowner in pre-foreclosure still likely has SOME equity, which is why
+    // the deal opportunity exists. Award a conservative baseline.
+    B.equity += 10
+    signals.push(`Estimated value $${Math.round(value / 1000)}k — equity likely available (inferred)`)
   }
 
   // ── B. Depth of Distress (max 25) ────────────────────────────────────────
@@ -200,24 +206,27 @@ export function computeScore(
   const days = lead.daysOnFile
 
   if (stage === "NOTICE_OF_DEFAULT") {
-    B.stage += 18
-    signals.push("Notice of Default — earliest stage, most negotiation time")
+    B.stage += 22
+    signals.push("Notice of Default — earliest stage, maximum negotiation window")
   } else if (stage === "LIS_PENDENS") {
     B.stage += 15
     signals.push("Lis Pendens — judicial process begun")
   } else if (stage === "NOTICE_OF_SALE") {
-    B.stage += 10
-    signals.push("Notice of Sale — auction coming, owner motivated")
+    B.stage += 16
+    signals.push("Notice of Sale — auction approaching, owner highly motivated to sell")
   } else if (stage === "AUCTION") {
-    B.stage += 5
-    signals.push("Auction scheduled — urgent")
+    B.stage += 12
+    signals.push("Auction scheduled — urgent, owner willing to deal fast")
   } else {
-    B.stage += 8
+    B.stage += 10
   }
 
-  if (days <= 30) {
-    B.stage += 2
-    signals.push(`Filed ${days} days ago — very fresh filing`)
+  if (days <= 60) {
+    B.stage += 3
+    signals.push(`Filed ${days} days ago — very fresh, first-mover advantage`)
+  } else if (days <= 30) {
+    B.stage += 5
+    signals.push(`Filed ${days} days ago — extremely fresh filing`)
   } else if (days > 180) {
     B.stage -= 3
     signals.push(`Filed ${days} days ago — may have partially resolved`)
@@ -229,6 +238,22 @@ export function computeScore(
       B.stage -= 5
       signals.push(`Auction in ${auctionDays} days — very limited time`)
     }
+  }
+
+  // ── Verified data quality bonuses ────────────────────────────────────────
+  // Rewards leads with confirmed public-record data — these are real, actionable
+  const ownerName = lead.ownerName ?? ""
+  if (ownerName && ownerName !== "Owner Unknown" && !/hud|fannie|freddie|usda|fha/i.test(ownerName)) {
+    B.owner += 3
+    signals.push(`Owner identified: ${ownerName} — direct outreach possible`)
+  }
+  if (lead.recordingDate) {
+    B.distress += 2
+    signals.push("Recording date confirmed — verified public record")
+  }
+  if (lead.lender && !/hud|fannie|freddie|usda|fha/i.test(lead.lender)) {
+    B.distress += 2
+    signals.push(`Lender: ${lead.lender} — institutional pressure on borrower`)
   }
 
   // ── D. Owner Motivation (max 12) ─────────────────────────────────────────
@@ -300,8 +325,11 @@ export function computeScore(
   // Map from [-30, 100] range to [0, 100]
   const score = Math.max(0, Math.min(100, Math.round(((rawScore + 30) / 130) * 100)))
 
+  // HOT ≥ 55: NOD + any confirmed data, or strong multi-signal lead
+  // WARM ≥ 35: NTS / verified NOD without full equity data / strong stage
+  // COLD < 35: minimal-data leads — still real, just less immediately actionable
   const priority: ForeclosureLead["priority"] =
-    score >= 70 ? "HOT" : score >= 45 ? "WARM" : "COLD"
+    score >= 55 ? "HOT" : score >= 35 ? "WARM" : "COLD"
 
   return { score, priority, breakdown: B, signals }
 }
