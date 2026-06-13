@@ -47,6 +47,24 @@ export const COUNTY_ZIPS: Record<string, string[]> = {
     "92651", "92652", "92653", "92657", "92660", "92661",
     "92626", "92627", "92628", "92629", "92630", "92647",
   ],
+  "los-angeles": [
+    // High-distress: South LA, Compton, Inglewood, Watts, East LA, Boyle Heights
+    "90001", "90002", "90003", "90011", "90012", "90015",
+    "90016", "90018", "90019", "90022", "90023", "90037",
+    "90059", "90061", "90062", "90063", "90073", "90044",
+    // Inglewood / Hawthorne / Lawndale
+    "90301", "90302", "90303", "90304", "90305", "90250",
+    // Compton / Carson / Gardena
+    "90220", "90221", "90222", "90223", "90247", "90248",
+    // Pomona / Baldwin Park / El Monte
+    "91766", "91767", "91768", "91706", "91702", "91732",
+    "91733", "91745", "91746", "91754", "91755", "91731",
+    // San Fernando Valley — Van Nuys, Panorama City, North Hills
+    "91401", "91402", "91403", "91405", "91406", "91411",
+    "91343", "91344", "91352", "91303", "91304", "91306",
+    // Long Beach
+    "90805", "90806", "90807", "90813", "90814", "90815",
+  ],
 }
 
 // How many ZIPs to search per lead target (more ZIPs = more leads, more time)
@@ -54,4 +72,6 @@ export const TARGET_ZIP_COUNT: Record<number, number> = {
   100: 18,
   200: 36,
   300: 54,
+  400: 72,
+  500: 90,
 }

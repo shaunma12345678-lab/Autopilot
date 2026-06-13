@@ -890,12 +890,92 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [showFilters, setShowFilters]       = useState(false)
   const [sortCol, setSortCol] = useState<keyof ForeclosureLead>("score")
   const [sortDir, setSortDir] = useState<"asc"|"desc">("desc")
+  // Deep Search mode state
+  const [deepMode, setDeepMode]         = useState(true)
+  const [progress, setProgress]         = useState<string | null>(null)
+  const [liveCount, setLiveCount]       = useState(0)
+  const [sourceSummary, setSourceSummary] = useState<Record<string, number> | null>(null)
+  const [newCount, setNewCount]         = useState<number | null>(null)
 
   const search = async () => {
     if (p.searchType === "zip" && !p.zipCode) { setError("Enter a ZIP code."); return }
     if (p.searchType === "city" && (!p.city || !p.state)) { setError("Enter city and state."); return }
     if (p.searchType === "county" && (!p.county || !p.state)) { setError("Enter county and state."); return }
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
+    setProgress(null); setLiveCount(0); setSourceSummary(null); setNewCount(null)
+
+    if (deepMode) {
+      // ── Deep Search via SSE ────────────────────────────────────────────────
+      // Resolves county IDs for known CA county names to skip geocoding
+      const COUNTY_ID_MAP: Record<string, string> = {
+        "san diego": "san-diego", "riverside": "riverside",
+        "san bernardino": "san-bernardino", "orange": "orange",
+        "los angeles": "los-angeles",
+      }
+      const countyIds = p.searchType === "county" && p.county
+        ? (() => {
+            const id = COUNTY_ID_MAP[p.county.toLowerCase().replace(/\s+county\s*$/, "").trim()]
+            return id ? [id] : undefined
+          })()
+        : ["san-diego", "riverside", "orange"]
+
+      try {
+        const res = await fetch("/api/leads/deep-search", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            searchType: p.searchType,
+            zipCode:    p.zipCode  || undefined,
+            city:       p.city     || undefined,
+            state:      p.state    || undefined,
+            county:     p.county   || undefined,
+            countyIds,
+            maxLeads:   p.maxLeads,
+            daysBack:   p.daysBack,
+          }),
+        })
+
+        if (!res.ok || !res.body) throw new Error("Deep search failed — check connection")
+
+        const reader  = res.body.getReader()
+        const decoder = new TextDecoder()
+        let   buf     = ""
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+
+          const parts = buf.split("\n\n")
+          buf = parts.pop() ?? ""
+
+          for (const part of parts) {
+            const lines = part.trim().split("\n")
+            const eventLine = lines.find(l => l.startsWith("event: "))
+            const dataLine  = lines.find(l => l.startsWith("data: "))
+            if (!dataLine) continue
+            const event = eventLine?.replace("event: ", "") ?? "message"
+            try {
+              const payload = JSON.parse(dataLine.replace("data: ", ""))
+              if (event === "progress") {
+                setProgress(payload.msg)
+                setLiveCount(payload.count)
+              } else if (event === "done") {
+                setResult({ leads: payload.leads ?? [], total: payload.total ?? 0, fetched: payload.total ?? 0, dataSource: "deep-search" })
+                setSourceSummary(payload.sourceCounts ?? null)
+                setNewCount(payload.newTotal ?? null)
+              } else if (event === "error") {
+                throw new Error(payload.message ?? "Deep search error")
+              }
+            } catch { /* malformed SSE chunk — skip */ }
+          }
+        }
+      } catch (e) { setError(e instanceof Error ? e.message : "Deep search failed") }
+      setLoading(false); setProgress(null)
+      return
+    }
+
+    // ── Standard search ────────────────────────────────────────────────────
     try {
       const res = await fetch(apiBase, { method: "POST", headers: apiHeaders, body: JSON.stringify(p) })
       const data = await res.json()
@@ -974,9 +1054,72 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   return (
     <div className="space-y-5">
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-5">
-        <p className="text-xs text-gray-500 mb-4">6-pass enrichment: ATTOM foreclosure + ownership + AVM + sale history + all liens + AI contact discovery</p>
-        <AreaForm p={p} setP={setP} onSearch={search} loading={loading}
-          extra={result && <p className="text-xs text-gray-500">{result.fetched} leads returned</p>} />
+        {/* Deep Search toggle */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setDeepMode(m => !m)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                deepMode
+                  ? "bg-indigo-600/20 border-indigo-500/40 text-indigo-300"
+                  : "bg-gray-800/60 border-gray-700/40 text-gray-500 hover:text-white"
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${deepMode ? "bg-indigo-400 animate-pulse" : "bg-gray-600"}`} />
+              Deep Search
+            </button>
+            {deepMode && (
+              <p className="text-[11px] text-indigo-400/70">
+                7 sources · tiled maps · 40+ queries · AI extraction — surfaces leads no one else finds
+              </p>
+            )}
+          </div>
+          {result && (
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-gray-500">{result.fetched} leads</p>
+              {newCount !== null && (
+                <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold rounded-lg">
+                  {newCount} new
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        <AreaForm p={p} setP={setP} onSearch={search} loading={loading} />
+
+        {/* Live progress during Deep Search */}
+        {loading && deepMode && (
+          <div className="mt-4 bg-indigo-950/40 border border-indigo-500/20 rounded-xl px-4 py-3">
+            <div className="flex items-center gap-3 mb-2">
+              <span className="w-3.5 h-3.5 border-2 border-indigo-400/40 border-t-indigo-400 rounded-full animate-spin shrink-0" />
+              <p className="text-xs text-indigo-300 font-medium">{progress ?? "Initializing deep search…"}</p>
+            </div>
+            {liveCount > 0 && (
+              <div className="flex items-center gap-2">
+                <div className="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
+                    style={{ width: `${Math.min((liveCount / p.maxLeads) * 100, 100)}%` }}
+                  />
+                </div>
+                <span className="text-[11px] text-indigo-400 font-mono">{liveCount} / {p.maxLeads}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Source breakdown after search */}
+        {sourceSummary && Object.keys(sourceSummary).length > 0 && !loading && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {Object.entries(sourceSummary).map(([src, n]) => (
+              <span key={src} className="px-2 py-0.5 bg-gray-800/60 border border-gray-700/40 text-[10px] text-gray-400 rounded-lg">
+                {src} <span className="text-white font-semibold">{n}</span>
+              </span>
+            ))}
+          </div>
+        )}
+
         {error && <div className="mt-3 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-sm text-red-300">{error}</div>}
       </div>
 
