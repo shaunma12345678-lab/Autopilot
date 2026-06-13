@@ -177,27 +177,46 @@ async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
       const address = String(addr?.value ?? info?.streetAddress ?? "").trim()
       if (!address) return []
 
+      // cityStateZip.value looks like "San Diego, CA 92101" — parse all three.
       const cityStateZip = String(loc?.value ?? "")
-      const cityPart  = cityStateZip.split(",")?.[0]?.trim() ?? String(info?.city  ?? "")
-      const statePart = String(info?.state ?? "CA")
-      const zipPart   = String(info?.zip   ?? "")
+      const csz = cityStateZip.match(/^(.*?),\s*([A-Z]{2})\s+(\d{5})/)
+      const cityPart  = csz ? csz[1].trim() : (cityStateZip.split(",")[0]?.trim() ?? String(info?.city ?? ""))
+      const statePart = csz ? csz[2] : String(info?.state ?? "")
+      const zipPart   = csz ? csz[3] : String(info?.zip ?? "")
       const price     = Number((h.price as Record<string, unknown>)?.value ?? 0) || null
       const url       = String(h.url ?? "")
+
+      // Distress signals from the GIS payload → motivated-seller detection.
+      const dom       = Number((h.dom as Record<string, unknown>)?.value ?? 0) || 0
+      const mlsStatus = String(h.mlsStatus ?? "").toLowerCase()
+      const blob      = JSON.stringify(h).toLowerCase()
+      const isForeclosure = /foreclos|bank.?owned|\breo\b|short sale|auction|trustee/.test(blob)
+
+      const signals: string[] = []
+      let stage: FreeLead["foreclosureStage"] = "PRE_FORECLOSURE"
+      if (isForeclosure) {
+        stage = /auction|trustee/.test(blob) ? "AUCTION" : "NOTICE_OF_SALE"
+        signals.push("Redfin distressed listing — foreclosure / REO / short-sale flagged")
+      } else {
+        signals.push("Redfin active listing")
+      }
+      if (dom >= 90) signals.push(`On market ${dom} days — likely motivated seller`)
+      else if (dom >= 45) signals.push(`On market ${dom} days`)
 
       return [{
         address,
         city:             cityPart,
-        state:            statePart,
+        state:            statePart || "CA",
         zip:              zipPart,
         ownerName:        "",
-        foreclosureStage: "PRE_FORECLOSURE",
+        foreclosureStage: stage,
         recordingDate:    "",
         defaultAmount:    null,
         lender:           null,
         auctionDate:      null,
         estimatedValue:   price,
         sourceUrl:        url ? `https://www.redfin.com${url}` : "https://www.redfin.com/",
-        rawSignals:       ["Redfin pre-foreclosure/distressed listing"],
+        rawSignals:       signals,
       } as FreeLead]
     })
   } catch {

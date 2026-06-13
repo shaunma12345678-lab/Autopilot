@@ -11,11 +11,12 @@
 // (caller provides from DB) so the UI can show only genuinely new finds.
 
 import { searchDirectSources } from "@/lib/direct-foreclosure-sources"
-import { webSearchDeepOrAny } from "@/lib/search"
+import { webSearchAny } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
 import { withConcurrency } from "@/lib/geo-tiles"
 import { enrichLeadsWithContact } from "@/lib/contact-enrichment"
 import { extractAddressesFromContent, leadMatchesTarget, type ExtractResult, type LocationTarget } from "@/lib/address-extractor"
+import { fetchCaDojForeclosures, fetchPublicNotices } from "@/lib/legal-notice-sources"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
 // ── Search location ─────────────────────────────────────────────────────────
@@ -127,11 +128,11 @@ JSON array only:`
   }
 }
 
-// ── Web search phase ──────────────────────────────────────────────────────────
-
-// TEMP diagnostics — surfaced in sourceCounts to debug the live web phase.
-const __debug = { webResults: 0, webRawChars: 0, regexFound: 0, matched: 0, hasKey: 0, errMsg: "" }
-
+// ── Public-records / legal-notice phase (NO API KEY) ─────────────────────────
+// Sources that serve plain HTML/JSON and work from datacenter IPs:
+//   • CA DOJ official foreclosure-sale registry (statewide, government)
+//   • State public-notice publications (legal NOD / trustee-sale notices)
+//   • Free web search (DDG/Bing) as an opportunistic bonus — regex-extracted
 // Returns ALL extracted leads tagged for relevance — caller filters/prioritizes.
 async function runWebSearchPhase(
   loc: SearchLocation,
@@ -139,62 +140,53 @@ async function runWebSearchPhase(
 ): Promise<{ regex: ExtractResult[]; ai: FreeLead[] }> {
   const year    = new Date().getFullYear()
   const queries = buildDeepQuerySet(loc, year)
+  const isCA    = (loc.state || "").toUpperCase() === "CA"
 
-  // Scale query count to target. Tavily crawls server-side, so it works from
-  // Vercel datacenter IPs where direct scrapers get blocked.
-  const queryCount = maxLeads <= 100 ? 11 : maxLeads <= 200 ? 15 : maxLeads <= 300 ? 18 : 20
+  const noticeQuery =
+    loc.searchType === "zip"  ? `${loc.zipCode} notice of trustee sale ${year}` :
+    loc.searchType === "city" ? `${loc.city} ${loc.state} notice of default trustee sale ${year}` :
+    `${loc.county} County ${loc.state} notice of trustee sale ${year}`
+
+  // Fire official + public-notice fetchers and a few free web searches in parallel.
+  const queryCount = maxLeads <= 100 ? 8 : maxLeads <= 200 ? 12 : 16
   const selectedQueries = queries.slice(0, queryCount)
 
-  // Every query uses DEEP search — property addresses live in raw_content.
-  // High concurrency so all queries finish in ~1-2 waves; each Tavily call is
-  // capped at 14s internally, so the whole phase stays well under budget.
-  __debug.hasKey = process.env.TAVILY_API_KEY ? 1 : 0
-  const resultBatches = await withConcurrency(
-    selectedQueries.map(q => async () => {
-      try {
-        const res = await webSearchDeepOrAny(q, 6)
-        return res.results.map(r => ({ url: r.url, raw: r.rawContent ?? r.content ?? "" }))
-      } catch (e) {
-        if (!__debug.errMsg) __debug.errMsg = (e instanceof Error ? e.message : String(e)).slice(0, 80)
-        return []
-      }
-    }),
-    10
-  )
-
-  const results = resultBatches.flat().filter(r => r.raw.length > 50)
-  const rawAll = resultBatches.flat()
-  if (!__debug.errMsg && rawAll.length === 0) __debug.errMsg = "0 results, no throw"
-  else if (!__debug.errMsg && results.length === 0) __debug.errMsg = `${rawAll.length} results all <50 chars`
-  const totalRawChars = results.reduce((a, r) => a + r.raw.length, 0)
-  __debug.webResults += results.length
-  __debug.webRawChars += totalRawChars
-  if (results.length === 0) return { regex: [], ai: [] }
-
-  // ── Primary: regex extraction (reliable, processes raw content) ─────────
-  // Cap each page to 400 KB — that already holds hundreds of notices and keeps
-  // regex time bounded on multi-MB legal-notice pages.
-  const regex: ExtractResult[] = []
-  for (const { url, raw } of results) {
-    regex.push(...extractAddressesFromContent(raw.slice(0, 400_000), url))
-  }
-  __debug.regexFound += regex.length
-
-  // ── Secondary: AI extraction over capped content (catches odd formats) ───
-  // Groq is rate-limited on the free tier and its SDK backs off 15-60s on 429.
-  // Regex is the PRIMARY producer and needs no LLM, so we run AI best-effort with
-  // a hard 9s cap and only 2 chunks — if Groq is throttled we just skip it.
-  const combined = results.map(r => `URL: ${r.url}\n${r.raw.slice(0, 6000)}`).join("\n---\n")
-  const CHUNK = 14000
-  const chunks: string[] = []
-  for (let i = 0; i < combined.length && chunks.length < 2; i += CHUNK) {
-    chunks.push(combined.slice(i, i + CHUNK))
-  }
-
-  const ai = await Promise.race([
-    Promise.all(chunks.map(c => extractLeadsFromContent(c, loc.label))).then(r => r.flat()),
-    new Promise<FreeLead[]>(resolve => setTimeout(() => resolve([]), 9000)),
+  const [caDoj, publicNotices, webBatches] = await Promise.all([
+    isCA ? fetchCaDojForeclosures() : Promise.resolve([] as ExtractResult[]),
+    fetchPublicNotices(noticeQuery, loc.state || "CA"),
+    // Free web search (no key): DDG → Bing. Often blocked from datacenter, so
+    // best-effort — whatever comes back is regex-mined for addresses.
+    withConcurrency(
+      selectedQueries.map(q => async () => {
+        try {
+          const res = await webSearchAny(q, 8)
+          return res.results.map(r => ({ url: r.url, raw: `${r.title}\n${r.content}` }))
+        } catch {
+          return []
+        }
+      }),
+      8
+    ),
   ])
+
+  const webResults = webBatches.flat().filter(r => r.raw.length > 40)
+  const webRegex: ExtractResult[] = []
+  for (const { url, raw } of webResults) {
+    webRegex.push(...extractAddressesFromContent(raw.slice(0, 400_000), url))
+  }
+
+  const regex = [...caDoj, ...publicNotices, ...webRegex]
+
+  // AI extraction is best-effort only (Groq free tier rate-limits); regex is
+  // the primary producer. Cap hard at 8s so it can never stall the search.
+  const combined = webResults.map(r => `URL: ${r.url}\n${r.raw.slice(0, 4000)}`).join("\n---\n")
+  let ai: FreeLead[] = []
+  if (combined.length > 200) {
+    ai = await Promise.race([
+      extractLeadsFromContent(combined.slice(0, 14000), loc.label),
+      new Promise<FreeLead[]>(resolve => setTimeout(() => resolve([]), 8000)),
+    ])
+  }
 
   return { regex, ai }
 }
@@ -230,8 +222,6 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   } = params
 
   const notify = (msg: string, count: number) => onProgress?.(msg, count)
-
-  __debug.webResults = 0; __debug.webRawChars = 0; __debug.regexFound = 0; __debug.matched = 0
 
   // ── Resolve search locations (works for ANY zip / city / county) ─────────
   const locations: SearchLocation[] = []
@@ -327,20 +317,12 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   // local publisher wasn't in results), keep ALL found — they're still real,
   // verified foreclosure notices in/near the region, so we never return empty.
   const matched   = allRegex.filter(r => leadMatchesTarget(r, target))
-  __debug.matched = matched.length
   const regexLeads = (matched.length >= 8 ? matched : allRegex).map(r => r.lead)
 
   const allWebLeads = [...regexLeads, ...allAiLeads]
   if (allWebLeads.length > 0) {
-    combinedSourceCounts["Legal notices (web)"] = (combinedSourceCounts["Legal notices (web)"] ?? 0) + allWebLeads.length
+    combinedSourceCounts["Public records & notices"] = (combinedSourceCounts["Public records & notices"] ?? 0) + allWebLeads.length
   }
-  // TEMP debug surfaced in sourceCounts
-  combinedSourceCounts["_dbg_webResults"] = __debug.webResults
-  combinedSourceCounts["_dbg_rawKB"] = Math.round(__debug.webRawChars / 1000)
-  combinedSourceCounts["_dbg_regexFound"] = __debug.regexFound
-  combinedSourceCounts["_dbg_matched"] = __debug.matched
-  combinedSourceCounts["_dbg_hasKey"] = __debug.hasKey
-  ;(combinedSourceCounts as Record<string, unknown>)["_dbg_err"] = __debug.errMsg || "none"
 
   notify(`Found ${allDirectLeads.length + allWebLeads.length} raw leads — deduplicating…`, allDirectLeads.length + allWebLeads.length)
 
