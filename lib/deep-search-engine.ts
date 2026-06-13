@@ -160,22 +160,31 @@ async function runWebSearchPhase(
   const results = resultBatches.flat().filter(r => r.raw.length > 50)
   if (results.length === 0) return { regex: [], ai: [] }
 
-  // ── Primary: regex extraction (reliable, processes full raw content) ─────
+  // ── Primary: regex extraction (reliable, processes raw content) ─────────
+  // Cap each page to 400 KB — that already holds hundreds of notices and keeps
+  // regex time bounded on multi-MB legal-notice pages.
   const regex: ExtractResult[] = []
   for (const { url, raw } of results) {
-    regex.push(...extractAddressesFromContent(raw, url))
+    regex.push(...extractAddressesFromContent(raw.slice(0, 400_000), url))
   }
 
   // ── Secondary: AI extraction over capped content (catches odd formats) ───
+  // Groq is rate-limited on the free tier and its SDK backs off 15-60s on 429.
+  // Regex is the PRIMARY producer and needs no LLM, so we run AI best-effort with
+  // a hard 9s cap and only 2 chunks — if Groq is throttled we just skip it.
   const combined = results.map(r => `URL: ${r.url}\n${r.raw.slice(0, 6000)}`).join("\n---\n")
   const CHUNK = 14000
   const chunks: string[] = []
-  for (let i = 0; i < combined.length && chunks.length < 4; i += CHUNK) {
+  for (let i = 0; i < combined.length && chunks.length < 2; i += CHUNK) {
     chunks.push(combined.slice(i, i + CHUNK))
   }
-  const aiResults = await Promise.all(chunks.map(c => extractLeadsFromContent(c, loc.label)))
 
-  return { regex, ai: aiResults.flat() }
+  const ai = await Promise.race([
+    Promise.all(chunks.map(c => extractLeadsFromContent(c, loc.label))).then(r => r.flat()),
+    new Promise<FreeLead[]>(resolve => setTimeout(() => resolve([]), 9000)),
+  ])
+
+  return { regex, ai }
 }
 
 // ── Main deep search function ─────────────────────────────────────────────────
@@ -253,9 +262,14 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   // so they can't starve the Tavily phase which is the reliable producer.
   const combinedSourceCounts: Record<string, number> = {}
 
-  const directWork = Promise.allSettled(
-    locations.map(async (loc) => {
-      const result = await searchDirectSources({
+  // Each phase is wrapped in a hard timeout so a single hung dependency
+  // (rate-limited LLM, slow scraper) can never stall the whole search.
+  const withDeadline = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
+    Promise.race([p, new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms))])
+
+  const directWork = withDeadline(
+    Promise.allSettled(
+      locations.map(loc => searchDirectSources({
         searchType: loc.searchType,
         zipCode:    loc.zipCode ?? params.zipCode,
         city:       loc.city ?? params.city,
@@ -263,13 +277,16 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
         county:     loc.county,
         countyId:   loc.countyId,
         maxLeads,
-      })
-      return result
-    })
+      }))
+    ),
+    20000,
+    [] as PromiseSettledResult<Awaited<ReturnType<typeof searchDirectSources>>>[]
   )
 
-  const webWork = Promise.allSettled(
-    locations.map(loc => runWebSearchPhase(loc, maxLeads))
+  const webWork = withDeadline(
+    Promise.allSettled(locations.map(loc => runWebSearchPhase(loc, maxLeads))),
+    38000,
+    [] as PromiseSettledResult<Awaited<ReturnType<typeof runWebSearchPhase>>>[]
   )
 
   const [directPhases, webPhases] = await Promise.all([directWork, webWork])

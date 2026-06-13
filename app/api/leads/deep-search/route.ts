@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     timedOut,
     dataSource:   "deep-search",
     note:         timedOut
-      ? `Returned ${leads.length} leads found within 50-second budget. Run again or try a smaller target for more.`
+      ? `Returned ${leads.length} leads found within the time budget. Run again or try a smaller target for more.`
       : `Found ${leads.length} leads from ${Object.keys(result.sourceCounts).length} sources.`,
   })
 }
