@@ -1,6 +1,8 @@
 // Manual crawl trigger — admin only.
 // POST /api/admin/crawl  { password, countyId, layer, businessId? }
 
+export const maxDuration = 60 // Vercel Hobby max
+
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"

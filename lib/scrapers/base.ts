@@ -62,14 +62,16 @@ export async function webSearchSnippets(query: string): Promise<string[]> {
   }
 }
 
-export async function multiSearchSnippets(queries: string[]): Promise<string> {
+export async function multiSearchSnippets(queries: string[], maxMs = 25000): Promise<string> {
+  const deadline = Date.now() + maxMs
   const results: string[] = []
-  for (const q of queries.slice(0, 4)) {
+  for (const q of queries.slice(0, 3)) {
+    if (Date.now() > deadline) break
     const snippets = await webSearchSnippets(q)
     results.push(...snippets)
-    if (results.length >= 30) break
+    if (results.length >= 25) break
   }
-  return results.join("\n---\n").slice(0, 12000)
+  return results.join("\n---\n").slice(0, 10000)
 }
 
 export async function extractSignalsWithAI(

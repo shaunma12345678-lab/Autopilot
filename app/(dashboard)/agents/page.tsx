@@ -251,16 +251,12 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Inngest setup notice */}
-      <div className="rounded-2xl bg-indigo-950/30 border border-indigo-500/20 px-5 py-4 space-y-2">
-        <p className="text-xs font-bold text-indigo-300">Automated Scheduling (Inngest)</p>
-        <p className="text-[11px] text-indigo-400/70">
-          Layer 1 crawls run daily at 6am PT. Layer 2/3 crawl runs weekly Sundays at 4am PT.
-          Requires <code className="text-indigo-300 bg-indigo-500/10 px-1 rounded">INNGEST_EVENT_KEY</code> and <code className="text-indigo-300 bg-indigo-500/10 px-1 rounded">INNGEST_SIGNING_KEY</code> in Vercel env vars.
-          Serve endpoint: <code className="text-indigo-300 bg-indigo-500/10 px-1 rounded">/api/inngest</code>
-        </p>
-        <p className="text-[11px] text-indigo-400/70">
-          Local dev: <code className="text-indigo-300 bg-indigo-500/10 px-1 rounded">npx inngest-cli@latest dev</code> — no account required.
+      {/* Scheduling note */}
+      <div className="rounded-2xl bg-gray-900/60 border border-gray-700/40 px-5 py-4 space-y-1">
+        <p className="text-xs font-bold text-gray-300">Automated Scheduling</p>
+        <p className="text-[11px] text-gray-500">
+          Use the manual "Crawl" buttons above to scan any county + layer on demand.
+          For automated daily/weekly crawls, add a Vercel Cron Job pointing to <code className="text-gray-400 bg-gray-800 px-1 rounded">/api/admin/crawl</code>.
         </p>
       </div>
     </div>
