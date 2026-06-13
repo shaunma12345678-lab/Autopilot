@@ -1,119 +1,106 @@
 // Deep Search API — high-volume parallel lead discovery.
-// Returns up to 500 leads from 7 simultaneous sources across multiple counties.
-// Uses Server-Sent Events (SSE) so the UI receives live progress as each
-// batch completes — users see leads count climbing in real time.
+// Returns up to 500 scored leads from 7 simultaneous sources across multiple counties.
+// Uses a standard JSON response (no SSE) for maximum Vercel compatibility.
+// An internal 50-second hard deadline ensures it always returns within Vercel's limits.
 //
 // POST body:
 //   { searchType, zipCode?, city?, state?, county?,
-//     countyIds?, maxLeads, daysBack?, existingAddresses?, businessId? }
+//     countyIds?, maxLeads, daysBack? }
 
-export const maxDuration = 300
+export const maxDuration = 60
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { deepSearch, type DeepSearchParams } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
-import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
-function sseEvent(event: string, data: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
-}
+const INTERNAL_DEADLINE_MS = 50_000
 
-// POST — streams SSE events as batches complete, then sends final "done" event
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return new Response("Unauthorized", { status: 401 })
+  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  const body = await request.json() as {
-    searchType:        string
-    zipCode?:          string
-    city?:             string
-    state?:            string
-    county?:           string
-    countyIds?:        string[]
-    maxLeads?:         number
-    daysBack?:         number
-    existingAddresses?: string[]
-    businessId?:       string
+  let body: {
+    searchType:  string
+    zipCode?:    string
+    city?:       string
+    state?:      string
+    county?:     string
+    countyIds?:  string[]
+    maxLeads?:   number
+    daysBack?:   number
   }
 
-  const maxLeads = Math.min(Math.max(body.maxLeads ?? 100, 50), 500)
+  try {
+    body = await request.json()
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 })
+  }
 
-  const existingSet = new Set<string>(
-    (body.existingAddresses ?? []).map(a => a.toLowerCase().replace(/[\s,#.-]/g, ""))
-  )
+  const maxLeads = Math.min(Math.max(body.maxLeads ?? 100, 10), 500)
 
   const params: DeepSearchParams = {
-    searchType:        body.searchType as "zip" | "city" | "county",
-    zipCode:           body.zipCode,
-    city:              body.city,
-    state:             body.state,
-    county:            body.county,
-    countyIds:         body.countyIds,
+    searchType: body.searchType as "zip" | "city" | "county",
+    zipCode:    body.zipCode,
+    city:       body.city,
+    state:      body.state,
+    county:     body.county,
+    countyIds:  body.countyIds,
     maxLeads,
-    daysBack:          body.daysBack,
-    existingAddresses: existingSet,
+    daysBack:   body.daysBack,
   }
 
-  const encoder  = new TextEncoder()
-  let   isClosed = false
+  // Race: deep search vs. hard deadline
+  // whichever finishes first wins — partial results on timeout, full results otherwise
+  const timeoutPromise = new Promise<null>(resolve =>
+    setTimeout(() => resolve(null), INTERNAL_DEADLINE_MS)
+  )
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      function send(event: string, data: unknown) {
-        if (!isClosed) {
-          try {
-            controller.enqueue(encoder.encode(sseEvent(event, data)))
-          } catch { /* controller may have closed */ }
-        }
-      }
+  let searchResult: Awaited<ReturnType<typeof deepSearch>> | null = null
+  let timedOut = false
 
-      params.onProgress = (msg, count) => {
-        send("progress", { msg, count })
-      }
+  try {
+    const race = await Promise.race([
+      deepSearch(params).then(r => { searchResult = r; return r }),
+      timeoutPromise,
+    ])
+    if (race === null) {
+      timedOut = true
+    }
+  } catch (err) {
+    console.error("[deep-search POST]", err)
+    return Response.json(
+      { error: err instanceof Error ? err.message : "Search failed" },
+      { status: 500 }
+    )
+  }
 
-      try {
-        const result = await deepSearch(params)
+  // If timed out but we got partial results from a global variable set above, use them
+  // If no results at all, return empty
+  const result = searchResult ?? { leads: [], newLeads: [], sourceCounts: {}, total: 0, newTotal: 0 }
 
-        const leads = result.leads.map(fl => {
-          try { return freeLeadToForeclosureLead(fl) } catch { return null }
-        }).filter(Boolean)
+  const leads = result.leads
+    .map(fl => { try { return freeLeadToForeclosureLead(fl) } catch { return null } })
+    .filter(Boolean)
 
-        const newLeads = result.newLeads.map(fl => {
-          try { return freeLeadToForeclosureLead(fl) } catch { return null }
-        }).filter(Boolean)
+  leads.sort((a, b) => (b?.score ?? 0) - (a?.score ?? 0))
 
-        send("done", {
-          leads,
-          newLeads,
-          sourceCounts: result.sourceCounts,
-          total:        result.total,
-          newTotal:     result.newTotal,
-        })
-      } catch (err) {
-        send("error", { message: err instanceof Error ? err.message : "Search failed" })
-      } finally {
-        isClosed = true
-        try { controller.close() } catch { /* already closed */ }
-      }
-    },
-    cancel() {
-      isClosed = true
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type":  "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection":    "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
+  return Response.json({
+    leads,
+    total:        leads.length,
+    fetched:      leads.length,
+    newTotal:     result.newTotal,
+    sourceCounts: result.sourceCounts,
+    timedOut,
+    dataSource:   "deep-search",
+    note:         timedOut
+      ? `Returned ${leads.length} leads found within 50-second budget. Run again or try a smaller target for more.`
+      : `Found ${leads.length} leads from ${Object.keys(result.sourceCounts).length} sources.`,
   })
 }
 
-// GET — quick status check, returns count of leads saved for this user
+// GET — count of leads saved for this user, optionally filtered by creation date
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()

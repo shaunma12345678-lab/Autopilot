@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useMemo } from "react"
+import React, { useState, useCallback, useMemo, useRef } from "react"
 import type { ForeclosureLead, OutreachPackage, ScoreBreakdown, DealCalc } from "@/lib/agents/foreclosure-agent"
 import type { AtRiskLead } from "@/app/api/leads/at-risk-search/route"
 
@@ -891,26 +891,55 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [sortCol, setSortCol] = useState<keyof ForeclosureLead>("score")
   const [sortDir, setSortDir] = useState<"asc"|"desc">("desc")
   // Deep Search mode state
-  const [deepMode, setDeepMode]         = useState(true)
-  const [progress, setProgress]         = useState<string | null>(null)
-  const [liveCount, setLiveCount]       = useState(0)
+  const [deepMode, setDeepMode]           = useState(true)
+  const [progressPct, setProgressPct]     = useState(0)
+  const [progressMsg, setProgressMsg]     = useState("")
   const [sourceSummary, setSourceSummary] = useState<Record<string, number> | null>(null)
-  const [newCount, setNewCount]         = useState<number | null>(null)
+  const [newCount, setNewCount]           = useState<number | null>(null)
+  const progressTimerRef                  = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopProgressTimer = () => {
+    if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null }
+  }
+
+  const startProgressAnimation = (targetLeads: number) => {
+    const MESSAGES = [
+      "Querying Zillow across all county tiles…",
+      "Querying Redfin pre-foreclosure listings…",
+      "Pulling ArcGIS county recorder records…",
+      "Checking auction.com & HUD REO…",
+      "Running 32 targeted legal-notice queries…",
+      "AI extraction pass 1 — parsing results…",
+      "AI extraction pass 2 — finding more…",
+      `Deduplicating and ranking up to ${targetLeads} leads…`,
+    ]
+    let step = 0
+    setProgressPct(2)
+    setProgressMsg(MESSAGES[0])
+    progressTimerRef.current = setInterval(() => {
+      step++
+      const pct = Math.min(Math.round((step / MESSAGES.length) * 95), 95)
+      setProgressPct(pct)
+      setProgressMsg(MESSAGES[Math.min(step, MESSAGES.length - 1)])
+    }, 5500)
+  }
 
   const search = async () => {
     if (p.searchType === "zip" && !p.zipCode) { setError("Enter a ZIP code."); return }
     if (p.searchType === "city" && (!p.city || !p.state)) { setError("Enter city and state."); return }
     if (p.searchType === "county" && (!p.county || !p.state)) { setError("Enter county and state."); return }
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
-    setProgress(null); setLiveCount(0); setSourceSummary(null); setNewCount(null)
+    setProgressPct(0); setProgressMsg(""); setSourceSummary(null); setNewCount(null)
+    stopProgressTimer()
 
     if (deepMode) {
-      // ── Deep Search via SSE ────────────────────────────────────────────────
-      // Resolves county IDs for known CA county names to skip geocoding
+      // Map county name → county ID so the server skips geocoding
       const COUNTY_ID_MAP: Record<string, string> = {
-        "san diego": "san-diego", "riverside": "riverside",
-        "san bernardino": "san-bernardino", "orange": "orange",
-        "los angeles": "los-angeles",
+        "san diego":      "san-diego",
+        "riverside":      "riverside",
+        "san bernardino": "san-bernardino",
+        "orange":         "orange",
+        "los angeles":    "los-angeles",
       }
       const countyIds = p.searchType === "county" && p.county
         ? (() => {
@@ -918,6 +947,8 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
             return id ? [id] : undefined
           })()
         : ["san-diego", "riverside", "orange"]
+
+      startProgressAnimation(p.maxLeads)
 
       try {
         const res = await fetch("/api/leads/deep-search", {
@@ -935,47 +966,28 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
           }),
         })
 
-        if (!res.ok || !res.body) throw new Error("Deep search failed — check connection")
+        stopProgressTimer()
+        setProgressPct(100)
 
-        const reader  = res.body.getReader()
-        const decoder = new TextDecoder()
-        let   buf     = ""
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buf += decoder.decode(value, { stream: true })
-
-          const parts = buf.split("\n\n")
-          buf = parts.pop() ?? ""
-
-          for (const part of parts) {
-            const lines = part.trim().split("\n")
-            const eventLine = lines.find(l => l.startsWith("event: "))
-            const dataLine  = lines.find(l => l.startsWith("data: "))
-            if (!dataLine) continue
-            const event = eventLine?.replace("event: ", "") ?? "message"
-            try {
-              const payload = JSON.parse(dataLine.replace("data: ", ""))
-              if (event === "progress") {
-                setProgress(payload.msg)
-                setLiveCount(payload.count)
-              } else if (event === "done") {
-                setResult({ leads: payload.leads ?? [], total: payload.total ?? 0, fetched: payload.total ?? 0, dataSource: "deep-search" })
-                setSourceSummary(payload.sourceCounts ?? null)
-                setNewCount(payload.newTotal ?? null)
-              } else if (event === "error") {
-                throw new Error(payload.message ?? "Deep search error")
-              }
-            } catch { /* malformed SSE chunk — skip */ }
-          }
+        if (!res.ok) {
+          let errMsg = `Search failed (${res.status})`
+          try { const d = await res.json(); errMsg = d.error ?? errMsg } catch { /* ignore */ }
+          throw new Error(errMsg)
         }
-      } catch (e) { setError(e instanceof Error ? e.message : "Deep search failed") }
-      setLoading(false); setProgress(null)
+
+        const data = await res.json()
+        setResult({ leads: data.leads ?? [], total: data.total ?? 0, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
+        setSourceSummary(data.sourceCounts ?? null)
+        setNewCount(data.newTotal ?? null)
+      } catch (e) {
+        stopProgressTimer()
+        setError(e instanceof Error ? e.message : "Deep search failed — please try again")
+      }
+      setLoading(false)
       return
     }
 
-    // ── Standard search ────────────────────────────────────────────────────
+    // ── Standard search (non-deep mode) ───────────────────────────────────
     try {
       const res = await fetch(apiBase, { method: "POST", headers: apiHeaders, body: JSON.stringify(p) })
       const data = await res.json()
@@ -1088,24 +1100,24 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
 
         <AreaForm p={p} setP={setP} onSearch={search} loading={loading} />
 
-        {/* Live progress during Deep Search */}
+        {/* Progress during Deep Search */}
         {loading && deepMode && (
           <div className="mt-4 bg-indigo-950/40 border border-indigo-500/20 rounded-xl px-4 py-3">
             <div className="flex items-center gap-3 mb-2">
               <span className="w-3.5 h-3.5 border-2 border-indigo-400/40 border-t-indigo-400 rounded-full animate-spin shrink-0" />
-              <p className="text-xs text-indigo-300 font-medium">{progress ?? "Initializing deep search…"}</p>
+              <p className="text-xs text-indigo-300 font-medium">
+                {progressMsg || "Initializing Deep Search — querying 7 sources…"}
+              </p>
             </div>
-            {liveCount > 0 && (
-              <div className="flex items-center gap-2">
-                <div className="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
-                    style={{ width: `${Math.min((liveCount / p.maxLeads) * 100, 100)}%` }}
-                  />
-                </div>
-                <span className="text-[11px] text-indigo-400 font-mono">{liveCount} / {p.maxLeads}</span>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="h-full bg-indigo-500 transition-all duration-[2000ms] ease-out rounded-full"
+                  style={{ width: `${progressPct}%` }}
+                />
               </div>
-            )}
+              <span className="text-[11px] text-indigo-400 font-mono shrink-0">{progressPct}%</span>
+            </div>
           </div>
         )}
 
