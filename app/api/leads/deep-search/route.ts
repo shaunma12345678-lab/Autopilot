@@ -14,7 +14,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { deepSearch, type DeepSearchParams } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 
-const INTERNAL_DEADLINE_MS = 50_000
+const INTERNAL_DEADLINE_MS = 55_000
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 

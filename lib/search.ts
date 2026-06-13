@@ -21,34 +21,39 @@ export async function webSearch(query: string, maxResults = 5): Promise<SearchRe
     return { query, results: [], answer: undefined }
   }
 
-  const res = await fetch("https://api.tavily.com/search", {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key:      apiKey,
+  try {
+    const res = await fetch("https://api.tavily.com/search", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key:      apiKey,
+        query,
+        max_results:  maxResults,
+        search_depth: "advanced",
+        include_answer: false,
+        include_raw_content: false,
+      }),
+      signal: AbortSignal.timeout(12000),
+    })
+
+    if (!res.ok) {
+      console.error("[search] Tavily error:", res.status)
+      return { query, results: [] }
+    }
+
+    const data = await res.json()
+    return {
       query,
-      max_results:  maxResults,
-      search_depth: "advanced",
-      include_answer: true,
-      include_raw_content: false,
-    }),
-  })
-
-  if (!res.ok) {
-    console.error("[search] Tavily error:", res.status, await res.text())
+      answer:  data.answer,
+      results: (data.results ?? []).map((r: Record<string, unknown>) => ({
+        title:   r.title as string,
+        url:     r.url as string,
+        content: r.content as string,
+        score:   (r.score as number) ?? 0,
+      })),
+    }
+  } catch {
     return { query, results: [] }
-  }
-
-  const data = await res.json()
-  return {
-    query,
-    answer:  data.answer,
-    results: (data.results ?? []).map((r: Record<string, unknown>) => ({
-      title:   r.title as string,
-      url:     r.url as string,
-      content: r.content as string,
-      score:   (r.score as number) ?? 0,
-    })),
   }
 }
 
@@ -58,35 +63,42 @@ export async function webSearchDeep(query: string, maxResults = 5): Promise<Sear
   const apiKey = process.env.TAVILY_API_KEY
   if (!apiKey) return { query, results: [] }
 
-  const res = await fetch("https://api.tavily.com/search", {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key:             apiKey,
+  try {
+    // Hard per-request timeout — some legal-notice pages are multi-MB and would
+    // otherwise hang the whole search past the serverless budget.
+    const res = await fetch("https://api.tavily.com/search", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key:             apiKey,
+        query,
+        max_results:         maxResults,
+        search_depth:        "advanced",
+        include_answer:      false,
+        include_raw_content: true,
+      }),
+      signal: AbortSignal.timeout(14000),
+    })
+
+    if (!res.ok) {
+      console.error("[search-deep] Tavily error:", res.status)
+      return { query, results: [] }
+    }
+
+    const data = await res.json()
+    return {
       query,
-      max_results:         maxResults,
-      search_depth:        "advanced",
-      include_answer:      true,
-      include_raw_content: true,
-    }),
-  })
-
-  if (!res.ok) {
-    console.error("[search-deep] Tavily error:", res.status, await res.text())
+      answer:  data.answer,
+      results: (data.results ?? []).map((r: Record<string, unknown>) => ({
+        title:      r.title as string,
+        url:        r.url as string,
+        content:    r.content as string,
+        score:      (r.score as number) ?? 0,
+        rawContent: r.raw_content as string | undefined,
+      })),
+    }
+  } catch {
     return { query, results: [] }
-  }
-
-  const data = await res.json()
-  return {
-    query,
-    answer:  data.answer,
-    results: (data.results ?? []).map((r: Record<string, unknown>) => ({
-      title:      r.title as string,
-      url:        r.url as string,
-      content:    r.content as string,
-      score:      (r.score as number) ?? 0,
-      rawContent: r.raw_content as string | undefined,
-    })),
   }
 }
 

@@ -143,6 +143,8 @@ async function runWebSearchPhase(
   const selectedQueries = queries.slice(0, queryCount)
 
   // Every query uses DEEP search — property addresses live in raw_content.
+  // High concurrency so all queries finish in ~1-2 waves; each Tavily call is
+  // capped at 14s internally, so the whole phase stays well under budget.
   const resultBatches = await withConcurrency(
     selectedQueries.map(q => async () => {
       try {
@@ -152,7 +154,7 @@ async function runWebSearchPhase(
         return []
       }
     }),
-    6
+    10
   )
 
   const results = resultBatches.flat().filter(r => r.raw.length > 50)
@@ -337,11 +339,16 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
 
   notify(`Enriching owner contacts…`, leads.length)
 
-  // Contact enrichment — look up phone for leads that have an owner name
+  // Contact enrichment — look up phone for leads that have an owner name.
+  // Hard-capped at 9s via Promise.race so it can never blow the serverless
+  // budget; whatever resolves in time is merged, the rest is skipped silently.
   try {
-    const contactMap = await enrichLeadsWithContact(
-      leads.map(l => ({ address: l.address, ownerName: l.ownerName, city: l.city, state: l.state }))
-    )
+    const contactMap = await Promise.race([
+      enrichLeadsWithContact(
+        leads.map(l => ({ address: l.address, ownerName: l.ownerName, city: l.city, state: l.state }))
+      ),
+      new Promise<Map<string, string>>(resolve => setTimeout(() => resolve(new Map()), 9000)),
+    ])
     for (const lead of leads) {
       const key = (lead.address + lead.city).toLowerCase().replace(/[\s,#.-]/g, "")
       const phone = contactMap.get(key)
