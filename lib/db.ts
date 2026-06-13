@@ -164,6 +164,8 @@ export const db = {
   fewShotExample:   model("FewShotExample"),
   customTool:       model("CustomTool"),
   scheduledRun:     model("ScheduledRun"),
+  rawSignal:        model("RawSignal"),
+  source:           model("Source"),
 
   // Prisma transaction compatibility — runs promises sequentially
   $transaction: async (fns: unknown[]) => {

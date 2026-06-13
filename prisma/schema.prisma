@@ -145,19 +145,61 @@ model Review {
 }
 
 model Lead {
-  id         String     @id @default(cuid())
-  businessId String
-  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  name       String
-  email      String?
-  phone      String?
-  source     String
-  status     LeadStatus @default(NEW)
-  score      Int        @default(0)
-  notes      String?
-  createdAt  DateTime   @default(now())
+  id                   String      @id @default(cuid())
+  businessId           String
+  business             Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name                 String
+  email                String?
+  phone                String?
+  source               String
+  status               LeadStatus  @default(NEW)
+  score                Int         @default(0)
+  notes                String?
+  distressLayer        Int         @default(1)
+  earlyWarning         Boolean     @default(false)
+  confidenceScore      Int?
+  timeToDistressMonths Int?
+  rawSignals           RawSignal[]
+  createdAt            DateTime    @default(now())
 
   @@index([businessId])
+  @@index([status])
+  @@index([earlyWarning])
+  @@index([distressLayer])
+}
+
+model RawSignal {
+  id         String   @id @default(cuid())
+  leadId     String?
+  lead       Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  apn        String?
+  address    String
+  county     String
+  signalType String
+  signalDate DateTime
+  rawData    Json
+  source     String
+  createdAt  DateTime @default(now())
+
+  @@index([leadId])
+  @@index([apn])
+  @@index([county, signalType])
+  @@index([address])
+}
+
+model Source {
+  id          String    @id @default(cuid())
+  name        String
+  county      String
+  layer       Int
+  lastSuccess DateTime?
+  lastError   String?
+  status      String    @default("active")
+  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime  @default(now())
+
+  @@unique([name, county])
+  @@index([county])
   @@index([status])
 }
 

@@ -644,6 +644,7 @@ export interface GenerateWebsiteParams {
   competitorContext?: string
   currentHtml?:       string
   editSection?:       string
+  editRequest?:       string
   runCRO?:            boolean
   businessLiveData?:  { leadCount: number; reviewCount: number; avgRating: number; recentContent: string[]; totalRevenue?: string }
 }
@@ -798,13 +799,18 @@ function postProcess(html: string, brandColor: string, brandInt: string): string
 export async function generateWebsite(params: GenerateWebsiteParams): Promise<GenerateWebsiteResult> {
   const { business, brandColor, services, tagline, reviews = [], researchContext,
     directives, shaderGlsl, styleCloneContext, imageContext, competitorContext,
-    currentHtml, editSection, runCRO, businessLiveData } = params
+    currentHtml, editSection, editRequest, runCRO, businessLiveData } = params
 
   const brandInt = `0x${brandColor.replace("#","")}`
 
   // #4 — Diff edit: bypass full generation
   if (editSection && currentHtml) {
-    const editedHtml = await editSiteSection(currentHtml, editSection, {
+    // Combine section name + user description so Claude knows both WHAT to edit and WHERE.
+    // e.g. "hero: Change the headline to focus on cost savings"
+    const fullEditRequest = editRequest
+      ? `${editSection}: ${editRequest}`
+      : editSection
+    const editedHtml = await editSiteSection(currentHtml, fullEditRequest, {
       business: { name: business.name, type: business.type },
       brandColor, directives,
     })

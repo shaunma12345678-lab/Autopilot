@@ -37,6 +37,8 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Real Estate",
     items: [
       { href: "/foreclosure-leads", label: "Pre-Foreclosure Leads", icon: "🏚" },
+      { href: "/foreclosure-leads?tab=early-warning", label: "Early Warning",         icon: "⚡" },
+      { href: "/agents",            label: "Agent Health",           icon: "🛰" },
     ],
   },
   {

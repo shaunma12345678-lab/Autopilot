@@ -54,7 +54,7 @@ function zeroKeyLeadToForeclosureLead(fl: ZeroKeyLead): ForeclosureLead {
     linkedInUrl: null,
     contactConfidence: null,
     foreclosureType: fl.foreclosureStage,
-    foreclosureStage: fl.foreclosureStage,
+    foreclosureStage: fl.foreclosureStage as "NOTICE_OF_DEFAULT" | "LIS_PENDENS" | "NOTICE_OF_SALE" | "PRE_FORECLOSURE" | "AUCTION",
     recordingDate: fl.recordingDate,
     daysOnFile: fl.recordingDate
       ? Math.floor((Date.now() - new Date(fl.recordingDate).getTime()) / 86400000)
@@ -196,7 +196,7 @@ export async function POST(request: NextRequest) {
       searchType, zipCode, city, state, county, daysBack: safeDays, maxLeads: safeMax,
     })
     if (freeLeads.length > 0) {
-      const leads = freeLeads.map(fl => zeroKeyLeadToForeclosureLead({ ...fl, dataMode: "live" as const, sourceLabel: "Tavily Web Search" }))
+      const leads = freeLeads.map(fl => zeroKeyLeadToForeclosureLead({ ...fl, dataMode: "live" as const, sourceLabel: "Tavily Web Search", bankOwner: null, mode: "pre-foreclosure" as const }))
       leads.sort((a, b) => b.score - a.score)
       return Response.json({ leads, total, fetched: leads.length, dataSource: "tavily-public-records" })
     }

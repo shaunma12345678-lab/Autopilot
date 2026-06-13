@@ -5,9 +5,9 @@ import Groq from "groq-sdk"
 
 export const MODELS = {
   /** Most capable — complex analysis, legal, finance, strategic reasoning */
-  opus: "claude-opus-4-5-20251101",
+  opus: "claude-opus-4-8",
   /** Default — excellent balance of speed and quality */
-  sonnet: "claude-sonnet-4-20250514",
+  sonnet: "claude-sonnet-4-6",
   /** Fast + cheap — simple tasks, high-volume classification */
   haiku: "claude-haiku-4-5-20251001",
 } as const
@@ -143,6 +143,44 @@ export async function runAgent(
   }
 
   return text
+}
+
+// ── Streaming agent runner (Groq only — keeps Vercel connection alive) ────────
+
+export async function* runAgentStream(
+  systemPrompt: string,
+  userPrompt: string,
+  options: Pick<AgentOptions, "maxTokens"> = {}
+): AsyncGenerator<string> {
+  const client = getGroqClient()
+  let lastError: Error = new Error("Stream failed")
+
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    try {
+      const stream = await client.chat.completions.create({
+        model:      "llama-3.3-70b-versatile",
+        max_tokens: options.maxTokens ?? 8192,
+        stream:     true,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user",   content: userPrompt },
+        ],
+      })
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content
+        if (delta) yield delta
+      }
+      return
+    } catch (err: unknown) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+      const msg        = lastError.message.toLowerCase()
+      const isRateLimit = msg.includes("429") || msg.includes("rate limit") || msg.includes("rate_limit")
+      if (!isRateLimit || attempt === 2) throw lastError
+      const waitMs = attempt === 0 ? 12000 : 25000
+      await new Promise(r => setTimeout(r, waitMs))
+    }
+  }
+  throw lastError
 }
 
 // ── Reasoning agent (CoT wrapper) ─────────────────────────────────────────────

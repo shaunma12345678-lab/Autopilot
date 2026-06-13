@@ -119,7 +119,10 @@ export default function WebsitePage() {
 
   useEffect(() => {
     fetch("/api/businesses/current")
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`Failed to load business (${r.status})`)
+        return r.json()
+      })
       .then(d => {
         if (d.business) {
           setBusiness(d.business)
@@ -130,7 +133,11 @@ export default function WebsitePage() {
       })
       .then(r => r?.json())
       .then(d => { if (d?.sites) setSites(d.sites) })
-      .catch(() => {})
+      .catch(err => {
+        if (err instanceof Error && !err.message.includes("404")) {
+          setError(err.message || "Failed to load — please refresh")
+        }
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -234,11 +241,11 @@ export default function WebsitePage() {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          businessId:   business.id,
+          businessId:    business.id,
           brandColor,
-          userPrompt:   editRequest,
+          userPrompt:    editRequest,
           currentSiteId: preview.id,
-          editSection:  editRequest,
+          editSection:   editingSection || "hero",
         }),
       })
       setProgress(100)

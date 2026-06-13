@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
     "Content", "Review", "Lead", "Report",
     "Conversation", "Message", "AgentMemory",
     "FewShotExample", "CustomTool", "ScheduledRun",
+    "RawSignal", "Source",
   ]
 
   for (const t of tables) {

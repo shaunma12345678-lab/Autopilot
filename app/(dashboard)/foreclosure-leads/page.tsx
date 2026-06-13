@@ -2,6 +2,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 import ForeclosureSearch from "@/components/dashboard/ForeclosureSearch"
+import EarlyWarningDashboard from "@/components/dashboard/EarlyWarningDashboard"
 import { hasGmailConnected } from "@/lib/gmail"
 
 export const metadata = {
@@ -18,13 +19,20 @@ interface ServiceStatus {
   note?: string
 }
 
-export default async function ForeclosureLeadsPage() {
+export default async function ForeclosureLeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>
+}) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect("/login")
 
   const business = await prisma.business.findFirst({ where: { userId: user.id } })
   if (!business) redirect("/onboarding")
+
+  const { tab } = await searchParams
+  const activeTab = tab === "early-warning" ? "early-warning" : "search"
 
   const gmailConnected = await hasGmailConnected(user.id)
 
@@ -122,7 +130,27 @@ export default async function ForeclosureLeadsPage() {
         )}
       </div>
 
-      <ForeclosureSearch businessId={business.id} />
+      {/* Tab switcher */}
+      <div className="flex bg-gray-900/60 border border-gray-700/40 rounded-2xl p-1 gap-1 w-fit">
+        <a href="/foreclosure-leads"
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${activeTab === "search" ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}>
+          Search & Score
+        </a>
+        <a href="/foreclosure-leads?tab=early-warning"
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${activeTab === "early-warning" ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}>
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+          </span>
+          Get Ahead of the Market
+        </a>
+      </div>
+
+      {activeTab === "early-warning" ? (
+        <EarlyWarningDashboard businessId={business.id} />
+      ) : (
+        <ForeclosureSearch businessId={business.id} />
+      )}
     </div>
   )
 }

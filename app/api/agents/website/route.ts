@@ -154,6 +154,7 @@ export async function POST(request: NextRequest) {
       competitorContext:  competitorCtx || undefined,
       currentHtml:        currentHtml,
       editSection:        editSection ?? undefined,
+      editRequest:        userPrompt ?? undefined,
       runCRO:             runCRO === true,
       businessLiveData,
     })
