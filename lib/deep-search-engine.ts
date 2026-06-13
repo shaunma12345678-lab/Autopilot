@@ -36,6 +36,19 @@ const KNOWN_COUNTY_NAMES: Record<string, string> = {
   "orange": "Orange", "los-angeles": "Los Angeles",
 }
 
+// Reject scraped boilerplate that isn't a real street address (auction-site
+// marketing text like "No Reserve Auctions", "grossed billions", etc.).
+const ADDRESS_JUNK_RX = /\b(no reserve|auctions|grossed|billion|properties and|car auction|click here|view more|learn more|opening bid|sign in|create account)\b/i
+
+function isValidPropertyAddress(address: string | undefined): boolean {
+  const a = (address ?? "").trim()
+  if (a.length < 6 || a.length > 90) return false
+  if (!/^\d{1,6}\s+[A-Za-z]/.test(a)) return false   // must be "<house#> <word>…"
+  if (ADDRESS_JUNK_RX.test(a)) return false          // marketing boilerplate
+  if ((a.match(/\d{5,}/g) ?? []).length > 1) return false  // multiple long digit runs = parsed garbage
+  return true
+}
+
 // ── Query builder — works for any location ───────────────────────────────────
 function buildDeepQuerySet(loc: SearchLocation, year: number): string[] {
   const st = loc.state || "United States"
@@ -314,10 +327,15 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   }
 
   // Filter regex leads to the searched location; if too few match (e.g. the
-  // local publisher wasn't in results), keep ALL found — they're still real,
-  // verified foreclosure notices in/near the region, so we never return empty.
-  const matched   = allRegex.filter(r => leadMatchesTarget(r, target))
-  const regexLeads = (matched.length >= 8 ? matched : allRegex).map(r => r.lead)
+  // local publisher wasn't in results), widen the net — but never cross into a
+  // different state when the user specified one (no CA leads in a Phoenix search).
+  const matched = allRegex.filter(r => leadMatchesTarget(r, target))
+  const targetState = (target.state || "").toUpperCase()
+  const fallbackPool = targetState
+    ? allRegex.filter(r => r.state === targetState)
+    : allRegex
+  const chosen = matched.length >= 8 ? matched : (fallbackPool.length > 0 ? fallbackPool : matched)
+  const regexLeads = chosen.map(r => r.lead)
 
   const allWebLeads = [...regexLeads, ...allAiLeads]
   if (allWebLeads.length > 0) {
@@ -331,7 +349,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   const deduped: FreeLead[] = []
 
   for (const lead of [...allWebLeads, ...allDirectLeads]) {
-    if (!lead.address?.trim()) continue
+    if (!isValidPropertyAddress(lead.address)) continue
     const key = (lead.address + (lead.city ?? "")).toLowerCase().replace(/[\s,#.-]/g, "")
     if (seen.has(key)) continue
     seen.add(key)
