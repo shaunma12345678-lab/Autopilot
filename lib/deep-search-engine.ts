@@ -14,6 +14,7 @@ import { searchDirectSources } from "@/lib/direct-foreclosure-sources"
 import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
 import { COUNTY_BOXES, withConcurrency } from "@/lib/geo-tiles"
+import { enrichLeadsWithContact } from "@/lib/contact-enrichment"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
 // ── County metadata ───────────────────────────────────────────────────────────
@@ -41,53 +42,50 @@ function buildDeepQuerySet(county: CountyMeta, year: number): string[] {
   const cn = county.name
 
   return [
-    // NOD / Lis Pendens / NTS — legally required public records
-    `${c} "notice of default" ${year} recorder property address`,
-    `${c} "lis pendens" ${year} filed court property`,
-    `${c} "notice of trustee sale" ${year} property address`,
-    `${c} "trustee's sale" ${year} property scheduled`,
+    // Primary legal notice sites — CA law requires NOD publication here
+    `site:legalnewsonline.com "${cn}" "notice of default" ${year}`,
+    `site:publicnoticeads.com "${cn}" "notice of trustee" ${year}`,
+    `site:dailyjournal.com "${cn}" "notice of default" ${year}`,
+    `site:thecourtreporter.com "${cn}" "notice of trustee sale" ${year}`,
+    `site:thedailyrecordnet.com "${cn}" foreclosure ${year}`,
+    // NOD / Lis Pendens / NTS — broad
+    `${c} "notice of default" ${year} "street" OR "avenue" OR "drive" OR "lane"`,
+    `${c} "lis pendens" ${year} filed property address`,
+    `${c} "notice of trustee sale" ${year} property owner`,
+    `${c} "trustee's sale" ${year} "T.S. No" address`,
+    // County recorder & court direct links
+    `${c} recorder "deed of trust" default ${year} "recorded"`,
+    `site:courtrecords.lacourt.org OR site:sdcourt.ca.gov "${cn}" lis pendens ${year}`,
     // Tax delinquency
-    `${c} delinquent property tax list ${year} owner`,
-    `${c} "tax lien" property filed ${year}`,
-    `site:sdttc.com OR site:rivcotax.com OR site:sbcounty.gov delinquent tax ${year}`,
-    // Probate / life events
-    `${c} probate court filing ${year} "real property"`,
-    `${c} "petition for probate" real estate ${year}`,
-    `"${cn}" obituary homeowner estate real property ${year}`,
+    `${c} delinquent property tax list ${year} owner address`,
+    `${c} "tax defaulted" property ${year} list owner`,
+    `${c} "county tax collector" delinquent ${year} auction`,
+    // Probate / estate
+    `${c} probate court "real property" sale ${year} address`,
+    `${c} "petition for probate" real estate ${year} decedent`,
     // Divorce / marital dissolution
     `${c} divorce dissolution "real property" ordered sale ${year}`,
-    `${c} "marital settlement" home equity ${year}`,
     // Code violations / condemned
-    `${c} "code enforcement" violation abandoned property ${year}`,
-    `${c} "notice of violation" building order ${year}`,
-    // Legal notice aggregators (NODs published here by law)
-    `site:legalnewsonline.com "${cn}" "notice of default" ${year}`,
-    `site:dailyjournal.com "${cn}" foreclosure notice ${year}`,
-    `site:publicnoticeads.com "${cn}" trustee sale ${year}`,
-    // Auction aggregators with actual property addresses
-    `site:auction.com "${cn}" foreclosure ${year}`,
-    `site:xome.com "${cn}" foreclosure home sale`,
-    `site:hubzu.com "${cn}" foreclosure listing`,
-    // MLS expired / withdrawn / price-dropped
-    `"${cn}" expired listing withdrawn MLS ${year} price reduced`,
-    `"${cn}" "price reduced" OR "price drop" home ${year} motivated seller`,
-    // HOA liens
-    `${c} "HOA lien" filed recorder ${year} assessment`,
-    `${c} "homeowners association" lien delinquent ${year}`,
-    // Bankruptcy
-    `${c} bankruptcy "chapter 7" OR "chapter 13" property ${year}`,
-    // Vacant / absentee
-    `"${cn}" vacant abandoned property ${year} owner absentee`,
-    `"${cn}" "vacant property" city notice ${year}`,
-    // Investor / wholesale deal signals
-    `"${cn}" motivated seller distressed property ${year} wholesale`,
-    `"${cn}" pre-foreclosure seller ${year} off-market`,
-    // County recorder deep queries
-    `site:${county.id.replace(/-/g, "")}.ca.gov recorder foreclosure ${year}`,
-    `"${cn} County" recorder "recorded documents" foreclosure ${year}`,
-    // Real estate legal news
-    `"${cn}" real estate foreclosure ${year} bank-owned`,
-    `"${cn}" NOD filed ${year} lender default notice`,
+    `${c} "code enforcement" violation abandoned property ${year} address`,
+    // Auction aggregators — actual listings
+    `site:auction.com "${cn}" foreclosure listing`,
+    `site:xome.com "${cn}" foreclosure home`,
+    `site:hubzu.com "${cn}" bank-owned listing`,
+    `site:bid4assets.com "${cn}" real estate auction`,
+    // Bank REO listings — Freddie/Fannie/HUD
+    `site:homepath.com "${cn}" OR "${cn} County" REO`,
+    `site:homesteps.com "${cn}" foreclosure`,
+    `site:hudhomestore.gov "${cn}" listing`,
+    // Pre-foreclosure intelligence
+    `"${cn}" pre-foreclosure NOD ${year} motivated seller contact`,
+    `"${cn}" motivated seller distressed property ${year} wholesale deal`,
+    `"${cn}" "default amount" "notice of default" ${year} owner contact`,
+    // HOA / lien
+    `${c} "HOA lien" delinquent ${year} property address recorded`,
+    // Bankruptcy with property
+    `${c} bankruptcy "chapter 7" real property ${year} trustee sale`,
+    // Absentee owners
+    `"${cn}" absentee owner vacant property ${year} pre-foreclosure`,
   ]
 }
 
@@ -353,6 +351,20 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
         return !existingAddresses.has(key)
       })
     : leads
+
+  notify(`Enriching owner contacts…`, leads.length)
+
+  // Contact enrichment — look up phone for leads that have an owner name
+  try {
+    const contactMap = await enrichLeadsWithContact(
+      leads.map(l => ({ address: l.address, ownerName: l.ownerName, city: l.city, state: l.state }))
+    )
+    for (const lead of leads) {
+      const key = (lead.address + lead.city).toLowerCase().replace(/[\s,#.-]/g, "")
+      const phone = contactMap.get(key)
+      if (phone) lead.phone = phone
+    }
+  } catch { /* non-fatal */ }
 
   notify(`Done — ${leads.length} total leads, ${newLeads.length} new`, leads.length)
 

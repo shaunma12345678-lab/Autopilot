@@ -29,6 +29,8 @@ export interface FreeLead {
   estimatedValue: number | null
   sourceUrl: string
   rawSignals: string[]
+  phone?: string | null
+  email?: string | null
 }
 
 const EXTRACT_SYSTEM = `You are a real estate data extraction specialist with deep knowledge of US foreclosure law.

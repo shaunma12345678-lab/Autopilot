@@ -1,15 +1,17 @@
-// Direct pre-foreclosure data sources — no API key required.
+// Direct pre-foreclosure data sources — no paid API key required.
 //
-// Sources:
-//   Zillow        — tiled bounding-box queries (pre-foreclosure filter)
-//   Redfin        — tiled bounding-box queries (distressed status)
-//   HUD REO       — official HUD home store API (government REO listings)
-//   USDA RD       — USDA rural development REO (public API)
-//   ArcGIS Hub    — official county open-data REST (NOD, lien, recorder)
-//   auction.com   — public foreclosure auction listings
-//
-// All sources run in parallel. Results are deduplicated by normalized address.
-// Accepts maxLeads to scale tile count — more tiles = more results per county.
+// Sources (all run in parallel):
+//   Zillow        — tiled bounding-box map search (pre-foreclosure filter)
+//   Redfin        — tiled GIS search (distressed/foreclosure status)
+//   HomePath      — Fannie Mae official REO listings (government JSON feed)
+//   HomeSteps     — Freddie Mac official REO listings (government JSON feed)
+//   HUD REO       — HUD Home Store API (government REO)
+//   USDA RD       — USDA Rural Development REO (public API)
+//   auction.com   — public foreclosure auction HTML search
+//   Bid4Assets    — county tax deed / government auction listings
+//   Foreclosure.com — pre-foreclosure listing HTML search
+//   LegalNotices  — CA legal notice publications (publicnoticeads.com + legalnewsonline.com)
+//   ArcGIS Hub    — official county open-data recorder REST API
 
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 import { geocodeArea, type GeoBox } from "@/lib/geocoding"
@@ -39,7 +41,7 @@ async function fetchZillowTile(tile: GeoBox): Promise<FreeLead[]> {
 
   const params = new URLSearchParams({
     searchQueryState,
-    wants:          JSON.stringify({ cat1: ["mapResults"], cat2: ["total"] }),
+    wants:          JSON.stringify({ cat1: ["mapResults", "listResults"], cat2: ["total"] }),
     requestId:      "3",
     isDebugRequest: "false",
   })
@@ -50,10 +52,12 @@ async function fetchZillowTile(tile: GeoBox): Promise<FreeLead[]> {
       {
         headers: {
           "User-Agent":      UA,
-          "Accept":          "*/*",
+          "Accept":          "application/json, */*",
           "Accept-Language": "en-US,en;q=0.9",
           "Referer":         "https://www.zillow.com/homes/pre-foreclosure/",
           "DNT":             "1",
+          "Sec-Fetch-Site":  "same-origin",
+          "Sec-Fetch-Mode":  "cors",
         },
         signal: AbortSignal.timeout(15000),
       }
@@ -64,23 +68,23 @@ async function fetchZillowTile(tile: GeoBox): Promise<FreeLead[]> {
     const results: Record<string, unknown>[] =
       data?.cat1?.searchResults?.mapResults ??
       data?.cat1?.searchResults?.listResults ??
+      data?.searchResults?.mapResults ??
+      data?.mapResults ??
       []
 
     return results.flatMap((r) => {
-      const info = (r.hdpData as Record<string, unknown>)?.homeInfo as Record<string, unknown> | undefined
-      const address = String(info?.streetAddress ?? r.address ?? r.streetAddress ?? "").trim()
+      const info    = (r.hdpData as Record<string, unknown>)?.homeInfo as Record<string, unknown> | undefined
+      const address = String(
+        info?.streetAddress ?? r.streetAddress ?? r.address ?? r.addressStreet ?? ""
+      ).trim()
       if (!address) return []
 
       const city  = String(info?.city    ?? r.addressCity    ?? r.city    ?? "")
-      const state = String(info?.state   ?? r.addressState   ?? r.state   ?? "")
-      const zip   = String(info?.zipcode ?? r.addressZipcode ?? r.zipcode ?? "")
-      const price = Number(info?.price   ?? r.price          ?? 0) || null
+      const state = String(info?.state   ?? r.addressState   ?? r.state   ?? "CA")
+      const zip   = String(info?.zipcode ?? r.addressZipcode ?? r.zipcode ?? r.zip ?? "")
+      const price = Number(info?.price   ?? r.price          ?? r.listPrice ?? 0) || null
       const zest  = Number(info?.zestimate ?? r.zestimate    ?? 0) || null
       const zpid  = String(r.zpid ?? "")
-
-      const listingType = String(
-        info?.contingentListingType ?? r.listingType ?? "PRE_FORECLOSURE"
-      ).toUpperCase()
 
       return [{
         address,
@@ -88,7 +92,7 @@ async function fetchZillowTile(tile: GeoBox): Promise<FreeLead[]> {
         state,
         zip,
         ownerName:        "",
-        foreclosureStage: listingType.includes("AUCTION") ? "AUCTION" : "PRE_FORECLOSURE",
+        foreclosureStage: "PRE_FORECLOSURE",
         recordingDate:    "",
         defaultAmount:    price,
         lender:           null,
@@ -150,14 +154,15 @@ async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
           "Accept":          "*/*",
           "Accept-Language": "en-US,en;q=0.9",
           "Referer":         "https://www.redfin.com/",
+          "X-Requested-With": "XMLHttpRequest",
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(15000),
       }
     )
     if (!res.ok) return []
 
     const text    = await res.text()
-    const jsonStr = text.replace(/^[^{[]*/, "")
+    const jsonStr = text.startsWith("{}&&") ? text.slice(4) : text.replace(/^[^{[]*/, "")
     if (!jsonStr) return []
     const data = JSON.parse(jsonStr)
 
@@ -174,7 +179,7 @@ async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
 
       const cityStateZip = String(loc?.value ?? "")
       const cityPart  = cityStateZip.split(",")?.[0]?.trim() ?? String(info?.city  ?? "")
-      const statePart = String(info?.state ?? "")
+      const statePart = String(info?.state ?? "CA")
       const zipPart   = String(info?.zip   ?? "")
       const price     = Number((h.price as Record<string, unknown>)?.value ?? 0) || null
       const url       = String(h.url ?? "")
@@ -210,92 +215,195 @@ async function scrapeRedfinTiled(box: GeoBox, maxLeads: number): Promise<FreeLea
   return batches.flat()
 }
 
+// ── HomePath — Fannie Mae official REO listings ───────────────────────────────
+
+async function scrapeHomePath(box: GeoBox): Promise<FreeLead[]> {
+  try {
+    // Fannie Mae HomePath public listing search — bounding box
+    const params = new URLSearchParams({
+      listingType:   "HomePath",
+      searchType:    "BoundingBox",
+      north:         String(box.north),
+      south:         String(box.south),
+      east:          String(box.east),
+      west:          String(box.west),
+      sortBy:        "LargestSquareFootage",
+      startIndex:    "0",
+      pageSize:      "100",
+    })
+
+    const res = await fetch(
+      `https://www.homepath.com/listings.json?${params}`,
+      {
+        headers: {
+          "User-Agent":      UA,
+          "Accept":          "application/json, */*",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Referer":         "https://www.homepath.com/",
+        },
+        signal: AbortSignal.timeout(12000),
+      }
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+
+    const listings: Record<string, unknown>[] =
+      data?.listings ?? data?.properties ?? data?.data ?? data?.results ?? []
+
+    return listings.flatMap((l) => {
+      const address = String(
+        l.propertyStreetAddress ?? l.streetAddress ?? l.address ?? l.street ?? ""
+      ).trim()
+      if (!address) return []
+
+      return [{
+        address,
+        city:             String(l.city ?? l.propertyCity ?? ""),
+        state:            String(l.stateCode ?? l.state ?? "CA"),
+        zip:              String(l.postalCode ?? l.zip ?? l.zipCode ?? ""),
+        ownerName:        "Fannie Mae / HomePath",
+        foreclosureStage: "PRE_FORECLOSURE" as const,
+        recordingDate:    String(l.listingDate ?? l.availableDate ?? ""),
+        defaultAmount:    Number(l.listPrice ?? l.askingPrice ?? 0) || null,
+        lender:           "Fannie Mae",
+        auctionDate:      null,
+        estimatedValue:   Number(l.listPrice ?? 0) || null,
+        sourceUrl:        l.propertyUrl
+          ? `https://www.homepath.com${l.propertyUrl}`
+          : `https://www.homepath.com/listing/${l.listingId ?? ""}`,
+        rawSignals:       ["Fannie Mae HomePath REO — bank-owned foreclosure"],
+      } as FreeLead]
+    })
+  } catch {
+    return []
+  }
+}
+
+// ── HomeSteps — Freddie Mac official REO listings ─────────────────────────────
+
+async function scrapeHomeSteps(box: GeoBox): Promise<FreeLead[]> {
+  try {
+    const params = new URLSearchParams({
+      north:    String(box.north),
+      south:    String(box.south),
+      east:     String(box.east),
+      west:     String(box.west),
+      limit:    "100",
+      page:     "1",
+    })
+
+    const res = await fetch(
+      `https://www.homesteps.com/api/v3/listings/search?${params}`,
+      {
+        headers: {
+          "User-Agent":      UA,
+          "Accept":          "application/json",
+          "Referer":         "https://www.homesteps.com/",
+        },
+        signal: AbortSignal.timeout(12000),
+      }
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+
+    const listings: Record<string, unknown>[] =
+      data?.listings ?? data?.properties ?? data?.data ?? []
+
+    return listings.flatMap((l) => {
+      const address = String(
+        l.propertyAddress ?? l.streetAddress ?? l.address ?? ""
+      ).trim()
+      if (!address) return []
+
+      return [{
+        address,
+        city:             String(l.city ?? ""),
+        state:            String(l.stateCode ?? l.state ?? "CA"),
+        zip:              String(l.postalCode ?? l.zip ?? ""),
+        ownerName:        "Freddie Mac / HomeSteps",
+        foreclosureStage: "PRE_FORECLOSURE" as const,
+        recordingDate:    String(l.listDate ?? ""),
+        defaultAmount:    Number(l.listPrice ?? 0) || null,
+        lender:           "Freddie Mac",
+        auctionDate:      null,
+        estimatedValue:   Number(l.listPrice ?? 0) || null,
+        sourceUrl:        l.detailUrl
+          ? `https://www.homesteps.com${l.detailUrl}`
+          : "https://www.homesteps.com/",
+        rawSignals: ["Freddie Mac HomeSteps REO — bank-owned foreclosure"],
+      } as FreeLead]
+    })
+  } catch {
+    return []
+  }
+}
+
 // ── HUD REO — government foreclosure property listings ───────────────────────
 
 async function scrapeHudReo(params: {
   state?: string
   county?: string
 }): Promise<FreeLead[]> {
-  try {
-    const state  = params.state ?? "CA"
-    const qs = new URLSearchParams({
-      states:    state,
-      county:    params.county ?? "",
-      pageSize:  "100",
-      pageNum:   "1",
-    })
+  const state  = params.state ?? "CA"
 
-    const res = await fetch(
-      `https://www.hudhomestore.gov/Listing/PropertySearchResult.aspx?${qs}`,
+  try {
+    // Try HUD's XML data feed first (more reliable than HTML parsing)
+    const xmlRes = await fetch(
+      `https://www.hudhomestore.gov/Listing/PropertyListing.aspx?stateCode=${state}&zipCode=&county=${encodeURIComponent(params.county ?? "")}&city=&listingType=A&listingTypeArray=A&pageSize=100&pageNum=1&output=xml`,
       {
-        headers: {
-          "User-Agent":      UA,
-          "Accept":          "application/json, text/html, */*",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        signal: AbortSignal.timeout(12000),
+        headers: { "User-Agent": UA, "Accept": "application/xml, text/xml, */*" },
+        signal:  AbortSignal.timeout(12000),
       }
     )
-    if (!res.ok) return []
 
-    // HUD site returns HTML — try to parse property data from JSON embedded in page
-    const html = await res.text()
+    if (xmlRes.ok) {
+      const xml = await xmlRes.text()
+      const leads: FreeLead[] = []
+      const propMatches = xml.matchAll(/<Property>([\s\S]*?)<\/Property>/gi)
+      for (const m of propMatches) {
+        const block   = m[1]
+        const extract = (tag: string) => block.match(new RegExp(`<${tag}>([^<]*)<\/${tag}>`))?.[1]?.trim() ?? ""
+        const address = extract("PropertyAddress") || extract("StreetAddress") || extract("Address")
+        if (!address) continue
 
-    // HUD embeds property data as JSON in a script tag
-    const jsonMatches = [
-      html.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/),
-      html.match(/var\s+propertiesData\s*=\s*(\[[\s\S]*?\]);/),
-      html.match(/"properties"\s*:\s*(\[[\s\S]*?\])\s*[,}]/),
-    ]
-
-    for (const m of jsonMatches) {
-      if (!m) continue
-      try {
-        const raw = JSON.parse(m[1])
-        const listings: Record<string, unknown>[] =
-          Array.isArray(raw) ? raw :
-          (raw?.properties ?? raw?.listings ?? raw?.data ?? [])
-
-        if (listings.length === 0) continue
-
-        return listings.slice(0, 100).flatMap((l) => {
-          const address = String(
-            l.propertyAddress ?? l.address ?? l.streetAddress ?? l.street ?? ""
-          ).trim()
-          if (!address) return []
-
-          return [{
-            address,
-            city:             String(l.propertyCity ?? l.city ?? ""),
-            state:            String(l.propertyState ?? l.state ?? state),
-            zip:              String(l.propertyZip ?? l.zip ?? l.zipCode ?? ""),
-            ownerName:        "HUD / FHA",
-            foreclosureStage: "PRE_FORECLOSURE" as const,
-            recordingDate:    String(l.listingDate ?? l.caseApprovalDate ?? ""),
-            defaultAmount:    Number(l.listPrice ?? l.askingPrice ?? 0) || null,
-            lender:           "HUD / FHA",
-            auctionDate:      null,
-            estimatedValue:   Number(l.listPrice ?? 0) || null,
-            sourceUrl:        `https://www.hudhomestore.gov/Listing/PropertyDetails.aspx?caseNumber=${l.caseNumber ?? ""}`,
-            rawSignals:       ["HUD REO — FHA-insured foreclosure"],
-          } as FreeLead]
+        leads.push({
+          address,
+          city:             extract("City"),
+          state:            extract("State") || state,
+          zip:              extract("ZipCode") || extract("Zip"),
+          ownerName:        "HUD / FHA",
+          foreclosureStage: "PRE_FORECLOSURE",
+          recordingDate:    extract("ListingDate") || extract("ApprovalDate"),
+          defaultAmount:    Number(extract("ListPrice")) || null,
+          lender:           "HUD / FHA",
+          auctionDate:      null,
+          estimatedValue:   Number(extract("ListPrice")) || null,
+          sourceUrl:        `https://www.hudhomestore.gov/Listing/PropertyDetails.aspx?caseNumber=${extract("CaseNumber")}`,
+          rawSignals:       ["HUD REO — FHA-insured foreclosure, government listing"],
         })
-      } catch {
-        continue
       }
+      if (leads.length > 0) return leads
     }
 
-    // Fallback: parse HTML table rows if JSON extraction failed
-    const rowMatches = html.matchAll(
-      /PropertyDetails\.aspx[^"]*caseNumber=([^"&]+)[^>]*>[\s\S]*?(\d+\s+[A-Z][^<]{5,60})</gi
+    // Fallback: HTML scrape with regex for case number links + addresses
+    const htmlRes = await fetch(
+      `https://www.hudhomestore.gov/Listing/PropertySearchResult.aspx?stateCode=${state}&county=${encodeURIComponent(params.county ?? "")}&pageSize=100&pageNum=1`,
+      {
+        headers: { "User-Agent": UA, "Accept": "text/html" },
+        signal:  AbortSignal.timeout(12000),
+      }
     )
-    const htmlLeads: FreeLead[] = []
-    for (const row of rowMatches) {
+    if (!htmlRes.ok) return []
+    const html = await htmlRes.text()
+
+    const leads: FreeLead[] = []
+    const rows = html.matchAll(/caseNumber=([^"&]+)[^>]*>[\s\S]*?(\d+\s+[A-Z][^<,]{4,50})[,<]/gi)
+    for (const row of rows) {
       const address = row[2]?.trim()
       if (address) {
-        htmlLeads.push({
+        leads.push({
           address,
-          city: "", state: state, zip: "",
+          city: "", state, zip: "",
           ownerName:        "HUD / FHA",
           foreclosureStage: "PRE_FORECLOSURE",
           recordingDate:    "",
@@ -303,12 +411,12 @@ async function scrapeHudReo(params: {
           lender:           "HUD / FHA",
           auctionDate:      null,
           estimatedValue:   null,
-          sourceUrl:        `https://www.hudhomestore.gov/`,
+          sourceUrl:        `https://www.hudhomestore.gov/Listing/PropertyDetails.aspx?caseNumber=${row[1]}`,
           rawSignals:       ["HUD REO — FHA-insured foreclosure"],
         })
       }
     }
-    return htmlLeads.slice(0, 60)
+    return leads.slice(0, 80)
   } catch {
     return []
   }
@@ -332,11 +440,11 @@ async function scrapeUsda(state: string): Promise<FreeLead[]> {
     )
     if (!res.ok) return []
     const data = await res.json()
-    const items: Record<string, unknown>[] = data?.data ?? data?.properties ?? data ?? []
+    const items: Record<string, unknown>[] = data?.data ?? data?.properties ?? (Array.isArray(data) ? data : [])
 
     return items.slice(0, 80).flatMap((p) => {
       const address = String(
-        p.propertyAddress ?? p.address ?? p.streetAddress ?? ""
+        p.propertyAddress ?? p.address ?? p.streetAddress ?? p.street ?? ""
       ).trim()
       if (!address) return []
 
@@ -353,12 +461,171 @@ async function scrapeUsda(state: string): Promise<FreeLead[]> {
         auctionDate:      null,
         estimatedValue:   Number(p.listPrice ?? 0) || null,
         sourceUrl:        `https://rdapps.sc.egov.usda.gov/RDDirectSales/`,
-        rawSignals:       ["USDA Rural Development REO property"],
+        rawSignals:       ["USDA Rural Development REO property — government listing"],
       } as FreeLead]
     })
   } catch {
     return []
   }
+}
+
+// ── Foreclosure.com — pre-foreclosure HTML listing search ─────────────────────
+
+async function scrapeForeclosureCom(countyName: string, state: string): Promise<FreeLead[]> {
+  try {
+    // Encode county for URL
+    const countySlug = countyName.toLowerCase().replace(/\s+/g, "+")
+    const res = await fetch(
+      `https://www.foreclosure.com/listing/results.html?qtype=search&st%5B%5D=${state.toLowerCase()}&county%5B%5D=${encodeURIComponent(countyName)}&ptypes%5B%5D=SFR&ptypes%5B%5D=CONDO&ptypes%5B%5D=MULTI`,
+      {
+        headers: {
+          "User-Agent":      UA,
+          "Accept":          "text/html,application/xhtml+xml",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Referer":         "https://www.foreclosure.com/",
+        },
+        signal: AbortSignal.timeout(15000),
+      }
+    )
+    if (!res.ok) return []
+    const html = await res.text()
+
+    const leads: FreeLead[] = []
+
+    // Foreclosure.com embeds property data in listing rows
+    // Address pattern: spans with class "address" or similar
+    const addrMatches = html.matchAll(
+      /(?:class="[^"]*address[^"]*"|class="[^"]*street[^"]*")[^>]*>([^<]{8,80})<\/(?:span|div|td)/gi
+    )
+    const priceMatches = [...html.matchAll(/\$\s*([\d,]+)/g)]
+    let priceIdx = 0
+
+    for (const m of addrMatches) {
+      const raw = m[1].trim().replace(/&amp;/g, "&").replace(/&#\d+;/g, "")
+      if (!raw || raw.length < 8 || /select|search|login|menu/i.test(raw)) continue
+
+      const price = priceMatches[priceIdx]
+        ? Number(priceMatches[priceIdx][1].replace(/,/g, "")) || null
+        : null
+      priceIdx++
+
+      leads.push({
+        address:          raw,
+        city:             "",
+        state,
+        zip:              "",
+        ownerName:        "",
+        foreclosureStage: "PRE_FORECLOSURE",
+        recordingDate:    "",
+        defaultAmount:    price,
+        lender:           null,
+        auctionDate:      null,
+        estimatedValue:   price,
+        sourceUrl:        `https://www.foreclosure.com/listing/results.html?st%5B%5D=${state.toLowerCase()}&county%5B%5D=${encodeURIComponent(countySlug)}`,
+        rawSignals:       ["Foreclosure.com pre-foreclosure listing"],
+      })
+      if (leads.length >= 60) break
+    }
+
+    return leads
+  } catch {
+    return []
+  }
+}
+
+// ── Legal notice publications — CA legally-required NOD publications ───────────
+
+async function scrapeLegalNotices(countyName: string): Promise<FreeLead[]> {
+  const leads: FreeLead[] = []
+
+  // publicnoticeads.com — California legal notice aggregator
+  try {
+    const res = await fetch(
+      `https://www.publicnoticeads.com/CA/search/?type=NTS&county=${encodeURIComponent(countyName)}`,
+      {
+        headers: {
+          "User-Agent":      UA,
+          "Accept":          "text/html",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(12000),
+      }
+    )
+    if (res.ok) {
+      const html = await res.text()
+
+      // Extract addresses from notice listings
+      const addressRx = /(\d+\s+[A-Z][a-zA-Z0-9\s]{5,60}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Road|Rd|Lane|Ln|Court|Ct|Way|Circle|Cir|Place|Pl)[^<]{0,30})/gi
+      const found = html.matchAll(addressRx)
+      const ownerRx = /(?:Trustor|Owner|Borrower|Grantor):?\s*([A-Z][A-Za-z\s-]{3,40})/gi
+
+      const owners: string[] = []
+      for (const o of html.matchAll(ownerRx)) owners.push(o[1].trim())
+
+      let idx = 0
+      for (const m of found) {
+        const address = m[1].trim().replace(/\s+/g, " ")
+        if (!address || leads.some(l => l.address === address)) continue
+        leads.push({
+          address,
+          city:             countyName.split(" ")[0],
+          state:            "CA",
+          zip:              "",
+          ownerName:        owners[idx] ?? "",
+          foreclosureStage: "NOTICE_OF_SALE",
+          recordingDate:    new Date().toISOString().slice(0, 10),
+          defaultAmount:    null,
+          lender:           null,
+          auctionDate:      null,
+          estimatedValue:   null,
+          sourceUrl:        `https://www.publicnoticeads.com/CA/search/?type=NTS&county=${encodeURIComponent(countyName)}`,
+          rawSignals:       ["Notice of Trustee Sale — California legal notice publication (legally required)"],
+        })
+        idx++
+        if (leads.length >= 40) break
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // legalnewsonline.com — another CA legal notice source
+  try {
+    const res = await fetch(
+      `https://legalnewsonline.com/?s=${encodeURIComponent(`"notice of trustee sale" "${countyName} County"`)}&post_type=legalnotice`,
+      {
+        headers: {
+          "User-Agent":      UA,
+          "Accept":          "text/html",
+        },
+        signal: AbortSignal.timeout(10000),
+      }
+    )
+    if (res.ok) {
+      const html = await res.text()
+      const addressRx = /(\d+\s+[A-Z][a-zA-Z0-9\s]{5,60}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Road|Rd|Lane|Ln|Court|Ct|Way|Circle|Cir|Place|Pl)[^<]{0,30})/gi
+      for (const m of html.matchAll(addressRx)) {
+        const address = m[1].trim().replace(/\s+/g, " ")
+        if (!address || leads.some(l => l.address === address)) continue
+        leads.push({
+          address,
+          city:             "",
+          state:            "CA",
+          zip:              "",
+          ownerName:        "",
+          foreclosureStage: "NOTICE_OF_SALE",
+          recordingDate:    new Date().toISOString().slice(0, 10),
+          defaultAmount:    null,
+          lender:           null,
+          auctionDate:      null,
+          estimatedValue:   null,
+          sourceUrl:        `https://legalnewsonline.com/`,
+          rawSignals:       ["Notice of Trustee Sale — California legal newspaper (legally required publication)"],
+        })
+        if (leads.length >= 60) break
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  return leads
 }
 
 // ── ArcGIS Hub — official county open-data ────────────────────────────────────
@@ -446,7 +713,7 @@ async function queryArcGISHub(box: GeoBox, areaLabel: string): Promise<FreeLead[
             allLeads.push({
               address,
               city:  String(a.CITY ?? a.PropertyCity ?? a.SITUS_CITY ?? a.city ?? ""),
-              state: String(a.STATE ?? a.PropertyState ?? a.state ?? ""),
+              state: String(a.STATE ?? a.PropertyState ?? a.state ?? "CA"),
               zip:   String(a.ZIP ?? a.PropertyZip ?? a.ZIP_CODE ?? a.zip ?? ""),
               ownerName: String(
                 a.OWNER_NAME ?? a.OwnerName ?? a.GRANTEE ?? a.owner ?? a.BORROWER ?? ""
@@ -475,7 +742,7 @@ async function queryArcGISHub(box: GeoBox, areaLabel: string): Promise<FreeLead[
   }
 }
 
-// ── auction.com — public foreclosure auction listings ─────────────────────────
+// ── auction.com — foreclosure auction listings ────────────────────────────────
 
 async function scrapeAuctionCom(params: {
   searchType: string
@@ -484,138 +751,191 @@ async function scrapeAuctionCom(params: {
   state?:     string
   county?:    string
 }): Promise<FreeLead[]> {
-  try {
-    const qs: Record<string, string> = { pageNum: "1", pageSize: "100" }
+  const state  = params.state ?? "CA"
+  const county = params.county ?? ""
 
+  // Try their API endpoint — auction.com React app hits a REST API
+  try {
+    const apiQs = new URLSearchParams({
+      stateCode:  state,
+      county,
+      pageNumber: "1",
+      pageSize:   "100",
+      assetType:  "REO",
+    })
     if (params.searchType === "zip" && params.zipCode) {
-      qs.zip    = params.zipCode
-      qs.radius = "25"
-    } else if (params.searchType === "city" && params.city && params.state) {
-      qs.city  = params.city
-      qs.state = params.state
-    } else if (params.searchType === "county" && params.county && params.state) {
-      qs.county = params.county
-      qs.state  = params.state
+      apiQs.set("zipCode", params.zipCode)
+      apiQs.delete("county")
     }
 
-    const res = await fetch(
-      `https://www.auction.com/search/results.json?${new URLSearchParams(qs)}`,
+    const apiRes = await fetch(
+      `https://www.auction.com/api/v2/properties/search?${apiQs}`,
       {
         headers: {
-          "User-Agent":      UA,
-          "Accept":          "application/json, text/javascript, */*",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Referer":         "https://www.auction.com/",
+          "User-Agent": UA,
+          "Accept":     "application/json",
+          "Referer":    "https://www.auction.com/",
         },
         signal: AbortSignal.timeout(12000),
       }
     )
-    if (!res.ok) return []
+    if (apiRes.ok) {
+      const data = await apiRes.json()
+      const listings: Record<string, unknown>[] =
+        data?.results ?? data?.properties ?? data?.assets ?? data?.data ?? []
 
-    const data = await res.json()
-    const listings: Record<string, unknown>[] =
-      data?.results ?? data?.properties ?? data?.listings ?? data?.assets ?? []
+      if (listings.length > 0) {
+        return listings.flatMap((l) => {
+          const address = String(
+            l.address ?? l.streetAddress ?? l.propertyAddress ?? l.streetAddr ?? ""
+          ).trim()
+          if (!address) return []
 
-    return listings.flatMap((l) => {
-      const address = String(
-        l.address ?? l.streetAddress ?? l.propertyAddress ?? l.streetAddr ?? ""
-      ).trim()
-      if (!address) return []
+          const rawDate = l.auctionDate ?? l.saleDate ?? l.eventDate ?? null
+          let auctionDate: string | null = null
+          try { if (rawDate) auctionDate = new Date(String(rawDate)).toISOString().slice(0, 10) } catch { /* skip */ }
 
-      const rawDate = l.auctionDate ?? l.saleDate ?? l.eventDate ?? l.scheduledDate ?? null
-      let auctionDate: string | null = null
-      if (rawDate) {
-        try { auctionDate = new Date(String(rawDate)).toISOString().slice(0, 10) } catch { /* skip */ }
+          return [{
+            address,
+            city:            String(l.city ?? ""),
+            state:           String(l.state ?? state),
+            zip:             String(l.zip ?? l.zipCode ?? l.postalCode ?? ""),
+            ownerName:       String(l.ownerName ?? l.borrowerName ?? ""),
+            foreclosureStage: "AUCTION",
+            recordingDate:   "",
+            defaultAmount:   Number(l.openingBid ?? l.startingBid ?? l.loanBalance ?? 0) || null,
+            lender:          String(l.lender ?? l.beneficiary ?? "") || null,
+            auctionDate,
+            estimatedValue:  Number(l.estimatedValue ?? l.marketValue ?? 0) || null,
+            sourceUrl:       l.url ? `https://www.auction.com${l.url}` : "https://www.auction.com/",
+            rawSignals:      [`Foreclosure auction — auction.com${auctionDate ? ` sale ${auctionDate}` : ""}`],
+          } as FreeLead]
+        })
       }
+    }
+  } catch { /* fall through to HTML scrape */ }
 
-      return [{
+  // HTML fallback — scrape public search page
+  try {
+    const htmlQs = new URLSearchParams({ state, county, page: "1" })
+    if (params.searchType === "zip" && params.zipCode) {
+      htmlQs.set("zip", params.zipCode)
+    }
+    const htmlRes = await fetch(
+      `https://www.auction.com/search/real-estate-foreclosure/?${htmlQs}`,
+      {
+        headers: { "User-Agent": UA, "Accept": "text/html" },
+        signal:  AbortSignal.timeout(12000),
+      }
+    )
+    if (!htmlRes.ok) return []
+    const html = await htmlRes.text()
+
+    const leads: FreeLead[] = []
+    const addrRx = /(\d+\s+[A-Z][a-zA-Z0-9\s]{5,60}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Road|Rd|Lane|Ln|Court|Ct|Way|Circle|Cir|Place|Pl)[^<]{0,20})/gi
+    for (const m of html.matchAll(addrRx)) {
+      const address = m[1].trim().replace(/\s+/g, " ")
+      if (!address || leads.some(l => l.address === address)) continue
+      leads.push({
         address,
-        city:   String(l.city   ?? ""),
-        state:  String(l.state  ?? ""),
-        zip:    String(l.zip ?? l.zipCode ?? l.postalCode ?? ""),
-        ownerName: String(l.ownerName ?? l.borrowerName ?? l.trustorName ?? ""),
+        city:             "",
+        state,
+        zip:              "",
+        ownerName:        "",
         foreclosureStage: "AUCTION",
-        recordingDate:   "",
-        defaultAmount:   Number(l.openingBid ?? l.startingBid ?? l.loanBalance ?? 0) || null,
-        lender: String(l.lender ?? l.beneficiary ?? l.trustee ?? l.sellerName ?? "") || null,
-        auctionDate,
-        estimatedValue: Number(
-          l.estimatedValue ?? l.marketValue ?? l.appraisedValue ?? l.bpoValue ?? 0
-        ) || null,
-        sourceUrl: String(l.url ?? l.propertyUrl ?? "")
-          ? `https://www.auction.com${l.url ?? l.propertyUrl}`
-          : "https://www.auction.com/",
-        rawSignals: [
-          `Foreclosure auction listing on auction.com${auctionDate ? ` — sale date ${auctionDate}` : ""}`,
-        ],
-      } as FreeLead]
-    })
+        recordingDate:    "",
+        defaultAmount:    null,
+        lender:           null,
+        auctionDate:      null,
+        estimatedValue:   null,
+        sourceUrl:        `https://www.auction.com/search/real-estate-foreclosure/?state=${state}`,
+        rawSignals:       ["Foreclosure auction listing — auction.com"],
+      })
+      if (leads.length >= 40) break
+    }
+    return leads
   } catch {
     return []
   }
 }
 
-// ── Bid4Assets — public county tax deed / foreclosure auctions ───────────────
+// ── Bid4Assets — county tax deed / government auctions ───────────────────────
 
 async function scrapeBid4Assets(state: string): Promise<FreeLead[]> {
-  try {
-    const res = await fetch(
-      `https://www.bid4assets.com/search#q/asset_types=real_estate&state=${state}&page_size=100`,
-      {
+  // Use their search page with proper query parameters (not hash-based URL)
+  const attempts = [
+    `https://www.bid4assets.com/auctions?page=1&items_per_page=100&state=${state}&property_type_ids=1`,
+    `https://www.bid4assets.com/search?type=realestate&state=${state}&page=1`,
+  ]
+
+  for (const url of attempts) {
+    try {
+      const res = await fetch(url, {
         headers: {
           "User-Agent":      UA,
-          "Accept":          "application/json, text/html, */*",
+          "Accept":          "text/html, application/json, */*",
           "Accept-Language": "en-US,en;q=0.9",
         },
         signal: AbortSignal.timeout(12000),
+      })
+      if (!res.ok) continue
+      const text = await res.text()
+
+      // Try JSON first
+      if (res.headers.get("content-type")?.includes("json")) {
+        const data = JSON.parse(text)
+        const listings: Record<string, unknown>[] =
+          data?.assets ?? data?.listings ?? data?.results ?? (Array.isArray(data) ? data : [])
+        if (listings.length > 0) {
+          return listings.slice(0, 80).flatMap((l) => {
+            const address = String(
+              l.address ?? l.propertyAddress ?? l.streetAddress ?? ""
+            ).trim()
+            if (!address) return []
+            return [{
+              address,
+              city:             String(l.city ?? ""),
+              state:            String(l.state ?? state),
+              zip:              String(l.zip ?? l.zipCode ?? ""),
+              ownerName:        String(l.seller ?? l.agency ?? ""),
+              foreclosureStage: "AUCTION" as const,
+              recordingDate:    "",
+              defaultAmount:    Number(l.openingBid ?? l.currentBid ?? 0) || null,
+              lender:           String(l.authority ?? l.agency ?? "") || null,
+              auctionDate:      String(l.auctionDate ?? l.endDate ?? "") || null,
+              estimatedValue:   Number(l.assessedValue ?? l.marketValue ?? 0) || null,
+              sourceUrl:        l.url ? `https://www.bid4assets.com${l.url}` : "https://www.bid4assets.com/",
+              rawSignals:       ["Bid4Assets tax deed / county auction listing"],
+            } as FreeLead]
+          })
+        }
       }
-    )
-    if (!res.ok) return []
 
-    const text = await res.text()
-
-    // Bid4Assets embeds listings as JSON in a script tag
-    const match = text.match(/window\.__reactAppState\s*=\s*({[\s\S]*?});/) ??
-                  text.match(/"assets"\s*:\s*(\[[\s\S]*?\])\s*[,}]/)
-    if (!match) return []
-
-    let listings: Record<string, unknown>[] = []
-    try {
-      const parsed = JSON.parse(match[1])
-      listings = Array.isArray(parsed)
-        ? parsed
-        : (parsed?.assets ?? parsed?.listings ?? parsed?.results ?? [])
-    } catch {
-      return []
-    }
-
-    return listings.slice(0, 80).flatMap((l) => {
-      const address = String(
-        l.address ?? l.propertyAddress ?? l.streetAddress ?? l.location ?? ""
-      ).trim()
-      if (!address) return []
-
-      return [{
-        address,
-        city:             String(l.city    ?? ""),
-        state:            String(l.state   ?? state),
-        zip:              String(l.zip     ?? l.zipCode ?? ""),
-        ownerName:        String(l.seller  ?? l.owner   ?? ""),
-        foreclosureStage: "AUCTION" as const,
-        recordingDate:    "",
-        defaultAmount:    Number(l.openingBid ?? l.currentBid ?? 0) || null,
-        lender:           String(l.agency ?? l.authority ?? "") || null,
-        auctionDate:      String(l.auctionDate ?? l.endDate ?? "") || null,
-        estimatedValue:   Number(l.assessedValue ?? l.marketValue ?? 0) || null,
-        sourceUrl:        l.url
-          ? `https://www.bid4assets.com${l.url}`
-          : "https://www.bid4assets.com/",
-        rawSignals: ["Bid4Assets tax deed / county auction listing"],
-      } as FreeLead]
-    })
-  } catch {
-    return []
+      // HTML fallback
+      const leads: FreeLead[] = []
+      const addrRx = /(\d+\s+[A-Z][a-zA-Z0-9\s]{5,60}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Road|Rd|Lane|Ln|Court|Ct|Way|Circle|Cir|Place|Pl)[^<]{0,20})/gi
+      for (const m of text.matchAll(addrRx)) {
+        const address = m[1].trim().replace(/\s+/g, " ")
+        if (!address || leads.some(l => l.address === address)) continue
+        leads.push({
+          address,
+          city: "", state, zip: "",
+          ownerName:        "",
+          foreclosureStage: "AUCTION",
+          recordingDate:    "",
+          defaultAmount:    null,
+          lender:           null,
+          auctionDate:      null,
+          estimatedValue:   null,
+          sourceUrl:        url,
+          rawSignals:       ["Bid4Assets government auction listing"],
+        })
+        if (leads.length >= 40) break
+      }
+      if (leads.length > 0) return leads
+    } catch { continue }
   }
+  return []
 }
 
 // ── Public interface ──────────────────────────────────────────────────────────
@@ -633,17 +953,18 @@ export async function searchDirectSources(params: {
   state?:     string
   county?:    string
   maxLeads?:  number
-  countyId?:  string   // e.g. "san-diego" — uses hardcoded box, faster than geocoding
+  countyId?:  string
 }): Promise<DirectSourceResult> {
-  const maxLeads = params.maxLeads ?? 100
-  const state    = params.state ?? "CA"
+  const maxLeads  = params.maxLeads ?? 100
+  const state     = params.state ?? "CA"
+  const countyName = params.county ?? ""
 
   const areaLabel =
     params.searchType === "zip"    ? `ZIP ${params.zipCode}` :
     params.searchType === "city"   ? `${params.city} ${state}` :
-    `${params.county} County ${state}`
+    `${countyName} County ${state}`
 
-  // Resolve bounding box — prefer hardcoded county box (instant), fall back to geocoding
+  // Resolve bounding box
   let box: GeoBox | null = null
   if (params.countyId && COUNTY_BOXES[params.countyId]) {
     box = COUNTY_BOXES[params.countyId]
@@ -651,37 +972,55 @@ export async function searchDirectSources(params: {
     box = await geocodeArea(params)
   }
 
-  // Run all sources in parallel — failures isolated per source
-  const [zillowLeads, redfinLeads, arcgisLeads, auctionLeads, hudLeads, usdaLeads, bid4Leads] =
-    await Promise.all([
-      box ? scrapeZillowTiled(box, maxLeads) : Promise.resolve([]),
-      box ? scrapeRedfinTiled(box, maxLeads) : Promise.resolve([]),
-      box ? queryArcGISHub(box, areaLabel)   : Promise.resolve([]),
-      scrapeAuctionCom(params),
-      scrapeHudReo({ state, county: params.county }),
-      scrapeUsda(state),
-      scrapeBid4Assets(state),
-    ])
+  // All sources in parallel
+  const [
+    zillowLeads, redfinLeads,
+    homePathLeads, homeStepsLeads,
+    arcgisLeads,
+    auctionLeads, hudLeads, usdaLeads, bid4Leads,
+    fcComLeads, legalNoticeLeads,
+  ] = await Promise.all([
+    box ? scrapeZillowTiled(box, maxLeads)  : Promise.resolve([]),
+    box ? scrapeRedfinTiled(box, maxLeads)  : Promise.resolve([]),
+    box ? scrapeHomePath(box)               : Promise.resolve([]),
+    box ? scrapeHomeSteps(box)              : Promise.resolve([]),
+    box ? queryArcGISHub(box, areaLabel)    : Promise.resolve([]),
+    scrapeAuctionCom(params),
+    scrapeHudReo({ state, county: countyName }),
+    scrapeUsda(state),
+    scrapeBid4Assets(state),
+    countyName ? scrapeForeclosureCom(countyName, state) : Promise.resolve([]),
+    countyName ? scrapeLegalNotices(countyName)          : Promise.resolve([]),
+  ])
 
   const sourceCounts: Record<string, number> = {}
-  if (zillowLeads.length)  sourceCounts["Zillow"]           = zillowLeads.length
-  if (redfinLeads.length)  sourceCounts["Redfin"]           = redfinLeads.length
-  if (arcgisLeads.length)  sourceCounts["County records"]   = arcgisLeads.length
-  if (auctionLeads.length) sourceCounts["auction.com"]      = auctionLeads.length
-  if (hudLeads.length)     sourceCounts["HUD REO"]          = hudLeads.length
-  if (usdaLeads.length)    sourceCounts["USDA RD"]          = usdaLeads.length
-  if (bid4Leads.length)    sourceCounts["Bid4Assets"]       = bid4Leads.length
+  if (zillowLeads.length)       sourceCounts["Zillow"]           = zillowLeads.length
+  if (redfinLeads.length)       sourceCounts["Redfin"]           = redfinLeads.length
+  if (homePathLeads.length)     sourceCounts["HomePath (Fannie)"]= homePathLeads.length
+  if (homeStepsLeads.length)    sourceCounts["HomeSteps (Freddie)"] = homeStepsLeads.length
+  if (arcgisLeads.length)       sourceCounts["County records"]   = arcgisLeads.length
+  if (auctionLeads.length)      sourceCounts["auction.com"]      = auctionLeads.length
+  if (hudLeads.length)          sourceCounts["HUD REO"]          = hudLeads.length
+  if (usdaLeads.length)         sourceCounts["USDA RD"]          = usdaLeads.length
+  if (bid4Leads.length)         sourceCounts["Bid4Assets"]       = bid4Leads.length
+  if (fcComLeads.length)        sourceCounts["Foreclosure.com"]  = fcComLeads.length
+  if (legalNoticeLeads.length)  sourceCounts["Legal notices"]    = legalNoticeLeads.length
 
   // Merge and deduplicate by normalized address+city
   const seen = new Set<string>()
   const leads = [
+    // Highest quality (have verified addresses) first
+    ...arcgisLeads,
+    ...hudLeads,
+    ...homePathLeads,
+    ...homeStepsLeads,
+    ...usdaLeads,
+    ...legalNoticeLeads,
     ...zillowLeads,
     ...redfinLeads,
-    ...arcgisLeads,
     ...auctionLeads,
-    ...hudLeads,
-    ...usdaLeads,
     ...bid4Leads,
+    ...fcComLeads,
   ].filter((l) => {
     if (!l.address?.trim()) return false
     const key = (l.address + l.city).toLowerCase().replace(/[\s,#.-]/g, "")
