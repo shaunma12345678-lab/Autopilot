@@ -953,7 +953,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
       try {
         const res = await fetch("/api/leads/deep-search", {
           method:  "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: apiHeaders,
           body:    JSON.stringify({
             searchType: p.searchType,
             zipCode:    p.zipCode  || undefined,
