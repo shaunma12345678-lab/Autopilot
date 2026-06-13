@@ -121,7 +121,7 @@ async function scrapeZillowTiled(box: GeoBox, maxLeads: number): Promise<FreeLea
 
 // ── Redfin — tiled distressed listings ───────────────────────────────────────
 
-async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
+async function fetchRedfinTile(tile: GeoBox, fallbackState = "CA"): Promise<FreeLead[]> {
   const poly = [
     `${tile.west} ${tile.south}`,
     `${tile.east} ${tile.south}`,
@@ -181,7 +181,7 @@ async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
       const cityStateZip = String(loc?.value ?? "")
       const csz = cityStateZip.match(/^(.*?),\s*([A-Z]{2})\s+(\d{5})/)
       const cityPart  = csz ? csz[1].trim() : (cityStateZip.split(",")[0]?.trim() ?? String(info?.city ?? ""))
-      const statePart = csz ? csz[2] : String(info?.state ?? "")
+      const statePart = csz ? csz[2] : (String(info?.state ?? "") || fallbackState)
       const zipPart   = csz ? csz[3] : String(info?.zip ?? "")
       const price     = Number((h.price as Record<string, unknown>)?.value ?? 0) || null
       const url       = String(h.url ?? "")
@@ -206,7 +206,7 @@ async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
       return [{
         address,
         city:             cityPart,
-        state:            statePart || "CA",
+        state:            statePart || fallbackState,
         zip:              zipPart,
         ownerName:        "",
         foreclosureStage: stage,
@@ -224,11 +224,11 @@ async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
   }
 }
 
-async function scrapeRedfinTiled(box: GeoBox, maxLeads: number): Promise<FreeLead[]> {
+async function scrapeRedfinTiled(box: GeoBox, maxLeads: number, fallbackState = "CA"): Promise<FreeLead[]> {
   const { cols, rows } = tilesForTarget(maxLeads)
   const tiles = tileBox(box, cols, rows)
   const batches = await withConcurrency(
-    tiles.map(t => () => fetchRedfinTile(t)),
+    tiles.map(t => () => fetchRedfinTile(t, fallbackState)),
     4
   )
   return batches.flat()
@@ -1000,7 +1000,7 @@ export async function searchDirectSources(params: {
     fcComLeads, legalNoticeLeads,
   ] = await Promise.all([
     box ? scrapeZillowTiled(box, maxLeads)  : Promise.resolve([]),
-    box ? scrapeRedfinTiled(box, maxLeads)  : Promise.resolve([]),
+    box ? scrapeRedfinTiled(box, maxLeads, state)  : Promise.resolve([]),
     box ? scrapeHomePath(box)               : Promise.resolve([]),
     box ? scrapeHomeSteps(box)              : Promise.resolve([]),
     box ? queryArcGISHub(box, areaLabel)    : Promise.resolve([]),
