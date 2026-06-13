@@ -43,21 +43,44 @@ export async function geocodeZip(zip: string): Promise<GeoBox | null> {
 
 export async function geocodeCity(city: string, state: string): Promise<GeoBox | null> {
   try {
+    // Nominatim (OpenStreetMap) geocodes bare city names and returns a bounding
+    // box directly — works for any US city, unlike the Census address geocoder.
     const params = new URLSearchParams({
       city,
       state,
-      benchmark: "Public_AR_Current",
+      country:   "USA",
       format:    "json",
+      limit:     "1",
     })
     const res = await fetch(
-      `https://geocoding.geo.census.gov/geocoder/locations/address?${params}`,
-      { signal: AbortSignal.timeout(8000) }
+      `https://nominatim.openstreetmap.org/search?${params}`,
+      {
+        headers: {
+          "User-Agent": "AutoPilot-RealEstate/1.0 (foreclosure-search)",
+          "Accept":     "application/json",
+        },
+        signal: AbortSignal.timeout(8000),
+      }
     )
     if (!res.ok) return null
     const data = await res.json()
-    const match = data.result?.addressMatches?.[0]
-    if (!match) return null
-    return expandBox(match.coordinates.y, match.coordinates.x, 20)
+    const hit = Array.isArray(data) ? data[0] : null
+    if (!hit) return null
+
+    // Nominatim boundingbox = [south, north, west, east]
+    if (Array.isArray(hit.boundingbox) && hit.boundingbox.length === 4) {
+      const [south, north, west, east] = hit.boundingbox.map(Number)
+      if ([south, north, west, east].every(Number.isFinite)) {
+        return {
+          south, north, west, east,
+          centerLat: (south + north) / 2,
+          centerLng: (west + east) / 2,
+          radiusMiles: 25,
+        }
+      }
+    }
+    if (hit.lat && hit.lon) return expandBox(Number(hit.lat), Number(hit.lon), 20)
+    return null
   } catch {
     return null
   }
