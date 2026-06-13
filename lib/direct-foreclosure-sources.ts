@@ -59,7 +59,7 @@ async function fetchZillowTile(tile: GeoBox): Promise<FreeLead[]> {
           "Sec-Fetch-Site":  "same-origin",
           "Sec-Fetch-Mode":  "cors",
         },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (!res.ok) return []
@@ -156,7 +156,7 @@ async function fetchRedfinTile(tile: GeoBox): Promise<FreeLead[]> {
           "Referer":         "https://www.redfin.com/",
           "X-Requested-With": "XMLHttpRequest",
         },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (!res.ok) return []
@@ -241,7 +241,7 @@ async function scrapeHomePath(box: GeoBox): Promise<FreeLead[]> {
           "Accept-Language": "en-US,en;q=0.9",
           "Referer":         "https://www.homepath.com/",
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (!res.ok) return []
@@ -300,7 +300,7 @@ async function scrapeHomeSteps(box: GeoBox): Promise<FreeLead[]> {
           "Accept":          "application/json",
           "Referer":         "https://www.homesteps.com/",
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (!res.ok) return []
@@ -352,7 +352,7 @@ async function scrapeHudReo(params: {
       `https://www.hudhomestore.gov/Listing/PropertyListing.aspx?stateCode=${state}&zipCode=&county=${encodeURIComponent(params.county ?? "")}&city=&listingType=A&listingTypeArray=A&pageSize=100&pageNum=1&output=xml`,
       {
         headers: { "User-Agent": UA, "Accept": "application/xml, text/xml, */*" },
-        signal:  AbortSignal.timeout(12000),
+        signal:  AbortSignal.timeout(7000),
       }
     )
 
@@ -390,7 +390,7 @@ async function scrapeHudReo(params: {
       `https://www.hudhomestore.gov/Listing/PropertySearchResult.aspx?stateCode=${state}&county=${encodeURIComponent(params.county ?? "")}&pageSize=100&pageNum=1`,
       {
         headers: { "User-Agent": UA, "Accept": "text/html" },
-        signal:  AbortSignal.timeout(12000),
+        signal:  AbortSignal.timeout(7000),
       }
     )
     if (!htmlRes.ok) return []
@@ -435,7 +435,7 @@ async function scrapeUsda(state: string): Promise<FreeLead[]> {
       `https://rdapps.sc.egov.usda.gov/RDDirectSales/api/properties?${qs}`,
       {
         headers: { "User-Agent": UA, "Accept": "application/json" },
-        signal:  AbortSignal.timeout(10000),
+        signal:  AbortSignal.timeout(7000),
       }
     )
     if (!res.ok) return []
@@ -484,7 +484,7 @@ async function scrapeForeclosureCom(countyName: string, state: string): Promise<
           "Accept-Language": "en-US,en;q=0.9",
           "Referer":         "https://www.foreclosure.com/",
         },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (!res.ok) return []
@@ -548,7 +548,7 @@ async function scrapeLegalNotices(countyName: string): Promise<FreeLead[]> {
           "Accept":          "text/html",
           "Accept-Language": "en-US,en;q=0.9",
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (res.ok) {
@@ -596,7 +596,7 @@ async function scrapeLegalNotices(countyName: string): Promise<FreeLead[]> {
           "User-Agent":      UA,
           "Accept":          "text/html",
         },
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (res.ok) {
@@ -639,7 +639,7 @@ async function queryArcGISHub(box: GeoBox, areaLabel: string): Promise<FreeLead[
 
     const searchRes = await fetch(searchUrl, {
       headers: { Accept: "application/json" },
-      signal:  AbortSignal.timeout(8000),
+      signal:  AbortSignal.timeout(7000),
     })
     if (!searchRes.ok) return []
     const searchData = await searchRes.json()
@@ -682,7 +682,7 @@ async function queryArcGISHub(box: GeoBox, areaLabel: string): Promise<FreeLead[
           })
 
           const qRes = await fetch(`${queryUrl}?${qParams}`, {
-            signal: AbortSignal.timeout(12000),
+            signal: AbortSignal.timeout(7000),
           })
           if (!qRes.ok) return
 
@@ -776,7 +776,7 @@ async function scrapeAuctionCom(params: {
           "Accept":     "application/json",
           "Referer":    "https://www.auction.com/",
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(7000),
       }
     )
     if (apiRes.ok) {
@@ -825,7 +825,7 @@ async function scrapeAuctionCom(params: {
       `https://www.auction.com/search/real-estate-foreclosure/?${htmlQs}`,
       {
         headers: { "User-Agent": UA, "Accept": "text/html" },
-        signal:  AbortSignal.timeout(12000),
+        signal:  AbortSignal.timeout(7000),
       }
     )
     if (!htmlRes.ok) return []
@@ -876,7 +876,7 @@ async function scrapeBid4Assets(state: string): Promise<FreeLead[]> {
           "Accept":          "text/html, application/json, */*",
           "Accept-Language": "en-US,en;q=0.9",
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(7000),
       })
       if (!res.ok) continue
       const text = await res.text()

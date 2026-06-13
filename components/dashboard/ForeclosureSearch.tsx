@@ -906,14 +906,14 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
 
   const startProgressAnimation = (targetLeads: number) => {
     const MESSAGES = [
-      "Querying Zillow & Redfin across all county tiles…",
-      "Pulling HomePath (Fannie Mae) & HomeSteps (Freddie Mac) REO…",
-      "Pulling ArcGIS county recorder public records…",
-      "Checking auction.com, HUD REO, USDA, Bid4Assets…",
-      "Scraping CA legal notice publications (NODs)…",
-      "Running 32 targeted web search queries with Tavily…",
-      "AI extraction — parsing legal notices & recorder data…",
-      `Enriching owner contacts, deduplicating, ranking up to ${targetLeads} leads…`,
+      "Searching public foreclosure & trustee-sale notices…",
+      "Scanning Zillow, Redfin & government REO sources…",
+      "Pulling notice-of-default & notice-of-sale filings…",
+      "Crawling legal-notice publications for property addresses…",
+      "Extracting addresses, owners, default amounts & sale dates…",
+      "Running AI extraction over legal notices…",
+      "Enriching owner contact phone numbers…",
+      `Scoring & ranking up to ${targetLeads} leads hot → cold…`,
     ]
     let step = 0
     setProgressPct(2)
@@ -935,7 +935,9 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     stopProgressTimer()
 
     if (deepMode) {
-      // Map county name → county ID so the server skips geocoding
+      // For a county search of a known SoCal county, pass its ID for the fast
+      // hardcoded bounding box. For ANY zip/city/other county, pass no countyIds
+      // so the server searches exactly what the user typed — anywhere in the US.
       const COUNTY_ID_MAP: Record<string, string> = {
         "san diego":      "san-diego",
         "riverside":      "riverside",
@@ -948,7 +950,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
             const id = COUNTY_ID_MAP[p.county.toLowerCase().replace(/\s+county\s*$/, "").trim()]
             return id ? [id] : undefined
           })()
-        : ["san-diego", "riverside", "orange"]
+        : undefined
 
       startProgressAnimation(p.maxLeads)
 

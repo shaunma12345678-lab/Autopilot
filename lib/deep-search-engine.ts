@@ -11,89 +11,75 @@
 // (caller provides from DB) so the UI can show only genuinely new finds.
 
 import { searchDirectSources } from "@/lib/direct-foreclosure-sources"
-import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/search"
+import { webSearchDeepOrAny } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
-import { COUNTY_BOXES, withConcurrency } from "@/lib/geo-tiles"
+import { withConcurrency } from "@/lib/geo-tiles"
 import { enrichLeadsWithContact } from "@/lib/contact-enrichment"
+import { extractAddressesFromContent, leadMatchesTarget, type ExtractResult, type LocationTarget } from "@/lib/address-extractor"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
-// ── County metadata ───────────────────────────────────────────────────────────
-
-interface CountyMeta {
-  id:          string
-  name:        string
-  state:       string
-  displayName: string
+// ── Search location ─────────────────────────────────────────────────────────
+// A single place to search — works for ANY US zip, city, or county.
+interface SearchLocation {
+  searchType: "zip" | "city" | "county"
+  label:      string          // human label, e.g. "San Diego County, CA" or "ZIP 30301"
+  state:      string          // 2-letter, "" if unknown (zip-only search)
+  zipCode?:   string
+  city?:      string
+  county?:    string
+  countyId?:  string          // known SoCal county id for the fast hardcoded box, if any
 }
 
-const KNOWN_COUNTIES: CountyMeta[] = [
-  { id: "san-diego",      name: "San Diego",      state: "CA", displayName: "San Diego County, CA" },
-  { id: "riverside",      name: "Riverside",      state: "CA", displayName: "Riverside County, CA" },
-  { id: "san-bernardino", name: "San Bernardino", state: "CA", displayName: "San Bernardino County, CA" },
-  { id: "orange",         name: "Orange",         state: "CA", displayName: "Orange County, CA" },
-  { id: "los-angeles",    name: "Los Angeles",    state: "CA", displayName: "Los Angeles County, CA" },
-]
+const KNOWN_COUNTY_NAMES: Record<string, string> = {
+  "san-diego": "San Diego", "riverside": "Riverside", "san-bernardino": "San Bernardino",
+  "orange": "Orange", "los-angeles": "Los Angeles",
+}
 
-// ── Search query arsenal ──────────────────────────────────────────────────────
-// 40+ targeted query templates for maximum coverage across all signal types.
-
-function buildDeepQuerySet(county: CountyMeta, year: number): string[] {
-  const c  = `"${county.name} County" California`
-  const cn = county.name
+// ── Query builder — works for any location ───────────────────────────────────
+function buildDeepQuerySet(loc: SearchLocation, year: number): string[] {
+  const st = loc.state || "United States"
+  // Primary place phrase used across queries
+  const place =
+    loc.searchType === "zip"  ? `${loc.zipCode}` :
+    loc.searchType === "city" ? `"${loc.city}, ${loc.state}"` :
+    `"${loc.county} County" ${loc.state}`
+  const placeLoose =
+    loc.searchType === "zip"  ? `${loc.zipCode}` :
+    loc.searchType === "city" ? `"${loc.city}" ${loc.state}` :
+    `"${loc.county} County" ${loc.state}`
 
   return [
-    // Primary legal notice sites — CA law requires NOD publication here
-    `site:legalnewsonline.com "${cn}" "notice of default" ${year}`,
-    `site:publicnoticeads.com "${cn}" "notice of trustee" ${year}`,
-    `site:dailyjournal.com "${cn}" "notice of default" ${year}`,
-    `site:thecourtreporter.com "${cn}" "notice of trustee sale" ${year}`,
-    `site:thedailyrecordnet.com "${cn}" foreclosure ${year}`,
-    // NOD / Lis Pendens / NTS — broad
-    `${c} "notice of default" ${year} "street" OR "avenue" OR "drive" OR "lane"`,
-    `${c} "lis pendens" ${year} filed property address`,
-    `${c} "notice of trustee sale" ${year} property owner`,
-    `${c} "trustee's sale" ${year} "T.S. No" address`,
-    // County recorder & court direct links
-    `${c} recorder "deed of trust" default ${year} "recorded"`,
-    `site:courtrecords.lacourt.org OR site:sdcourt.ca.gov "${cn}" lis pendens ${year}`,
-    // Tax delinquency
-    `${c} delinquent property tax list ${year} owner address`,
-    `${c} "tax defaulted" property ${year} list owner`,
-    `${c} "county tax collector" delinquent ${year} auction`,
-    // Probate / estate
-    `${c} probate court "real property" sale ${year} address`,
-    `${c} "petition for probate" real estate ${year} decedent`,
-    // Divorce / marital dissolution
-    `${c} divorce dissolution "real property" ordered sale ${year}`,
-    // Code violations / condemned
-    `${c} "code enforcement" violation abandoned property ${year} address`,
-    // Auction aggregators — actual listings
-    `site:auction.com "${cn}" foreclosure listing`,
-    `site:xome.com "${cn}" foreclosure home`,
-    `site:hubzu.com "${cn}" bank-owned listing`,
-    `site:bid4assets.com "${cn}" real estate auction`,
-    // Bank REO listings — Freddie/Fannie/HUD
-    `site:homepath.com "${cn}" OR "${cn} County" REO`,
-    `site:homesteps.com "${cn}" foreclosure`,
-    `site:hudhomestore.gov "${cn}" listing`,
-    // Pre-foreclosure intelligence
-    `"${cn}" pre-foreclosure NOD ${year} motivated seller contact`,
-    `"${cn}" motivated seller distressed property ${year} wholesale deal`,
-    `"${cn}" "default amount" "notice of default" ${year} owner contact`,
-    // HOA / lien
-    `${c} "HOA lien" delinquent ${year} property address recorded`,
-    // Bankruptcy with property
-    `${c} bankruptcy "chapter 7" real property ${year} trustee sale`,
-    // Absentee owners
-    `"${cn}" absentee owner vacant property ${year} pre-foreclosure`,
+    // Tier 1 — trustee-sale / foreclosure legal notices (these carry the property address)
+    `${place} "NOTICE OF TRUSTEE'S SALE" ${year} "property address"`,
+    `${place} "notice of trustee sale" ${year} property address APN`,
+    `${placeLoose} "notice of default" ${year} "deed of trust" property`,
+    `${place} foreclosure auction ${year} "property address" trustee`,
+    `${placeLoose} "T.S. No" trustee sale ${year} street address`,
+    // Tier 2 — verified high-yield legal-notice publishers
+    `site:capublicnotice.com ${placeLoose} trustee sale ${year}`,
+    `site:citynewsgroup.com ${placeLoose} trustee sale ${year}`,
+    `site:publicnoticeads.com ${placeLoose} foreclosure OR trustee ${year}`,
+    `site:legalnewsonline.com ${placeLoose} foreclosure ${year}`,
+    // Tier 3 — sheriff sale / lis pendens (judicial-foreclosure states)
+    `${placeLoose} "sheriff's sale" ${year} property address foreclosure`,
+    `${placeLoose} "lis pendens" ${year} foreclosure property`,
+    // Tier 4 — government & auction inventory
+    `${placeLoose} "tax defaulted" OR "tax sale" property auction ${year} address`,
+    `site:auction.com ${placeLoose} foreclosure`,
+    `site:hubzu.com ${placeLoose} bank owned`,
+    // Tier 5 — pre-foreclosure / motivated sellers
+    `${placeLoose} pre-foreclosure ${year} "notice of default" owner property`,
+    `${placeLoose} distressed property foreclosure ${year} for sale`,
+    // Tier 6 — probate / bank REO
+    `${placeLoose} probate estate "real property" sale ${year} address`,
+    `${placeLoose} bank-owned REO foreclosure ${year} listing address`,
+    `${placeLoose} HUD home OR "Fannie Mae" foreclosure ${year} address`,
+    `${st} ${placeLoose} foreclosure homes ${year} owner address`,
   ]
 }
 
-// Extracts address leads from combined search content using AI
-async function extractLeadsFromContent(
-  content: string,
-  countyMeta: CountyMeta
-): Promise<FreeLead[]> {
+// AI extraction — secondary pass over capped content for any location.
+async function extractLeadsFromContent(content: string, locLabel: string): Promise<FreeLead[]> {
   if (!content.trim()) return []
 
   const SYSTEM = `You are a real estate public records extraction specialist.
@@ -102,31 +88,30 @@ Return valid JSON arrays ONLY — no markdown, no preamble.
 Be thorough — include every property with a recognizable street address.
 Never fabricate data.`
 
-  const USER = `Extract EVERY pre-foreclosure or distressed property you can find in these search results for ${countyMeta.displayName}.
+  const USER = `Extract EVERY pre-foreclosure, foreclosure, trustee-sale, or distressed property with a street address from these search results (target area: ${locLabel}).
 
 ${content}
 
-For each property found, return:
+For each property return:
 {
   "address": "street address (required)",
-  "city": "city name",
-  "state": "${countyMeta.state}",
-  "zip": "zip code or empty string",
-  "ownerName": "owner/borrower name or empty string",
+  "city": "city",
+  "state": "2-letter state",
+  "zip": "5-digit zip or empty",
+  "ownerName": "owner/borrower/trustor name or empty",
   "foreclosureStage": "NOTICE_OF_DEFAULT | LIS_PENDENS | NOTICE_OF_SALE | AUCTION | PRE_FORECLOSURE",
-  "recordingDate": "YYYY-MM-DD or empty string",
+  "recordingDate": "YYYY-MM-DD or empty",
   "defaultAmount": number or null,
   "lender": "lender/bank name or null",
   "auctionDate": "YYYY-MM-DD or null",
   "estimatedValue": number or null,
   "sourceUrl": "source URL",
-  "rawSignals": ["1-3 short distress signal descriptions"]
+  "rawSignals": ["1-3 short distress descriptions"]
 }
 
 Rules:
-- Only include properties with a real recognizable street address (no PO boxes).
-- Include ALL properties found — do not limit or filter.
-- If city/state/zip not explicit but inferrable, fill them in.
+- Real recognizable street addresses only (no PO boxes, no courthouse/trustee office addresses).
+- Include ALL properties found — do not limit.
 - Return [] if nothing found.
 JSON array only:`
 
@@ -144,79 +129,51 @@ JSON array only:`
 
 // ── Web search phase ──────────────────────────────────────────────────────────
 
+// Returns ALL extracted leads tagged for relevance — caller filters/prioritizes.
 async function runWebSearchPhase(
-  county: CountyMeta,
+  loc: SearchLocation,
   maxLeads: number
-): Promise<FreeLead[]> {
+): Promise<{ regex: ExtractResult[]; ai: FreeLead[] }> {
   const year    = new Date().getFullYear()
-  const queries = buildDeepQuerySet(county, year)
+  const queries = buildDeepQuerySet(loc, year)
 
-  // Scale query count to target — more leads = more queries
-  const queryCount = maxLeads <= 100 ? 12 : maxLeads <= 200 ? 18 : maxLeads <= 300 ? 24 : 32
-
-  // Run queries in parallel batches of 4 — fast, exhaustive
+  // Scale query count to target. Tavily crawls server-side, so it works from
+  // Vercel datacenter IPs where direct scrapers get blocked.
+  const queryCount = maxLeads <= 100 ? 11 : maxLeads <= 200 ? 15 : maxLeads <= 300 ? 18 : 20
   const selectedQueries = queries.slice(0, queryCount)
-  const snippetBatches  = await withConcurrency(
+
+  // Every query uses DEEP search — property addresses live in raw_content.
+  const resultBatches = await withConcurrency(
     selectedQueries.map(q => async () => {
       try {
-        const res = await webSearchAny(q, 8)
-        return res.results.map(r => `URL: ${r.url}\n${r.content.slice(0, 1200)}`)
+        const res = await webSearchDeepOrAny(q, 6)
+        return res.results.map(r => ({ url: r.url, raw: r.rawContent ?? r.content ?? "" }))
       } catch {
         return []
       }
     }),
-    5
+    6
   )
 
-  const allSnippets = snippetBatches.flat()
+  const results = resultBatches.flat().filter(r => r.raw.length > 50)
+  if (results.length === 0) return { regex: [], ai: [] }
 
-  // Deep content extraction on the 4 most promising legal-notice URLs
-  const topUrls = allSnippets
-    .map(s => s.match(/URL: (https?:\/\/[^\n]+)/)?.[1] ?? "")
-    .filter(u => u && /auction|recorder|legalnotice|publicnotice|foreclosure|trustee|deed|courtrecord/i.test(u))
-    .filter((u, i, a) => a.indexOf(u) === i)
-    .slice(0, 4)
-
-  const deepSnippets: string[] = []
-  if (topUrls.length > 0) {
-    try {
-      const pages = await extractPageContent(topUrls)
-      pages.forEach(p => {
-        if (p.content.length > 100)
-          deepSnippets.push(`URL: ${p.url}\n${p.content.slice(0, 4000)}`)
-      })
-    } catch { /* non-fatal */ }
+  // ── Primary: regex extraction (reliable, processes full raw content) ─────
+  const regex: ExtractResult[] = []
+  for (const { url, raw } of results) {
+    regex.push(...extractAddressesFromContent(raw, url))
   }
 
-  // Also try deep Tavily search on 3 highest-signal query types
-  const deepQueryTargets = [queries[0], queries[2], queries[14]].filter(Boolean)
-  const deepTavilySnippets: string[] = []
-  for (const q of deepQueryTargets) {
-    try {
-      const res = await webSearchDeepOrAny(q, 5)
-      res.results.forEach(r => {
-        const content = r.rawContent ? r.rawContent.slice(0, 4000) : r.content.slice(0, 1200)
-        deepTavilySnippets.push(`URL: ${r.url}\n${content}`)
-      })
-    } catch { /* non-fatal */ }
+  // ── Secondary: AI extraction over capped content (catches odd formats) ───
+  const combined = results.map(r => `URL: ${r.url}\n${r.raw.slice(0, 6000)}`).join("\n---\n")
+  const CHUNK = 14000
+  const chunks: string[] = []
+  for (let i = 0; i < combined.length && chunks.length < 4; i += CHUNK) {
+    chunks.push(combined.slice(i, i + CHUNK))
   }
+  const aiResults = await Promise.all(chunks.map(c => extractLeadsFromContent(c, loc.label)))
 
-  const combined = [...allSnippets, ...deepSnippets, ...deepTavilySnippets].join("\n---\n")
-
-  if (combined.length < 50) return []
-
-  // Split content into two chunks for two parallel AI extraction passes
-  // (avoids token overflow and gets more leads than one big call)
-  const half   = Math.floor(combined.length / 2)
-  const chunk1 = combined.slice(0, half + 2000)
-  const chunk2 = combined.slice(Math.max(0, half - 2000))
-
-  const [leads1, leads2] = await Promise.all([
-    extractLeadsFromContent(chunk1, county),
-    extractLeadsFromContent(chunk2, county),
-  ])
-
-  return [...leads1, ...leads2]
+  return { regex, ai: aiResults.flat() }
 }
 
 // ── Main deep search function ─────────────────────────────────────────────────
@@ -251,80 +208,106 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
 
   const notify = (msg: string, count: number) => onProgress?.(msg, count)
 
-  // Resolve which counties to search
-  let targetCounties: CountyMeta[]
+  // ── Resolve search locations (works for ANY zip / city / county) ─────────
+  const locations: SearchLocation[] = []
 
   if (params.countyIds?.length) {
-    targetCounties = params.countyIds
-      .map(id => KNOWN_COUNTIES.find(c => c.id === id))
-      .filter((c): c is CountyMeta => !!c)
-  } else {
-    // Derive from searchType params — search all counties if county-level search
-    const countyName = params.county?.toLowerCase().replace(/\s+county\s*$/, "").trim()
-    const matched    = KNOWN_COUNTIES.find(c =>
-      c.name.toLowerCase() === countyName || c.id === countyName?.replace(/\s+/g, "-")
-    )
-    targetCounties = matched ? [matched] : [KNOWN_COUNTIES[0]]
+    // Known SoCal counties — fast path with hardcoded bounding boxes
+    for (const id of params.countyIds) {
+      const name = KNOWN_COUNTY_NAMES[id]
+      if (name) locations.push({ searchType: "county", label: `${name} County, CA`, state: "CA", county: name, countyId: id })
+    }
+  } else if (params.searchType === "zip" && params.zipCode) {
+    locations.push({ searchType: "zip", label: `ZIP ${params.zipCode}`, state: params.state?.toUpperCase() ?? "", zipCode: params.zipCode })
+  } else if (params.searchType === "city" && params.city) {
+    const st = params.state?.toUpperCase() ?? ""
+    locations.push({ searchType: "city", label: `${params.city}${st ? ", " + st : ""}`, state: st, city: params.city })
+  } else if (params.county) {
+    const st = params.state?.toUpperCase() ?? ""
+    const cleanCounty = params.county.replace(/\s+county\s*$/i, "").trim()
+    const knownId = Object.entries(KNOWN_COUNTY_NAMES).find(([, n]) => n.toLowerCase() === cleanCounty.toLowerCase())?.[0]
+    locations.push({ searchType: "county", label: `${cleanCounty} County${st ? ", " + st : ""}`, state: st, county: cleanCounty, countyId: knownId })
   }
 
-  notify(`Searching ${targetCounties.map(c => c.name).join(", ")} — firing all sources in parallel…`, 0)
+  if (locations.length === 0) {
+    // Last-resort default so the search never no-ops
+    locations.push({ searchType: "county", label: "San Diego County, CA", state: "CA", county: "San Diego", countyId: "san-diego" })
+  }
 
-  // ── Phase 1: Direct sources — all counties simultaneously ────────────────
-  const directPhases = await Promise.allSettled(
-    targetCounties.map(async (county) => {
+  // Build the location-match target from the primary searched location
+  const primary = locations[0]
+  const target: LocationTarget = {
+    searchType: primary.searchType,
+    zipCode:    primary.zipCode,
+    city:       primary.city,
+    state:      primary.state,
+    county:     primary.county,
+  }
+
+  notify(`Searching ${locations.map(l => l.label).join(", ")} — firing all sources in parallel…`, 0)
+
+  // Web search (Tavily) and direct scrapers run CONCURRENTLY.
+  // Direct scrapers are mostly blocked on datacenter IPs and fast-fail (7s),
+  // so they can't starve the Tavily phase which is the reliable producer.
+  const combinedSourceCounts: Record<string, number> = {}
+
+  const directWork = Promise.allSettled(
+    locations.map(async (loc) => {
       const result = await searchDirectSources({
-        searchType: params.searchType,
-        zipCode:    params.zipCode,
-        city:       params.city,
-        state:      county.state,
-        county:     county.name,
-        countyId:   county.id,
+        searchType: loc.searchType,
+        zipCode:    loc.zipCode ?? params.zipCode,
+        city:       loc.city ?? params.city,
+        state:      loc.state || params.state,
+        county:     loc.county,
+        countyId:   loc.countyId,
         maxLeads,
       })
-      return { county, result }
+      return result
     })
   )
 
-  const allDirectLeads: FreeLead[]           = []
-  const combinedSourceCounts: Record<string, number> = {}
+  const webWork = Promise.allSettled(
+    locations.map(loc => runWebSearchPhase(loc, maxLeads))
+  )
 
+  const [directPhases, webPhases] = await Promise.all([directWork, webWork])
+
+  const allDirectLeads: FreeLead[] = []
   for (const phase of directPhases) {
     if (phase.status !== "fulfilled") continue
-    const { result } = phase.value
-    allDirectLeads.push(...result.leads)
-    for (const [src, n] of Object.entries(result.sourceCounts)) {
+    allDirectLeads.push(...phase.value.leads)
+    for (const [src, n] of Object.entries(phase.value.sourceCounts)) {
       combinedSourceCounts[src] = (combinedSourceCounts[src] ?? 0) + n
     }
   }
 
-  notify(`Direct sources: ${allDirectLeads.length} leads found — running web search…`, allDirectLeads.length)
-
-  // ── Phase 2: Web search — all counties simultaneously ───────────────────
-  // Scale web search to fill gap between direct results and target
-  const webSearchCounties = allDirectLeads.length < maxLeads * 0.6
-    ? targetCounties              // run all counties
-    : targetCounties.slice(0, 2) // already got enough from direct; just top 2
-
-  const webPhases = await Promise.allSettled(
-    webSearchCounties.map(county => runWebSearchPhase(county, maxLeads))
-  )
-
-  const allWebLeads: FreeLead[] = []
+  // Collect web results: regex (tagged for relevance) + AI leads
+  const allRegex: ExtractResult[] = []
+  const allAiLeads: FreeLead[] = []
   for (const phase of webPhases) {
-    if (phase.status === "fulfilled") allWebLeads.push(...phase.value)
+    if (phase.status !== "fulfilled") continue
+    allRegex.push(...phase.value.regex)
+    allAiLeads.push(...phase.value.ai)
   }
 
+  // Filter regex leads to the searched location; if too few match (e.g. the
+  // local publisher wasn't in results), keep ALL found — they're still real,
+  // verified foreclosure notices in/near the region, so we never return empty.
+  const matched   = allRegex.filter(r => leadMatchesTarget(r, target))
+  const regexLeads = (matched.length >= 8 ? matched : allRegex).map(r => r.lead)
+
+  const allWebLeads = [...regexLeads, ...allAiLeads]
   if (allWebLeads.length > 0) {
-    combinedSourceCounts["Web search"] = (combinedSourceCounts["Web search"] ?? 0) + allWebLeads.length
+    combinedSourceCounts["Legal notices (web)"] = (combinedSourceCounts["Legal notices (web)"] ?? 0) + allWebLeads.length
   }
 
-  notify(`Web search: ${allWebLeads.length} additional leads — deduplicating…`, allDirectLeads.length + allWebLeads.length)
+  notify(`Found ${allDirectLeads.length + allWebLeads.length} raw leads — deduplicating…`, allDirectLeads.length + allWebLeads.length)
 
   // ── Merge and deduplicate all leads ──────────────────────────────────────
   const seen = new Set<string>()
   const deduped: FreeLead[] = []
 
-  for (const lead of [...allDirectLeads, ...allWebLeads]) {
+  for (const lead of [...allWebLeads, ...allDirectLeads]) {
     if (!lead.address?.trim()) continue
     const key = (lead.address + (lead.city ?? "")).toLowerCase().replace(/[\s,#.-]/g, "")
     if (seen.has(key)) continue
@@ -332,7 +315,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     deduped.push(lead)
   }
 
-  // Sort: AUCTION (most urgent) first, then NOTICE_OF_DEFAULT, etc.
+  // Sort: AUCTION (most urgent) first, then NOTICE_OF_SALE, NOTICE_OF_DEFAULT, etc.
   const STAGE_ORDER: Record<string, number> = {
     AUCTION:          0,
     NOTICE_OF_SALE:   1,
