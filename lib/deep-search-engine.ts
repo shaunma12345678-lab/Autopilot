@@ -130,7 +130,7 @@ JSON array only:`
 // ── Web search phase ──────────────────────────────────────────────────────────
 
 // TEMP diagnostics — surfaced in sourceCounts to debug the live web phase.
-const __debug = { webResults: 0, webRawChars: 0, regexFound: 0, matched: 0 }
+const __debug = { webResults: 0, webRawChars: 0, regexFound: 0, matched: 0, hasKey: 0, errMsg: "" }
 
 // Returns ALL extracted leads tagged for relevance — caller filters/prioritizes.
 async function runWebSearchPhase(
@@ -148,12 +148,14 @@ async function runWebSearchPhase(
   // Every query uses DEEP search — property addresses live in raw_content.
   // High concurrency so all queries finish in ~1-2 waves; each Tavily call is
   // capped at 14s internally, so the whole phase stays well under budget.
+  __debug.hasKey = process.env.TAVILY_API_KEY ? 1 : 0
   const resultBatches = await withConcurrency(
     selectedQueries.map(q => async () => {
       try {
         const res = await webSearchDeepOrAny(q, 6)
         return res.results.map(r => ({ url: r.url, raw: r.rawContent ?? r.content ?? "" }))
-      } catch {
+      } catch (e) {
+        if (!__debug.errMsg) __debug.errMsg = (e instanceof Error ? e.message : String(e)).slice(0, 80)
         return []
       }
     }),
@@ -161,6 +163,9 @@ async function runWebSearchPhase(
   )
 
   const results = resultBatches.flat().filter(r => r.raw.length > 50)
+  const rawAll = resultBatches.flat()
+  if (!__debug.errMsg && rawAll.length === 0) __debug.errMsg = "0 results, no throw"
+  else if (!__debug.errMsg && results.length === 0) __debug.errMsg = `${rawAll.length} results all <50 chars`
   const totalRawChars = results.reduce((a, r) => a + r.raw.length, 0)
   __debug.webResults += results.length
   __debug.webRawChars += totalRawChars
@@ -334,6 +339,8 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   combinedSourceCounts["_dbg_rawKB"] = Math.round(__debug.webRawChars / 1000)
   combinedSourceCounts["_dbg_regexFound"] = __debug.regexFound
   combinedSourceCounts["_dbg_matched"] = __debug.matched
+  combinedSourceCounts["_dbg_hasKey"] = __debug.hasKey
+  ;(combinedSourceCounts as Record<string, unknown>)["_dbg_err"] = __debug.errMsg || "none"
 
   notify(`Found ${allDirectLeads.length + allWebLeads.length} raw leads — deduplicating…`, allDirectLeads.length + allWebLeads.length)
 
