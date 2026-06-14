@@ -2088,7 +2088,7 @@ function AdminDistressMap({ password }: { password: string }) {
         </div>
       )}
       {!loading && leads.length > 0 && (
-        <DistressMap leads={leads} flyToQuery={flyTo} apiHeaders={{ "x-admin-password": password }} />
+        <DistressMap leads={leads} flyToQuery={flyTo} apiHeaders={{ "x-admin-password": password }} onRefresh={run} />
       )}
       {!loading && searched && leads.length === 0 && !error && (
         <div className="text-center py-12 text-gray-600 text-sm">No deals found for that area. Try a larger city or a wider date range.</div>

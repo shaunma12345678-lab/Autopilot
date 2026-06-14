@@ -96,6 +96,20 @@ function buildDeepQuerySet(loc: SearchLocation, year: number): string[] {
     `${placeLoose} bank-owned REO foreclosure ${year} listing address`,
     `${placeLoose} HUD home OR "Fannie Mae" foreclosure ${year} address`,
     `${st} ${placeLoose} foreclosure homes ${year} owner address`,
+    // Tier 7 — court & public records (probate, divorce, eviction, bankruptcy)
+    `${placeLoose} divorce "real property" OR marital home ${year} address sale`,
+    `${placeLoose} eviction OR "unlawful detainer" landlord property ${year} address`,
+    `${placeLoose} bankruptcy "chapter 13" OR "chapter 7" real property ${year} address`,
+    `${placeLoose} inherited OR estate sale "as-is" house ${year} address`,
+    // Tier 8 — vacancy & motivated-seller signals
+    `${placeLoose} vacant OR abandoned house ${year} owner address for sale`,
+    `${placeLoose} "must sell" OR "as-is" OR "cash only" distressed home ${year} address`,
+    `${placeLoose} absentee owner OR out-of-state landlord tired ${year} property address`,
+    `${placeLoose} fire OR water damage OR fixer-upper house ${year} address`,
+    // Tier 9 — county recorder, FSBO & expired listings
+    `${placeLoose} county recorder "notice of default" OR "trustee sale" ${year} document`,
+    `${placeLoose} "for sale by owner" FSBO motivated ${year} address`,
+    `${placeLoose} expired OR withdrawn listing distressed ${year} property address`,
   ]
 }
 

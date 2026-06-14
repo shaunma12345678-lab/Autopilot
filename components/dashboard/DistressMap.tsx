@@ -28,6 +28,8 @@ import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { marketSnapshot, type MarketSnapshot } from "@/lib/market-stats"
 import { loadBuyBox, saveBuyBox, matchesBuyBox, DEFAULT_BUYBOX, type BuyBox } from "@/lib/buy-box"
 import { CRM_STAGES, loadCrm, persistCrm, crmColor, type CrmStage, type CrmMap } from "@/lib/crm"
+import { loadSeen, addSeen, newLeadIds, leadSignature } from "@/lib/seen-leads"
+import { learnProfile, fitsProfile, type LearnedProfile } from "@/lib/deal-learning"
 
 // ── Urgency model: how a pin is colored & sized ───────────────────────────────
 type Urgency = "imminent" | "soon" | "active" | "early"
@@ -96,7 +98,7 @@ function pointInPolygon(lat: number, lng: number, poly: LatLng[]): boolean {
 }
 
 // Popup deal card with an optional "View in list" button and a Street View link.
-function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, fallbackPsf?: number | null, crmStage?: CrmStage): string {
+function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, fallbackPsf?: number | null, crmStage?: CrmStage, fits?: boolean, isNew?: boolean): string {
   const u = leadUrgency(lead)
   const countdown =
     typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0
@@ -146,6 +148,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
       <div style="font-weight:700;font-size:12.5px;line-height:1.3">${escapeHtml(lead.address)}</div>
       <div style="font-size:11px;color:#9ca3af">${escapeHtml([lead.city, lead.state, lead.zip].filter(Boolean).join(", "))}</div>
       <div style="font-size:12px;font-weight:800;margin-top:3px;color:${verdict.color}">${verdict.text}</div>
+      ${(isNew || fits) ? `<div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${isNew ? '<span style="font-size:9.5px;font-weight:700;background:#0ea5e9;color:#04293a;border-radius:5px;padding:1px 5px">🆕 NEW</span>' : ""}${fits ? '<span style="font-size:9.5px;font-weight:700;background:#16a34a33;color:#86efac;border:1px solid #16a34a66;border-radius:5px;padding:1px 5px">📈 Matches your deals</span>' : ""}</div>` : ""}
       ${distressLine}${countdown}${liens}
       ${moneyBox}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;margin-top:6px">
@@ -226,9 +229,11 @@ interface Props {
   onZoneFilter?: (attomIds: number[] | null) => void
   /** Auth headers for /api/leads/notify (zone deal alerts). */
   apiHeaders?: Record<string, string>
+  /** Re-runs the parent search (powers auto-refresh / per-farm auto-crawl). */
+  onRefresh?: () => void
 }
 
-export default function DistressMap({ leads, flyToQuery, onSelectLead, highlightId, onZoneFilter, apiHeaders }: Props) {
+export default function DistressMap({ leads, flyToQuery, onSelectLead, highlightId, onZoneFilter, apiHeaders, onRefresh }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef       = useRef<LeafletMap | null>(null)
   const layerRef     = useRef<LayerGroup | null>(null)   // pins + clusters
@@ -253,6 +258,11 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const crmRef        = useRef<CrmMap>({})
   const pipelineRef   = useRef(false)
   const psfRef        = useRef<number | null>(null)
+  const newIdsRef     = useRef<Set<number>>(new Set())
+  const newOnlyRef    = useRef(false)
+  const profileRef    = useRef<LearnedProfile | null>(null)
+  const onRefreshRef  = useRef(onRefresh)
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Refs so map event handlers always read the latest values (no stale closures).
   // These are kept in sync inside effects (never written during render).
@@ -293,7 +303,20 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [crm, setCrm]               = useState<CrmMap>({})
   const [pipelineView, setPipelineView] = useState(false)
   const [showMarket, setShowMarket] = useState(false)
+  const [newOnly, setNewOnly]       = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(false)
   const snapshot: MarketSnapshot = useMemo(() => marketSnapshot(leads), [leads])
+  // #2 New leads = those not seen in a prior search (read seen BEFORE we record
+  // this batch, which happens in an effect below). Derived — no effect setState.
+  const newIds: Set<number> = useMemo(
+    () => (typeof window === "undefined" || !leads.length ? new Set<number>() : newLeadIds(leads, loadSeen())),
+    [leads],
+  )
+  const newCount = newIds.size
+  const profile: LearnedProfile | null = useMemo(
+    () => learnProfile(leads, crm, (l) => analyzeDeal(l, undefined, snapshot.medianPsf ? { fallbackPsf: snapshot.medianPsf } : undefined)),
+    [leads, crm, snapshot],
+  )
 
   // Keep latest props/state available to imperative Leaflet handlers via refs.
   useEffect(() => { onSelectRef.current = onSelectLead }, [onSelectLead])
@@ -306,8 +329,27 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { crmRef.current = crm }, [crm])
   useEffect(() => { pipelineRef.current = pipelineView }, [pipelineView])
   useEffect(() => { psfRef.current = snapshot.medianPsf }, [snapshot])
-  // Re-draw pins when buy-box / pipeline / CRM / market psf changes.
-  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, ready])
+  useEffect(() => { newOnlyRef.current = newOnly }, [newOnly])
+  useEffect(() => { profileRef.current = profile }, [profile])
+  useEffect(() => { onRefreshRef.current = onRefresh }, [onRefresh])
+  useEffect(() => { newIdsRef.current = newIds }, [newIds])
+
+  // After flagging this batch's new leads, record them as seen so the NEXT
+  // search only flags genuinely fresh inventory.
+  useEffect(() => { if (leads.length) addSeen(leads.map((l) => leadSignature(l))) }, [leads])
+
+  // Re-draw pins when filters / pipeline / CRM / market / new-set change.
+  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, newOnly, newIds, profile, ready])
+
+  // #1 Auto-refresh / per-farm auto-crawl: periodically re-run the search so new
+  // deals surface (and zone alerts fire) while the map is open.
+  useEffect(() => {
+    if (refreshTimerRef.current) { clearInterval(refreshTimerRef.current); refreshTimerRef.current = null }
+    if (autoRefresh && onRefreshRef.current) {
+      refreshTimerRef.current = setInterval(() => onRefreshRef.current?.(), 15 * 60 * 1000)
+    }
+    return () => { if (refreshTimerRef.current) { clearInterval(refreshTimerRef.current); refreshTimerRef.current = null } }
+  }, [autoRefresh])
 
   // #9 CRM stage setter (persisted) — wired into popup chips via a ref.
   const setCrmStage = useCallback((id: number, stage: CrmStage) => {
@@ -544,13 +586,16 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     const analysisOf = (l: ForeclosureLead) => analyzeDeal(l, undefined, psf ? { fallbackPsf: psf } : undefined)
     const pts = leadsRef.current.map((l) => ({ l, ll: coordsRef.current[l.attomId] })).filter((x): x is { l: ForeclosureLead; ll: LatLng } => Boolean(x.ll))
 
-    // #1 Buy-box: when on, only fitting deals cluster/pin; the rest become faint
-    // grey dots so you still see context but your matches pop.
+    // Buy-box (#1) and New (#2) filters: matching deals cluster/pin; the rest
+    // fade to faint grey dots so your matches pop.
+    const newOnly = newOnlyRef.current
     let clusterPts = pts
-    if (box.enabled) {
+    if (box.enabled || newOnly) {
       clusterPts = []
       for (const p of pts) {
-        if (matchesBuyBox(p.l, analysisOf(p.l), box)) clusterPts.push(p)
+        const passBox = !box.enabled || matchesBuyBox(p.l, analysisOf(p.l), box)
+        const passNew = !newOnly || newIdsRef.current.has(p.l.attomId)
+        if (passBox && passNew) clusterPts.push(p)
         else L.circleMarker([p.ll.lat, p.ll.lng], { radius: 3, stroke: false, fillColor: "#475569", fillOpacity: 0.35, bubblingMouseEvents: false }).addTo(layer)
       }
     }
@@ -580,7 +625,9 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         })
         // Persistent: stays open (with an X) until the user closes it, so deal
         // info doesn't vanish when they click elsewhere on the map.
-        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage), { maxWidth: 268, autoClose: false, closeOnClick: false })
+        const fits = fitsProfile(l, analysisOf(l), profileRef.current)
+        const isNew = newIdsRef.current.has(l.attomId)
+        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage, fits, isNew), { maxWidth: 268, autoClose: false, closeOnClick: false })
         // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
         // hover tooltip with score + address (keeps the view uncluttered).
         const zoomedIn = zoom >= 15
@@ -891,8 +938,10 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
               <button onClick={toggleDriving} className={toolBtn(driving)}>🚗 {driving ? "Stop" : "Drive"}</button>
               <button onClick={() => setShowDriveList((v) => !v)} className={toolBtn(showDriveList)}>📋 Logged{driveLeads.length ? ` ${driveLeads.length}` : ""}</button>
               <button onClick={() => setShowBuyBox((v) => !v)} className={toolBtn(buyBox.enabled || showBuyBox)}>🎯 Buy-box{buyBox.enabled ? " ✓" : ""}</button>
+              <button onClick={() => setNewOnly((v) => !v)} className={toolBtn(newOnly)}>🆕 New{newCount ? ` ${newCount}` : ""}</button>
               <button onClick={() => setPipelineView((v) => !v)} className={toolBtn(pipelineView)}>🗂 Pipeline</button>
               <button onClick={() => setShowMarket((v) => !v)} className={toolBtn(showMarket)}>📊 Market</button>
+              {onRefresh && <button onClick={() => setAutoRefresh((v) => !v)} className={toolBtn(autoRefresh)} title="Re-run this search every 15 min to catch new deals">🔄 Auto{autoRefresh ? " ✓" : ""}</button>}
             </div>
             {gpsError && <div className="bg-red-950/90 border border-red-500/40 rounded-lg px-2.5 py-1 text-[10px] text-red-200 shadow-lg max-w-[220px]">{gpsError}</div>}
 

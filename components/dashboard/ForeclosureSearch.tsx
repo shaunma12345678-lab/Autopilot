@@ -1343,6 +1343,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
             highlightId={mapHighlight}
             onZoneFilter={(ids) => setZoneIds(ids ? new Set(ids) : null)}
             apiHeaders={apiHeaders}
+            onRefresh={search}
           />
 
           {/* Data source badge */}
