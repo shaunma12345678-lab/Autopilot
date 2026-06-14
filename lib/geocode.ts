@@ -1,18 +1,21 @@
 // Client-side geocoding for the Live Distress Map.
 //
-// Design rules (match the rest of the intelligence layer):
-//   • ZERO cost, ZERO API key — uses the free U.S. Census geocoder for street
-//     addresses (no key, no rate limit, US-only) and free OpenStreetMap
-//     Nominatim for place/city look-ups (one call per search).
-//   • NEVER touches the server search path — runs only in the browser when the
-//     map is open, so it can never slow down or break a search.
-//   • Every result is cached in localStorage, so any given address is geocoded
-//     at most once, ever. Repeat searches are instant and hit no network.
-//   • Every function is fully null-safe and never throws.
+// Calls our own /api/geocode proxy (NOT the geocoders directly) because the
+// free U.S. Census geocoder sends no CORS headers — direct browser calls are
+// blocked and produce zero pins. The proxy hits Census (street addresses, free,
+// no key, US-only) and Nominatim (ZIP-aware place/city look-ups) server-side.
+//
+// Design rules:
+//   • ZERO cost, ZERO API key.
+//   • NEVER touches the server SEARCH path — geocoding runs only when the map
+//     is open, so it can't slow down or break a search.
+//   • Every result is cached in localStorage, so any address is geocoded at most
+//     once ever; repeat searches are instant and hit no network.
+//   • Fully null-safe; never throws.
 
 export interface LatLng { lat: number; lng: number }
 
-const CACHE_PREFIX = "ap_geo_v1:"
+const CACHE_PREFIX = "ap_geo_v2:"
 const MEM_CACHE = new Map<string, LatLng | null>()
 
 function cacheKey(q: string): string {
@@ -45,20 +48,27 @@ function writeCache(q: string, value: LatLng | null): void {
   }
 }
 
-function isValid(lat: unknown, lng: unknown): lat is number {
-  return (
-    typeof lat === "number" && typeof lng === "number" &&
-    Number.isFinite(lat) && Number.isFinite(lng) &&
-    lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 &&
-    !(lat === 0 && lng === 0)
+function isValid(ll: unknown): ll is LatLng {
+  const v = ll as LatLng | null
+  return Boolean(
+    v && typeof v.lat === "number" && typeof v.lng === "number" &&
+    Number.isFinite(v.lat) && Number.isFinite(v.lng) &&
+    !(v.lat === 0 && v.lng === 0),
   )
 }
 
-async function fetchWithTimeout(url: string, ms: number, init?: RequestInit): Promise<Response | null> {
+async function postJson(body: unknown, ms: number): Promise<unknown | null> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), ms)
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal })
+    const res = await fetch("/api/geocode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) return null
+    return await res.json()
   } catch {
     return null
   } finally {
@@ -66,106 +76,70 @@ async function fetchWithTimeout(url: string, ms: number, init?: RequestInit): Pr
   }
 }
 
-// ── Street address → lat/lng (U.S. Census, free, no key, US-only) ─────────────
+const oneLine = (l: { address: string; city?: string; state?: string; zip?: string }): string =>
+  [l.address, l.city, l.state, l.zip].filter(Boolean).join(", ").trim()
+
+// ── Single street address → lat/lng ───────────────────────────────────────────
 export async function geocodeAddress(oneLineAddress: string): Promise<LatLng | null> {
   const q = (oneLineAddress || "").trim()
   if (!q) return null
-
   const cached = readCache(q)
   if (cached !== undefined) return cached
 
-  const url =
-    "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress" +
-    `?address=${encodeURIComponent(q)}` +
-    "&benchmark=Public_AR_Current&format=json"
-
-  const res = await fetchWithTimeout(url, 8000)
-  if (!res || !res.ok) {
-    // Don't cache transient network failures — allow a later retry.
-    return null
-  }
-
-  try {
-    const data = await res.json()
-    const match = data?.result?.addressMatches?.[0]
-    const lng = match?.coordinates?.x
-    const lat = match?.coordinates?.y
-    if (isValid(lat, lng)) {
-      const ll = { lat, lng }
-      writeCache(q, ll)
-      return ll
-    }
-    // A real "no match" response — cache the miss so we don't ask again.
-    writeCache(q, null)
-    return null
-  } catch {
-    return null
-  }
+  const data = await postJson({ addresses: [q] }, 12000) as { results?: (LatLng | null)[] } | null
+  if (!data) return null // transient failure — don't cache, allow retry
+  const ll = data.results?.[0]
+  if (isValid(ll)) { writeCache(q, ll); return ll }
+  writeCache(q, null) // a real miss — cache it
+  return null
 }
 
-// ── Free-text place / city / zip → lat/lng (OpenStreetMap Nominatim) ──────────
-// Used once per search to fly the map to where the user is looking. Nominatim
-// understands "Riverside, CA", "91710", and full street addresses alike.
+// ── Place / city / ZIP → lat/lng (ZIP-aware on the server) ────────────────────
 export async function geocodePlace(query: string): Promise<LatLng | null> {
   const q = (query || "").trim()
   if (!q) return null
-
   const cached = readCache("place:" + q)
   if (cached !== undefined) return cached
 
-  const url =
-    "https://nominatim.openstreetmap.org/search" +
-    `?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=us`
-
-  const res = await fetchWithTimeout(url, 8000, {
-    headers: { Accept: "application/json" },
-  })
-  if (!res || !res.ok) return null
-
-  try {
-    const arr = await res.json()
-    const first = Array.isArray(arr) ? arr[0] : null
-    const lat = first ? parseFloat(first.lat) : NaN
-    const lng = first ? parseFloat(first.lon) : NaN
-    if (isValid(lat, lng)) {
-      const ll = { lat, lng }
-      writeCache("place:" + q, ll)
-      return ll
-    }
-    writeCache("place:" + q, null)
-    return null
-  } catch {
-    return null
-  }
+  const data = await postJson({ place: q }, 12000) as { result?: LatLng | null } | null
+  if (!data) return null
+  const ll = data.result
+  if (isValid(ll)) { writeCache("place:" + q, ll); return ll }
+  writeCache("place:" + q, null)
+  return null
 }
 
-// ── Bulk geocode lead addresses with bounded concurrency ──────────────────────
-// Calls onResult for each lead as soon as its coordinates resolve, so pins can
-// appear progressively rather than all-at-once after a long wait.
+// ── Bulk geocode lead addresses ───────────────────────────────────────────────
+// Resolves cached addresses instantly, then batches the rest through the proxy
+// in chunks so pins appear progressively instead of all at once.
 export async function geocodeLeads<T extends { address: string; city?: string; state?: string; zip?: string }>(
   leads: T[],
   onResult: (index: number, coords: LatLng) => void,
-  opts?: { concurrency?: number; signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; chunkSize?: number },
 ): Promise<void> {
-  const concurrency = opts?.concurrency ?? 6
-  let cursor = 0
+  const chunkSize = opts?.chunkSize ?? 40
 
-  const oneLine = (l: T): string =>
-    [l.address, l.city, l.state, l.zip].filter(Boolean).join(", ").trim()
-
-  async function worker(): Promise<void> {
-    while (cursor < leads.length) {
-      if (opts?.signal?.aborted) return
-      const i = cursor++
-      const lead = leads[i]
-      const line = oneLine(lead)
-      if (!line) continue
-      const coords = await geocodeAddress(line)
-      if (opts?.signal?.aborted) return
-      if (coords) onResult(i, coords)
-    }
+  // 1) Serve anything already cached immediately (no network).
+  const pending: { index: number; line: string }[] = []
+  for (let i = 0; i < leads.length; i++) {
+    const line = oneLine(leads[i])
+    if (!line) continue
+    const cached = readCache(line)
+    if (cached === undefined) { pending.push({ index: i, line }); continue }
+    if (cached) onResult(i, cached)
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, leads.length) }, () => worker())
-  await Promise.all(workers)
+  // 2) Geocode the rest in chunks via the proxy.
+  for (let c = 0; c < pending.length; c += chunkSize) {
+    if (opts?.signal?.aborted) return
+    const slice = pending.slice(c, c + chunkSize)
+    const data = await postJson({ addresses: slice.map((s) => s.line) }, 30000) as { results?: (LatLng | null)[] } | null
+    if (opts?.signal?.aborted) return
+    const results = data?.results ?? []
+    slice.forEach((s, k) => {
+      const ll = results[k]
+      if (isValid(ll)) { writeCache(s.line, ll); onResult(s.index, ll) }
+      else if (data) { writeCache(s.line, null) } // real miss
+    })
+  }
 }

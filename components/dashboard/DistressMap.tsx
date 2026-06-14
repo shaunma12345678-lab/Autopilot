@@ -317,7 +317,13 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
           fillOpacity: 0.9,
         })
         m.bindPopup(popupHtml(l, ll, hasSelect), { maxWidth: 268 })
-        m.bindTooltip(`${l.score ?? 0} · ${escapeHtml(l.address)}`, { direction: "top", offset: [0, -4] })
+        // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
+        // hover tooltip with score + address (keeps the view uncluttered).
+        const zoomedIn = zoom >= 15
+        m.bindTooltip(
+          zoomedIn ? `${l.score ?? 0}` : `${l.score ?? 0} · ${escapeHtml(l.address)}`,
+          { direction: "top", offset: [0, -4], permanent: zoomedIn, className: zoomedIn ? "ap-score-label" : "" },
+        )
         if (u === "imminent") m.setStyle({ className: "ap-pulse-pin" })
         m.on("click", () => {
           if (modeRef.current === "route") { m.closePopup(); addToRoute(l) }
@@ -531,6 +537,8 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         .leaflet-container { background: #0b1220; font-family: inherit; }
         .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #1f2937; color: #e5e7eb; }
         .leaflet-popup-content { margin: 10px 12px; }
+        .ap-score-label { background: rgba(17,24,39,.92); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; font-weight: 700; font-size: 11px; padding: 1px 5px; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+        .ap-score-label::before { border-top-color: rgba(17,24,39,.92) !important; }
       `}</style>
     </div>
   )
