@@ -263,6 +263,8 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const profileRef    = useRef<LearnedProfile | null>(null)
   const onRefreshRef  = useRef(onRefresh)
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const openLeadIdRef = useRef<number | null>(null)  // popup kept open across rebuilds
+  const rebuildingRef = useRef(false)
 
   // Refs so map event handlers always read the latest values (no stale closures).
   // These are kept in sync inside effects (never written during render).
@@ -305,6 +307,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [showMarket, setShowMarket] = useState(false)
   const [newOnly, setNewOnly]       = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [toolsOpen, setToolsOpen]   = useState(true)
   const snapshot: MarketSnapshot = useMemo(() => marketSnapshot(leads), [leads])
   // #2 New leads = those not seen in a prior search (read seen BEFORE we record
   // this batch, which happens in an effect below). Derived — no effect setState.
@@ -513,6 +516,10 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         })
       })
 
+      // Only forget the open popup when the USER closes it (the X), not when we
+      // rebuild markers — so deal popups survive re-renders & CRM updates.
+      map.on("popupclose", () => { if (!rebuildingRef.current) openLeadIdRef.current = null })
+
       // Map clicks: draw mode adds zone vertices; explore mode analyzes the spot.
       map.on("click", (e: LeafletMouseEvent) => {
         if (modeRef.current === "draw") {
@@ -577,6 +584,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const renderMarkers = useCallback(() => {
     const L = LRef.current, layer = layerRef.current, map = mapRef.current
     if (!L || !layer || !map) return
+    rebuildingRef.current = true // popupclose during clear shouldn't forget the open deal
     layer.clearLayers(); markerById.current.clear()
 
     const zoom = map.getZoom()
@@ -627,7 +635,9 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         // info doesn't vanish when they click elsewhere on the map.
         const fits = fitsProfile(l, analysisOf(l), profileRef.current)
         const isNew = newIdsRef.current.has(l.attomId)
-        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage, fits, isNew), { maxWidth: 268, autoClose: false, closeOnClick: false })
+        // autoPan:false prevents an edge-popup from panning the map, which would
+        // fire moveend → rebuild → close. Persistent until the user hits X.
+        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage, fits, isNew), { maxWidth: 268, autoClose: false, closeOnClick: false, autoPan: false })
         // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
         // hover tooltip with score + address (keeps the view uncluttered).
         const zoomedIn = zoom >= 15
@@ -638,7 +648,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         if (u === "imminent") m.setStyle({ className: "ap-pulse-pin" })
         m.on("click", () => {
           if (modeRef.current === "route") { m.closePopup(); addToRoute(l) }
-          else m.openPopup()
+          else { openLeadIdRef.current = l.attomId; m.openPopup() }
         })
         m.addTo(layer)
         markerById.current.set(l.attomId, m)
@@ -665,6 +675,13 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       didFitRef.current = true
       try { map.fitBounds(allLatLng, { padding: [40, 40], maxZoom: 13 }) } catch {}
     }
+
+    // Re-open the popup that was open before this rebuild (if its pin still
+    // exists at this zoom), so clicking, filtering, or CRM updates never make
+    // the deal card vanish.
+    const oid = openLeadIdRef.current
+    if (oid != null) markerById.current.get(oid)?.openPopup()
+    rebuildingRef.current = false
   }, [flyToQuery, addToRoute, hasSelect])
   useEffect(() => { renderRef.current = renderMarkers }, [renderMarkers])
   useEffect(() => { if (ready) renderMarkers() }, [coords, leads, ready, renderMarkers])
@@ -869,7 +886,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
 
   const pinCount = Object.keys(coords).length
   const toolBtn = (active: boolean) =>
-    `px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${active ? "bg-indigo-600 border-indigo-500 text-white" : "bg-gray-900/90 border-gray-600/60 text-gray-300 hover:text-white"}`
+    `px-1.5 py-0.5 rounded-md text-[11px] leading-none font-semibold border transition-colors ${active ? "bg-indigo-600 border-indigo-500 text-white" : "bg-gray-900/85 border-gray-600/50 text-gray-300 hover:text-white"}`
 
   return (
     <div className="bg-gradient-to-br from-slate-900/80 to-indigo-950/40 border border-indigo-500/25 rounded-2xl overflow-hidden">
@@ -925,23 +942,28 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
             )}
           </div>
 
-          {/* Toolbar */}
-          <div className="absolute top-3 right-3 z-[1000] flex flex-col items-end gap-1.5 max-w-[64%]">
-            <div className="flex flex-wrap gap-1.5 justify-end">
-              <button onClick={() => setMode("explore")} className={toolBtn(mode === "explore")}>✋ Explore</button>
-              <button onClick={() => (mode === "draw" ? clearZone() : startDraw())} className={toolBtn(mode === "draw")}>✏️ {mode === "draw" ? "Cancel" : "Draw zone"}</button>
-              <button onClick={() => setMode(mode === "route" ? "explore" : "route")} className={toolBtn(mode === "route")}>🧭 Route</button>
-              <button onClick={() => setShowComps((v) => !v)} className={toolBtn(showComps)}>🏷️ Comps</button>
-              <button onClick={() => setShowHeat((v) => !v)} className={toolBtn(showHeat)}>🔥 Heat</button>
-              <button onClick={() => setBaseLayer((b) => (b === "street" ? "satellite" : "street"))} className={toolBtn(baseLayer === "satellite")}>🛰 {baseLayer === "satellite" ? "Map" : "Satellite"}</button>
-              <button onClick={() => setShowZones((v) => !v)} className={toolBtn(showZones)}>📁 Zones</button>
-              <button onClick={toggleDriving} className={toolBtn(driving)}>🚗 {driving ? "Stop" : "Drive"}</button>
-              <button onClick={() => setShowDriveList((v) => !v)} className={toolBtn(showDriveList)}>📋 Logged{driveLeads.length ? ` ${driveLeads.length}` : ""}</button>
-              <button onClick={() => setShowBuyBox((v) => !v)} className={toolBtn(buyBox.enabled || showBuyBox)}>🎯 Buy-box{buyBox.enabled ? " ✓" : ""}</button>
-              <button onClick={() => setNewOnly((v) => !v)} className={toolBtn(newOnly)}>🆕 New{newCount ? ` ${newCount}` : ""}</button>
-              <button onClick={() => setPipelineView((v) => !v)} className={toolBtn(pipelineView)}>🗂 Pipeline</button>
-              <button onClick={() => setShowMarket((v) => !v)} className={toolBtn(showMarket)}>📊 Market</button>
-              {onRefresh && <button onClick={() => setAutoRefresh((v) => !v)} className={toolBtn(autoRefresh)} title="Re-run this search every 15 min to catch new deals">🔄 Auto{autoRefresh ? " ✓" : ""}</button>}
+          {/* Toolbar — compact icon buttons (hover for names) */}
+          <div className="absolute top-2 right-2 z-[1000] flex flex-col items-end gap-1 max-w-[50%]">
+            <div className="flex items-center gap-1">
+              <button onClick={() => setToolsOpen((v) => !v)} className={toolBtn(false)} title={toolsOpen ? "Hide tools" : "Show tools"}>{toolsOpen ? "✕" : "🛠"}</button>
+              {toolsOpen && (
+                <div className="flex flex-wrap gap-1 justify-end">
+                  <button onClick={() => setMode("explore")} className={toolBtn(mode === "explore")} title="Explore (click anywhere to check it)">✋</button>
+                  <button onClick={() => (mode === "draw" ? clearZone() : startDraw())} className={toolBtn(mode === "draw")} title={mode === "draw" ? "Cancel drawing" : "Draw a farm zone"}>{mode === "draw" ? "✕✏️" : "✏️"}</button>
+                  <button onClick={() => setMode(mode === "route" ? "explore" : "route")} className={toolBtn(mode === "route")} title="Plan a driving route">🧭</button>
+                  <button onClick={() => setShowComps((v) => !v)} className={toolBtn(showComps)} title="Comparable sales">🏷️</button>
+                  <button onClick={() => setShowHeat((v) => !v)} className={toolBtn(showHeat)} title="Heat map (profit/equity/score)">🔥</button>
+                  <button onClick={() => setBaseLayer((b) => (b === "street" ? "satellite" : "street"))} className={toolBtn(baseLayer === "satellite")} title="Satellite / street view">🛰</button>
+                  <button onClick={() => setShowZones((v) => !v)} className={toolBtn(showZones)} title="Saved farm zones">📁</button>
+                  <button onClick={toggleDriving} className={toolBtn(driving)} title="Driving for Dollars (GPS)">🚗</button>
+                  <button onClick={() => setShowDriveList((v) => !v)} className={toolBtn(showDriveList)} title="Logged houses">📋{driveLeads.length ? driveLeads.length : ""}</button>
+                  <button onClick={() => setShowBuyBox((v) => !v)} className={toolBtn(buyBox.enabled || showBuyBox)} title="My buy-box filter">🎯{buyBox.enabled ? "✓" : ""}</button>
+                  <button onClick={() => setNewOnly((v) => !v)} className={toolBtn(newOnly)} title="New leads only">🆕{newCount ? newCount : ""}</button>
+                  <button onClick={() => setPipelineView((v) => !v)} className={toolBtn(pipelineView)} title="Pipeline view (color by CRM stage)">🗂</button>
+                  <button onClick={() => setShowMarket((v) => !v)} className={toolBtn(showMarket)} title="Area market snapshot">📊</button>
+                  {onRefresh && <button onClick={() => setAutoRefresh((v) => !v)} className={toolBtn(autoRefresh)} title="Auto-refresh every 15 min">🔄{autoRefresh ? "✓" : ""}</button>}
+                </div>
+              )}
             </div>
             {gpsError && <div className="bg-red-950/90 border border-red-500/40 rounded-lg px-2.5 py-1 text-[10px] text-red-200 shadow-lg max-w-[220px]">{gpsError}</div>}
 
