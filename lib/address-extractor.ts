@@ -9,7 +9,7 @@
 // We pull these directly from Tavily raw_content — far more reliable than asking
 // an LLM to find them in tens of KB of legal boilerplate. The LLM is a second pass.
 
-import type { FreeLead } from "@/lib/free-foreclosure-scraper"
+import type { FreeLead, JuniorLien } from "@/lib/free-foreclosure-scraper"
 
 // ── US state validation ────────────────────────────────────────────────────────
 const US_STATES = new Set([
@@ -113,6 +113,59 @@ function dateFromContext(ctx: string): string | null {
   return null
 }
 
+// Parse a single date string (named-month or M/D/YYYY) into YYYY-MM-DD.
+function parseLooseDate(raw: string): string | null {
+  const named = raw.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+20\d{2}/i)
+  if (named) { const d = new Date(named[0]); if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10) }
+  const slash = raw.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/)
+  if (slash) { const d = new Date(`${slash[3]}-${slash[1].padStart(2, "0")}-${slash[2].padStart(2, "0")}`); if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10) }
+  return null
+}
+
+// The trustee-sale / auction date — distinct from the recording date. Trustee-sale
+// notices legally state "will sell at public auction … on <DATE>". We anchor on the
+// sale verb so we don't mistake the recording date for the sale date.
+function auctionDateFromContext(ctx: string): string | null {
+  const anchored = ctx.match(/(?:will (?:be )?s(?:ell|old)(?: at public auction)?|date of sale|sale date|auction date|public auction[^.]{0,40}?on)[^.]{0,80}?((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+20\d{2}|\d{1,2}\/\d{1,2}\/20\d{2})/i)
+  if (anchored) { const d = parseLooseDate(anchored[1]); if (d) return d }
+  return null
+}
+
+// Junior/secondary liens hiding behind the first — the #1 way investors overpay.
+const LIEN_PATTERNS: Array<{ rx: RegExp; type: JuniorLien["type"]; label: string }> = [
+  { rx: /home equity line of credit|\bHELOC\b/i,                         type: "heloc",          label: "HELOC (home equity line)" },
+  { rx: /second (?:deed of trust|mortgage|lien)|junior (?:lien|deed)/i,  type: "second_mortgage", label: "Second mortgage / junior deed" },
+  { rx: /(?:federal|IRS) tax lien|internal revenue/i,                    type: "tax_lien",       label: "IRS federal tax lien" },
+  { rx: /state tax lien|franchise tax board|property tax (?:lien|default)/i, type: "tax_lien",   label: "Tax lien" },
+  { rx: /\bHOA\b|homeowners?[' ]?association (?:lien|assessment)/i,       type: "hoa_lien",       label: "HOA assessment lien" },
+  { rx: /mechanic'?s lien|materialman'?s lien/i,                          type: "mechanics_lien", label: "Mechanic's lien" },
+  { rx: /(?:abstract of |civil )?judgment(?: lien)?|writ of execution/i,  type: "judgment",       label: "Judgment lien" },
+]
+
+function liensFromContext(ctx: string): JuniorLien[] {
+  const out: JuniorLien[] = []
+  const seen = new Set<string>()
+  for (const { rx, type, label } of LIEN_PATTERNS) {
+    const m = ctx.match(rx)
+    if (!m || seen.has(type + label)) continue
+    seen.add(type + label)
+    // Try to grab a dollar amount appearing within ~60 chars of the match.
+    const near = ctx.slice(Math.max(0, (m.index ?? 0) - 60), (m.index ?? 0) + 60)
+    const amtM = near.match(/\$\s?([\d,]{4,})/)
+    const amount = amtM ? Number(amtM[1].replace(/,/g, "")) : null
+    out.push({ type, label, amount: amount && Number.isFinite(amount) ? amount : null })
+  }
+  return out
+}
+
+function occupancyFromContext(ctx: string): FreeLead["occupancy"] {
+  const c = ctx.toLowerCase()
+  if (/\bvacant\b|abandoned|unoccupied|boarded[- ]up/.test(c)) return "vacant"
+  if (/owner[- ]occupied|owner occupies|resides at the property/.test(c)) return "owner_occupied"
+  if (/non[- ]owner occupied|tenant[- ]occupied|rental property|investor[- ]owned/.test(c)) return "absentee"
+  return null
+}
+
 function ownerFromContext(ctx: string): string {
   const m = ctx.match(/(?:Trustor|Borrower|Grantor|Mortgagor)(?:\(s\))?:?\s*([A-Z][A-Za-z.,'\- ]{4,45}?)(?:\s{2,}|,?\s+(?:A |AN |AS |WHOSE|Recorded|Duly|Trustee|under|dated|in favor|\d))/)
   if (m) {
@@ -133,6 +186,16 @@ function build(blob: string, content: string, idx: number, sourceUrl: string): E
   const parsed = parseBlob(blob)
   if (!parsed) return null
   const ctx = content.slice(Math.max(0, idx - 450), idx + 450)
+
+  const auctionDate = auctionDateFromContext(ctx)
+  const juniorLiens = liensFromContext(ctx)
+  const occupancy   = occupancyFromContext(ctx)
+
+  const signals = ["Extracted from a legally-required public foreclosure notice"]
+  if (auctionDate)        signals.push(`Trustee sale scheduled ${auctionDate}`)
+  if (occupancy === "vacant") signals.push("Property appears vacant — accelerated motivation")
+  for (const lien of juniorLiens) signals.push(`Junior lien found: ${lien.label}`)
+
   return {
     state: parsed.state,
     zip: parsed.zip,
@@ -147,10 +210,12 @@ function build(blob: string, content: string, idx: number, sourceUrl: string): E
       recordingDate: dateFromContext(ctx) ?? "",
       defaultAmount: amountFromContext(ctx),
       lender: null,
-      auctionDate: null,
+      auctionDate,
       estimatedValue: null,
       sourceUrl,
-      rawSignals: ["Extracted from a legally-required public foreclosure notice"],
+      rawSignals: signals,
+      juniorLiens: juniorLiens.length ? juniorLiens : undefined,
+      occupancy,
     },
   }
 }

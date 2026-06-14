@@ -1,0 +1,537 @@
+"use client"
+
+// ─── Live Distress Map ────────────────────────────────────────────────────────
+// A spatial hunting tool for wholesalers — its own section at the top of the
+// Real Estate area. Everything here is dependency-free (Leaflet + free OSM tiles)
+// and never touches the server search path, so it cannot slow a search or break
+// a Vercel build.
+//
+// Modes & layers:
+//   • City mode    — flies to the searched area and pins every deal, color-coded
+//                    by urgency; nearby pins auto-cluster into count bubbles.
+//   • Address mode — type any address; it flies there and tells you whether it's
+//                    a live deal and what distress signals exist.
+//   • Draw a zone  — free-draw a polygon; the table below filters to that area.
+//   • Plan route   — tap pins to build an ordered door-knock route, then open it
+//                    in Google Maps with every waypoint.
+//   • Comps layer  — show comparable sales (from on-demand valuations) for ARV.
+//   • Density layer— a heat overlay revealing the hottest blocks to farm.
+
+import { useEffect, useRef, useState, useCallback } from "react"
+import "leaflet/dist/leaflet.css"
+import type {
+  Map as LeafletMap, LayerGroup, CircleMarker, Marker, Polygon, Polyline, LeafletMouseEvent,
+} from "leaflet"
+import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
+import { geocodeLeads, geocodePlace, geocodeAddress, type LatLng } from "@/lib/geocode"
+
+// ── Urgency model: how a pin is colored & sized ───────────────────────────────
+type Urgency = "imminent" | "soon" | "active" | "early"
+
+function leadUrgency(lead: ForeclosureLead): Urgency {
+  const d = lead.daysUntilAuction
+  if (typeof d === "number" && d >= 0) {
+    if (d <= 7)  return "imminent"
+    if (d <= 21) return "soon"
+  }
+  const hotStage = lead.foreclosureStage === "NOTICE_OF_SALE" || lead.foreclosureStage === "AUCTION"
+  if (hotStage || (lead.score ?? 0) >= 75) return "soon"
+  const activeStage = lead.foreclosureStage === "NOTICE_OF_DEFAULT" || lead.foreclosureStage === "LIS_PENDENS"
+  if (activeStage || (lead.score ?? 0) >= 45) return "active"
+  return "early"
+}
+
+const URGENCY_RANK: Record<Urgency, number> = { imminent: 3, soon: 2, active: 1, early: 0 }
+const URGENCY_COLOR: Record<Urgency, string> = {
+  imminent: "#ef4444", soon: "#f97316", active: "#eab308", early: "#22c55e",
+}
+const URGENCY_LABEL: Record<Urgency, string> = {
+  imminent: "Auction imminent (≤7 days)",
+  soon:     "Hot — sale soon / high score",
+  active:   "Active distress (NOD / Lis Pendens)",
+  early:    "Early signal / pre-foreclosure",
+}
+
+function money(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—"
+  if (Math.abs(n) >= 1000) return "$" + Math.round(n / 1000) + "k"
+  return "$" + Math.round(n)
+}
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c))
+}
+
+// Ray-casting point-in-polygon (lng = x, lat = y).
+function pointInPolygon(lat: number, lng: number, poly: LatLng[]): boolean {
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].lng, yi = poly[i].lat
+    const xj = poly[j].lng, yj = poly[j].lat
+    const intersect = ((yi > lat) !== (yj > lat)) && (lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi)
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+// Popup deal card with an optional "View in list" button and a Street View link.
+function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): string {
+  const u = leadUrgency(lead)
+  const signals = (lead.distressSignals ?? []).slice(0, 4)
+  const countdown =
+    typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0
+      ? `<div style="color:#fca5a5;font-weight:600;margin-top:2px">🔨 Auction in ${lead.daysUntilAuction} day${lead.daysUntilAuction === 1 ? "" : "s"}</div>` : ""
+  const liens = lead.juniorLiens?.length
+    ? `<div style="color:#fbbf24;margin-top:2px">⚠ ${lead.juniorLiens.length} junior lien${lead.juniorLiens.length === 1 ? "" : "s"} behind 1st</div>` : ""
+  const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat},${ll.lng}`
+  return `
+    <div style="min-width:212px;font-family:ui-sans-serif,system-ui;color:#e5e7eb">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <span style="background:${URGENCY_COLOR[u]};color:#111;font-weight:700;font-size:11px;padding:1px 6px;border-radius:6px">${lead.score ?? 0}</span>
+        <span style="font-weight:600;font-size:12px">${escapeHtml(lead.priority ?? "")}</span>
+      </div>
+      <div style="font-weight:600;font-size:12px;line-height:1.3">${escapeHtml(lead.address)}</div>
+      <div style="font-size:11px;color:#9ca3af">${escapeHtml([lead.city, lead.state, lead.zip].filter(Boolean).join(", "))}</div>
+      ${countdown}${liens}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;margin-top:6px">
+        <span style="color:#9ca3af">Stage</span><span>${escapeHtml((lead.foreclosureStage ?? "").replace(/_/g, " ").toLowerCase())}</span>
+        <span style="color:#9ca3af">Est. value</span><span>${money(lead.estimatedValue)}</span>
+        <span style="color:#9ca3af">Equity</span><span>${lead.equityPercent != null ? Math.round(lead.equityPercent) + "%" : "—"}</span>
+        <span style="color:#9ca3af">Default</span><span>${money(lead.defaultAmount)}</span>
+      </div>
+      ${signals.length ? `<div style="margin-top:6px;font-size:10.5px;color:#cbd5e1">${signals.map((s) => "• " + escapeHtml(s)).join("<br/>")}</div>` : ""}
+      <div style="display:flex;gap:6px;margin-top:8px">
+        ${withListButton ? `<button data-leadid="${lead.attomId}" style="flex:1;background:#4f46e5;color:#fff;border:0;border-radius:6px;padding:5px 0;font-size:11px;font-weight:600;cursor:pointer">View in list →</button>` : ""}
+        <a href="${sv}" target="_blank" rel="noreferrer" style="flex:1;text-align:center;background:#374151;color:#e5e7eb;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;text-decoration:none">📷 Street View</a>
+      </div>
+    </div>`
+}
+
+type Mode = "explore" | "draw" | "route"
+
+interface Props {
+  leads: ForeclosureLead[]
+  flyToQuery?: string
+  onSelectLead?: (attomId: number) => void
+  highlightId?: number | null
+  /** Called with the attomIds inside a drawn zone, or null when cleared. */
+  onZoneFilter?: (attomIds: number[] | null) => void
+}
+
+export default function DistressMap({ leads, flyToQuery, onSelectLead, highlightId, onZoneFilter }: Props) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const mapRef       = useRef<LeafletMap | null>(null)
+  const layerRef     = useRef<LayerGroup | null>(null)   // pins + clusters
+  const compLayerRef = useRef<LayerGroup | null>(null)   // comparable sales
+  const heatLayerRef = useRef<LayerGroup | null>(null)   // density overlay
+  const searchPinRef = useRef<Marker | null>(null)
+  const zonePolyRef  = useRef<Polygon | null>(null)
+  const guideRef     = useRef<Polyline | null>(null)
+  const markerById   = useRef<Map<number, CircleMarker>>(new Map())
+  const LRef         = useRef<typeof import("leaflet") | null>(null)
+  const drawPtsRef   = useRef<LatLng[]>([])
+  const didFitRef    = useRef(false)
+
+  // Refs so map event handlers always read the latest values (no stale closures).
+  // These are kept in sync inside effects (never written during render).
+  const onSelectRef = useRef(onSelectLead)
+  const onZoneRef   = useRef(onZoneFilter)
+  const leadsRef    = useRef(leads)
+  const coordsRef   = useRef<Record<number, LatLng>>({})
+  const renderRef   = useRef<() => void>(() => {})
+  const modeRef     = useRef<Mode>("explore")
+
+  const [collapsed, setCollapsed]   = useState(false)
+  const [ready, setReady]           = useState(false)
+  const [coords, setCoords]         = useState<Record<number, LatLng>>({})
+  const [geoProgress, setGeoProgress] = useState<{ done: number; total: number } | null>(null)
+  const [addrInput, setAddrInput]   = useState("")
+  const [assessing, setAssessing]   = useState(false)
+  const [assessment, setAssessment] = useState<null | { kind: "deal" | "none" | "notfound"; title: string; lead?: ForeclosureLead; note?: string }>(null)
+  const [mode, setMode]             = useState<Mode>("explore")
+  const [zoneCount, setZoneCount]   = useState<number | null>(null)
+  const [route, setRoute]           = useState<ForeclosureLead[]>([])
+  const [showComps, setShowComps]   = useState(false)
+  const [showHeat, setShowHeat]     = useState(false)
+
+  // Keep latest props/state available to imperative Leaflet handlers via refs.
+  useEffect(() => { onSelectRef.current = onSelectLead }, [onSelectLead])
+  useEffect(() => { onZoneRef.current = onZoneFilter }, [onZoneFilter])
+  useEffect(() => { leadsRef.current = leads }, [leads])
+  useEffect(() => { coordsRef.current = coords }, [coords])
+  useEffect(() => { modeRef.current = mode }, [mode])
+
+  // ── Zone drawing (defined before the map init effect that references them) ──
+  const finishZone = useCallback(() => {
+    const L = LRef.current, map = mapRef.current
+    if (!L || !map) return
+    const pts = drawPtsRef.current
+    if (pts.length < 3) return
+    if (guideRef.current) { guideRef.current.remove(); guideRef.current = null }
+    if (zonePolyRef.current) { zonePolyRef.current.remove(); zonePolyRef.current = null }
+    zonePolyRef.current = L.polygon(pts.map((p) => [p.lat, p.lng]), { color: "#818cf8", weight: 2, fillColor: "#6366f1", fillOpacity: 0.12 }).addTo(map)
+    const inside = leadsRef.current.filter((l) => { const ll = coordsRef.current[l.attomId]; return ll && pointInPolygon(ll.lat, ll.lng, pts) })
+    setZoneCount(inside.length)
+    onZoneRef.current?.(inside.map((l) => l.attomId))
+    setMode("explore")
+  }, [])
+
+  const clearZone = useCallback(() => {
+    drawPtsRef.current = []
+    guideRef.current?.remove(); guideRef.current = null
+    zonePolyRef.current?.remove(); zonePolyRef.current = null
+    setZoneCount(null)
+    onZoneRef.current?.(null)
+  }, [])
+
+  const startDraw = useCallback(() => { clearZone(); drawPtsRef.current = []; setMode("draw") }, [clearZone])
+
+  // ── Route building ──────────────────────────────────────────────────────────
+  const addToRoute = useCallback((lead: ForeclosureLead) => {
+    setRoute((prev) => (prev.some((l) => l.attomId === lead.attomId) ? prev : [...prev, lead]))
+  }, [])
+  const openRoute = useCallback(() => {
+    const stops = route.map((l) => coordsRef.current[l.attomId]).filter(Boolean) as LatLng[]
+    if (stops.length < 1) return
+    const capped = stops.slice(0, 10) // Google dir URL practical waypoint ceiling
+    const fmt = (s: LatLng) => `${s.lat},${s.lng}`
+    let url: string
+    if (capped.length === 1) {
+      url = `https://www.google.com/maps/dir/?api=1&destination=${fmt(capped[0])}&travelmode=driving`
+    } else {
+      const origin = fmt(capped[0])
+      const destination = fmt(capped[capped.length - 1])
+      const waypoints = capped.slice(1, -1).map(fmt).join("|")
+      url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}` +
+        (waypoints ? `&waypoints=${encodeURIComponent(waypoints)}` : "") + "&travelmode=driving"
+    }
+    window.open(url, "_blank", "noopener")
+  }, [route])
+
+  // ── Initialize Leaflet once ─────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const L = (await import("leaflet")).default
+      if (cancelled || !containerRef.current || mapRef.current) return
+      LRef.current = L
+      const map = L.map(containerRef.current, { scrollWheelZoom: true, zoomControl: false }).setView([34.0, -117.6], 9)
+      L.control.zoom({ position: "bottomleft" }).addTo(map)
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(map)
+      layerRef.current = L.layerGroup().addTo(map)
+      heatLayerRef.current = L.layerGroup().addTo(map)
+      compLayerRef.current = L.layerGroup().addTo(map)
+
+      // "View in list" delegation from popups.
+      map.on("popupopen", (e: { popup: { getElement: () => HTMLElement | undefined } }) => {
+        const btn = e.popup.getElement?.()?.querySelector<HTMLButtonElement>("button[data-leadid]")
+        if (btn) btn.onclick = () => { const id = Number(btn.getAttribute("data-leadid")); if (Number.isFinite(id)) onSelectRef.current?.(id) }
+      })
+
+      // Draw-a-zone: collect vertices on click, finish on double-click.
+      map.on("click", (e: LeafletMouseEvent) => {
+        if (modeRef.current !== "draw") return
+        drawPtsRef.current = [...drawPtsRef.current, { lat: e.latlng.lat, lng: e.latlng.lng }]
+        const pts = drawPtsRef.current.map((p) => [p.lat, p.lng]) as [number, number][]
+        if (guideRef.current) { guideRef.current.setLatLngs(pts) }
+        else { guideRef.current = L.polyline(pts, { color: "#818cf8", weight: 2, dashArray: "4 4" }).addTo(map) }
+      })
+      map.on("dblclick", () => { if (modeRef.current === "draw") finishZone() })
+
+      // Re-cluster on pan/zoom (reads latest data via renderRef).
+      map.on("moveend zoomend", () => renderRef.current())
+
+      mapRef.current = map
+      setReady(true)
+      renderRef.current()
+    })()
+    return () => { cancelled = true; mapRef.current?.remove(); mapRef.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => { if (ready && !collapsed) setTimeout(() => mapRef.current?.invalidateSize(), 60) }, [ready, collapsed])
+
+  // Double-click zoom interferes with finishing a drawn zone.
+  useEffect(() => {
+    const map = mapRef.current; if (!map) return
+    if (mode === "draw") map.doubleClickZoom.disable(); else map.doubleClickZoom.enable()
+  }, [mode])
+
+  // Reset the mapped coordinates the moment a new lead set arrives. This is
+  // React's recommended "adjust state during render when a prop changes" pattern
+  // (cheaper and cleaner than resetting inside an effect).
+  const [coordsForLeads, setCoordsForLeads] = useState(leads)
+  if (leads !== coordsForLeads) {
+    setCoordsForLeads(leads)
+    setCoords({})
+    setGeoProgress(leads.length ? { done: 0, total: leads.length } : null)
+  }
+
+  // ── Geocode the current lead set (cached, bounded concurrency, abortable) ───
+  useEffect(() => {
+    didFitRef.current = false
+    if (!leads.length) return
+    const ctrl = new AbortController()
+    geocodeLeads(
+      leads,
+      (index, ll) => {
+        const id = leads[index].attomId
+        setCoords((prev) => (prev[id] ? prev : { ...prev, [id]: ll }))
+        setGeoProgress((g) => (g ? { done: g.done + 1, total: g.total } : g))
+      },
+      { signal: ctrl.signal },
+    ).catch(() => {}).finally(() => { if (!ctrl.signal.aborted) setGeoProgress(null) })
+    return () => { ctrl.abort() }
+  }, [leads])
+
+  // ── Cluster + render pins (grid-clustering by screen pixels) ────────────────
+  const hasSelect = Boolean(onSelectLead)
+  const renderMarkers = useCallback(() => {
+    const L = LRef.current, layer = layerRef.current, map = mapRef.current
+    if (!L || !layer || !map) return
+    layer.clearLayers(); markerById.current.clear()
+
+    const zoom = map.getZoom()
+    const CELL = 64
+    const pts = leadsRef.current.map((l) => ({ l, ll: coordsRef.current[l.attomId] })).filter((x): x is { l: ForeclosureLead; ll: LatLng } => Boolean(x.ll))
+
+    const buckets = new Map<string, { items: { l: ForeclosureLead; ll: LatLng }[]; x: number; y: number }>()
+    for (const p of pts) {
+      const pix = map.project([p.ll.lat, p.ll.lng], zoom)
+      const key = Math.floor(pix.x / CELL) + ":" + Math.floor(pix.y / CELL)
+      const b = buckets.get(key)
+      if (b) { b.items.push(p); b.x += pix.x; b.y += pix.y } else buckets.set(key, { items: [p], x: pix.x, y: pix.y })
+    }
+
+    const allLatLng: [number, number][] = []
+    for (const b of buckets.values()) {
+      if (b.items.length === 1) {
+        const { l, ll } = b.items[0]
+        const u = leadUrgency(l)
+        const radius = 6 + Math.round((Math.max(0, Math.min(100, l.score ?? 0)) / 100) * 10)
+        const m = L.circleMarker([ll.lat, ll.lng], {
+          radius,
+          color: l.isAbsentee ? "#a78bfa" : "#0b0f17",
+          weight: l.isAbsentee ? 3 : 1.5,
+          fillColor: URGENCY_COLOR[u],
+          fillOpacity: 0.9,
+        })
+        m.bindPopup(popupHtml(l, ll, hasSelect), { maxWidth: 268 })
+        m.bindTooltip(`${l.score ?? 0} · ${escapeHtml(l.address)}`, { direction: "top", offset: [0, -4] })
+        if (u === "imminent") m.setStyle({ className: "ap-pulse-pin" })
+        m.on("click", () => {
+          if (modeRef.current === "route") { m.closePopup(); addToRoute(l) }
+          else m.openPopup()
+        })
+        m.addTo(layer)
+        markerById.current.set(l.attomId, m)
+      } else {
+        // Cluster bubble — sized by count, colored by most-urgent member.
+        const center = map.unproject([b.x / b.items.length, b.y / b.items.length], zoom)
+        let worst: Urgency = "early"
+        for (const it of b.items) { const u = leadUrgency(it.l); if (URGENCY_RANK[u] > URGENCY_RANK[worst]) worst = u }
+        const n = b.items.length
+        const size = Math.min(52, 26 + String(n).length * 8)
+        const icon = L.divIcon({
+          className: "",
+          html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${URGENCY_COLOR[worst]};opacity:.9;color:#111;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;border:2px solid rgba(255,255,255,.85);box-shadow:0 1px 6px rgba(0,0,0,.5)">${n}</div>`,
+          iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+        })
+        L.marker([center.lat, center.lng], { icon })
+          .on("click", () => map.flyTo([center.lat, center.lng], Math.min(zoom + 2, 16), { duration: 0.5 }))
+          .addTo(layer)
+      }
+      for (const it of b.items) allLatLng.push([it.ll.lat, it.ll.lng])
+    }
+
+    if (allLatLng.length && !flyToQuery && !didFitRef.current) {
+      didFitRef.current = true
+      try { map.fitBounds(allLatLng, { padding: [40, 40], maxZoom: 13 }) } catch {}
+    }
+  }, [flyToQuery, addToRoute, hasSelect])
+  useEffect(() => { renderRef.current = renderMarkers }, [renderMarkers])
+  useEffect(() => { if (ready) renderMarkers() }, [coords, leads, ready, renderMarkers])
+
+  // ── Fly to the searched area ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ready || !flyToQuery) return
+    let cancelled = false
+    ;(async () => { const ll = await geocodePlace(flyToQuery); if (!cancelled && ll && mapRef.current) mapRef.current.flyTo([ll.lat, ll.lng], 12, { duration: 0.8 }) })()
+    return () => { cancelled = true }
+  }, [flyToQuery, ready])
+
+  // ── Emphasize a hovered/selected lead ───────────────────────────────────────
+  useEffect(() => {
+    if (!highlightId) return
+    const ll = coords[highlightId]
+    if (ll && mapRef.current) {
+      mapRef.current.flyTo([ll.lat, ll.lng], 16, { duration: 0.6 })
+      setTimeout(() => markerById.current.get(highlightId)?.openPopup(), 700)
+    }
+  }, [highlightId, coords])
+
+  // ── Comparable-sales layer (geocode comp addresses on demand) ───────────────
+  useEffect(() => {
+    const L = LRef.current, layer = compLayerRef.current
+    if (!L || !layer || !ready) return
+    layer.clearLayers()
+    if (!showComps) return
+    const ctrl = new AbortController()
+    const comps = leads.flatMap((l) => (l.comps ?? []).map((c) => c)).filter((c) => c?.address)
+    ;(async () => {
+      for (const c of comps) {
+        if (ctrl.signal.aborted) return
+        const ll = await geocodeAddress(c.address)
+        if (ctrl.signal.aborted || !ll) continue
+        L.circleMarker([ll.lat, ll.lng], { radius: 4, color: "#0b0f17", weight: 1, fillColor: "#94a3b8", fillOpacity: 0.85 })
+          .bindTooltip(`Comp · ${money(c.price)}${c.sqft ? ` · ${c.sqft} sqft` : ""}`, { direction: "top" })
+          .addTo(layer)
+      }
+    })()
+    return () => { ctrl.abort() }
+  }, [showComps, leads, ready])
+
+  // ── Distress-density heat overlay (translucent stacked circles) ─────────────
+  useEffect(() => {
+    const L = LRef.current, layer = heatLayerRef.current
+    if (!L || !layer || !ready) return
+    layer.clearLayers()
+    if (!showHeat) return
+    for (const l of leads) {
+      const ll = coords[l.attomId]; if (!ll) continue
+      const weight = 0.4 + (Math.max(0, Math.min(100, l.score ?? 0)) / 100) * 0.6
+      L.circleMarker([ll.lat, ll.lng], { radius: 26, stroke: false, fillColor: "#ef4444", fillOpacity: 0.10 * weight })
+        .addTo(layer)
+    }
+  }, [showHeat, coords, leads, ready])
+
+  // ── In-map address assessment: "is this a good deal?" ───────────────────────
+  const assess = useCallback(async () => {
+    const q = addrInput.trim()
+    if (!q || !mapRef.current || !LRef.current) return
+    setAssessing(true); setAssessment(null)
+    try {
+      const L = LRef.current
+      const ll = (await geocodeAddress(q)) ?? (await geocodePlace(q))
+      if (!ll) { setAssessment({ kind: "notfound", title: "Couldn't locate that address." }); return }
+      mapRef.current.flyTo([ll.lat, ll.lng], 16, { duration: 0.8 })
+      if (searchPinRef.current) searchPinRef.current.setLatLng([ll.lat, ll.lng])
+      else {
+        const icon = L.divIcon({ className: "", html: '<div style="width:18px;height:18px;border-radius:50% 50% 50% 0;background:#4f46e5;border:2px solid #fff;transform:rotate(-45deg);box-shadow:0 1px 4px rgba(0,0,0,.5)"></div>', iconSize: [18, 18], iconAnchor: [9, 18] })
+        searchPinRef.current = L.marker([ll.lat, ll.lng], { icon }).addTo(mapRef.current)
+      }
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "")
+      const nq = norm(q)
+      const streetOf = (a: string) => norm(a.split(",")[0])
+      const hit = leads.find((l) => { const s = streetOf(l.address); return s.length > 4 && (nq.includes(s) || s.includes(nq)) })
+      if (hit) {
+        setAssessment({ kind: "deal", title: `Live deal — score ${hit.score}/100 (${hit.priority})`, lead: hit })
+        markerById.current.get(hit.attomId)?.openPopup()
+      } else {
+        setAssessment({ kind: "none", title: "Not currently flagged as a distressed deal.", note: "This address isn't in the current results — no active foreclosure, tax, or lien signal was found for it. Re-run the area search to refresh; it may simply not be in distress yet." })
+      }
+    } finally { setAssessing(false) }
+  }, [addrInput, leads])
+
+  const pinCount = Object.keys(coords).length
+  const toolBtn = (active: boolean) =>
+    `px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${active ? "bg-indigo-600 border-indigo-500 text-white" : "bg-gray-900/90 border-gray-600/60 text-gray-300 hover:text-white"}`
+
+  return (
+    <div className="bg-gradient-to-br from-slate-900/80 to-indigo-950/40 border border-indigo-500/25 rounded-2xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">🗺️</span>
+          <div>
+            <div className="text-sm font-semibold text-white">Live Distress Map</div>
+            <div className="text-[11px] text-gray-400">
+              {pinCount > 0 ? `${pinCount} of ${leads.length} deals mapped` : "Search an area to drop deal pins"}
+              {geoProgress && geoProgress.done < geoProgress.total ? " · mapping…" : ""}
+              {zoneCount != null ? ` · ${zoneCount} in zone` : ""}
+            </div>
+          </div>
+        </div>
+        <button onClick={() => setCollapsed((c) => !c)} className="text-xs text-indigo-300 hover:text-indigo-200 px-2 py-1 rounded-lg hover:bg-white/5">
+          {collapsed ? "Show map ▾" : "Hide map ▴"}
+        </button>
+      </div>
+
+      {!collapsed && (
+        <div className="relative">
+          {/* Address assessment bar */}
+          <div className="absolute top-3 left-3 z-[1000] flex flex-col gap-2 w-[min(340px,calc(100%-90px))]">
+            <div className="flex gap-1.5">
+              <input value={addrInput} onChange={(e) => setAddrInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") assess() }}
+                placeholder="Check an address — is it a deal?"
+                className="flex-1 bg-gray-900/95 border border-gray-600/60 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 shadow-lg" />
+              <button onClick={assess} disabled={assessing || !addrInput.trim()} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold px-3 rounded-lg shadow-lg">{assessing ? "…" : "Check"}</button>
+            </div>
+            {assessment && (
+              <div className={`rounded-lg px-3 py-2 text-xs shadow-lg border ${assessment.kind === "deal" ? "bg-emerald-950/95 border-emerald-500/40 text-emerald-100" : assessment.kind === "none" ? "bg-amber-950/95 border-amber-500/40 text-amber-100" : "bg-gray-900/95 border-gray-600/50 text-gray-200"}`}>
+                <div className="font-semibold flex items-center gap-1">{assessment.kind === "deal" ? "✅" : assessment.kind === "none" ? "⚠️" : "❓"} {assessment.title}</div>
+                {assessment.lead && (
+                  <div className="mt-1.5 space-y-0.5">
+                    {(assessment.lead.distressSignals ?? []).slice(0, 5).map((s, i) => <div key={i} className="text-emerald-200/90">• {s}</div>)}
+                    {assessment.lead.scoreReason && <div className="mt-1 text-emerald-100/80 italic">{assessment.lead.scoreReason}</div>}
+                    <button onClick={() => onSelectLead?.(assessment.lead!.attomId)} className="mt-1.5 text-emerald-300 hover:text-emerald-200 font-semibold">Open this lead →</button>
+                  </div>
+                )}
+                {assessment.note && <div className="mt-1 text-amber-200/80">{assessment.note}</div>}
+              </div>
+            )}
+          </div>
+
+          {/* Toolbar */}
+          <div className="absolute top-3 right-3 z-[1000] flex flex-wrap gap-1.5 justify-end max-w-[60%]">
+            <button onClick={() => setMode("explore")} className={toolBtn(mode === "explore")}>✋ Explore</button>
+            <button onClick={() => (mode === "draw" ? clearZone() : startDraw())} className={toolBtn(mode === "draw")}>✏️ {mode === "draw" ? "Cancel" : "Draw zone"}</button>
+            <button onClick={() => setMode(mode === "route" ? "explore" : "route")} className={toolBtn(mode === "route")}>🧭 Route</button>
+            <button onClick={() => setShowComps((v) => !v)} className={toolBtn(showComps)}>🏷️ Comps</button>
+            <button onClick={() => setShowHeat((v) => !v)} className={toolBtn(showHeat)}>🔥 Density</button>
+            {zoneCount != null && <button onClick={clearZone} className={toolBtn(false)}>✖ Clear zone</button>}
+          </div>
+
+          {/* Mode hint */}
+          {(mode === "draw" || mode === "route") && (
+            <div className="absolute top-16 right-3 z-[1000] bg-gray-900/95 border border-indigo-500/40 rounded-lg px-3 py-1.5 text-[11px] text-indigo-200 shadow-lg max-w-[60%]">
+              {mode === "draw" ? "Click to add points around your farm area; double-click to finish." : "Tap pins to add door-knock stops, then open the route."}
+            </div>
+          )}
+
+          {/* Route bar */}
+          {mode === "route" && (
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[1000] flex items-center gap-2 bg-gray-900/95 border border-indigo-500/40 rounded-xl px-3 py-2 shadow-xl">
+              <span className="text-xs text-indigo-200 font-semibold">{route.length} stop{route.length === 1 ? "" : "s"}</span>
+              <button onClick={openRoute} disabled={!route.length} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-[11px] font-semibold px-3 py-1 rounded-lg">Open in Google Maps</button>
+              <button onClick={() => setRoute([])} disabled={!route.length} className="text-[11px] text-gray-400 hover:text-white disabled:opacity-40">Clear</button>
+            </div>
+          )}
+
+          {/* Legend */}
+          <div className="absolute bottom-3 right-3 z-[1000] bg-gray-900/90 border border-gray-700/50 rounded-lg px-2.5 py-2 text-[10px] text-gray-300 shadow-lg space-y-1">
+            {(Object.keys(URGENCY_COLOR) as Urgency[]).map((u) => (
+              <div key={u} className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: URGENCY_COLOR[u] }} />
+                <span>{URGENCY_LABEL[u]}</span>
+              </div>
+            ))}
+            <div className="flex items-center gap-1.5 pt-0.5 border-t border-gray-700/50 mt-1">
+              <span className="inline-block w-2.5 h-2.5 rounded-full border-2" style={{ borderColor: "#a78bfa", background: "transparent" }} />
+              <span>Absentee · pin size = score · bubbles cluster</span>
+            </div>
+          </div>
+
+          <div ref={containerRef} className="w-full h-[460px] bg-slate-950" />
+        </div>
+      )}
+
+      <style jsx global>{`
+        .ap-pulse-pin { animation: apPulse 1.4s ease-in-out infinite; }
+        @keyframes apPulse { 0%,100% { stroke-opacity: 1; } 50% { stroke-opacity: 0.25; } }
+        .leaflet-container { background: #0b1220; font-family: inherit; }
+        .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #1f2937; color: #e5e7eb; }
+        .leaflet-popup-content { margin: 10px 12px; }
+      `}</style>
+    </div>
+  )
+}

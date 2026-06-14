@@ -3,6 +3,7 @@
 
 import { runAgent } from "@/lib/claude"
 import type { AttomForeclosureRecord, AttomPropertyBundle } from "@/lib/attom"
+import type { JuniorLien } from "@/lib/free-foreclosure-scraper"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,8 @@ export interface ForeclosureLead {
   city: string
   state: string
   zip: string
+  lat?: number | null                  // geocoded latitude (map pin; filled client-side)
+  lng?: number | null                  // geocoded longitude
   // Owner
   ownerName: string
   ownerName2: string | null
@@ -83,6 +86,17 @@ export interface ForeclosureLead {
   // Deal & outreach (generated on demand)
   dealCalc: DealCalc | null
   outreach: OutreachPackage | null
+  // ── Optional intelligence (enrichment layer; safe to omit) ───────────────
+  rentEstimate?:     number | null     // monthly long-term rent estimate
+  rentToValue?:      number | null     // gross yield % (annual rent / value)
+  valuationSource?:  string | null     // provenance of estimatedValue
+  comps?:            Array<{ address: string; price: number; sqft: number | null; soldDate: string | null }>
+  juniorLiens?:      JuniorLien[]      // hidden secondary liens behind the first
+  occupancy?:        "owner_occupied" | "vacant" | "absentee" | null
+  daysUntilAuction?: number | null     // countdown to trustee sale
+  phones?:           string[]          // multiple phones (skip tracing)
+  emails?:           string[]          // multiple emails (skip tracing)
+  relatives?:        string[]          // associated people (skip tracing)
 }
 
 // ─── Stage mapping ────────────────────────────────────────────────────────────

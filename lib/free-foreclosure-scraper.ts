@@ -15,6 +15,15 @@ import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/sear
 import { searchDirectSources }                                  from "@/lib/direct-foreclosure-sources"
 import { runAgent }                                             from "@/lib/claude"
 
+// A discovered junior/secondary lien behind the first mortgage.
+// These quietly destroy deals — a property with great equity can be a trap
+// if there's a hidden HELOC, tax lien, or judgment behind the first.
+export interface JuniorLien {
+  type:   "heloc" | "second_mortgage" | "tax_lien" | "hoa_lien" | "mechanics_lien" | "judgment" | "other"
+  label:  string          // human-readable, e.g. "IRS federal tax lien"
+  amount: number | null   // dollar amount if parsed from the notice
+}
+
 export interface FreeLead {
   address: string
   city: string
@@ -31,6 +40,18 @@ export interface FreeLead {
   rawSignals: string[]
   phone?: string | null
   email?: string | null
+  // ── Optional intelligence (added by the enrichment layer; safe to omit) ──────
+  emails?:        string[]          // multiple emails from skip tracing
+  phones?:        string[]          // multiple phones from skip tracing
+  relatives?:     string[]          // associated people (skip tracing)
+  contactConfidence?: "high" | "medium" | "low" | null
+  avmConfidence?: number | null     // 0-100 confidence of estimatedValue
+  rentEstimate?:  number | null     // monthly long-term rent estimate (RentCast)
+  valuationSource?: string | null   // e.g. "RentCast AVM", "Zillow Zestimate"
+  comps?:         Array<{ address: string; price: number; sqft: number | null; soldDate: string | null }>
+  juniorLiens?:   JuniorLien[]      // secondary liens discovered in the notice
+  occupancy?:     "owner_occupied" | "vacant" | "absentee" | null
+  daysUntilAuction?: number | null  // computed countdown to the trustee sale
 }
 
 const EXTRACT_SYSTEM = `You are a real estate data extraction specialist with deep knowledge of US foreclosure law.

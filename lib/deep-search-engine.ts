@@ -17,6 +17,7 @@ import { withConcurrency } from "@/lib/geo-tiles"
 import { enrichLeadsWithContact } from "@/lib/contact-enrichment"
 import { extractAddressesFromContent, leadMatchesTarget, type ExtractResult, type LocationTarget } from "@/lib/address-extractor"
 import { fetchCaDojForeclosures, fetchPublicNotices } from "@/lib/legal-notice-sources"
+import { enrichFreeLead } from "@/lib/lead-intelligence"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
 // ── Search location ─────────────────────────────────────────────────────────
@@ -63,6 +64,12 @@ function buildDeepQuerySet(loc: SearchLocation, year: number): string[] {
     `"${loc.county} County" ${loc.state}`
 
   return [
+    // Tier 0 — PRE-NOD early-distress signals (reach owners before the NOD is even
+    // public — zero competition, maximum negotiation window). These surface tax
+    // delinquency, probate, divorce, code violations & vacancy ahead of foreclosure.
+    `${placeLoose} property tax delinquent OR "tax defaulted" ${year} owner list`,
+    `${placeLoose} probate "real property" estate ${year} address sale`,
+    `${placeLoose} code violation OR "vacant property" registry ${year} address`,
     // Tier 1 — trustee-sale / foreclosure legal notices (these carry the property address)
     `${place} "NOTICE OF TRUSTEE'S SALE" ${year} "property address"`,
     `${place} "notice of trustee sale" ${year} property address APN`,
@@ -369,6 +376,14 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   )
 
   const leads    = deduped.slice(0, maxLeads)
+
+  // ── Intelligence pass — zero-cost, never-throws enrichment of every lead ──
+  // Computes auction countdowns, sweeps for junior liens, and surfaces urgency.
+  // Wrapped per-lead so a single bad parse can never break the search.
+  for (const lead of leads) {
+    try { enrichFreeLead(lead) } catch { /* best-effort */ }
+  }
+
   const newLeads = existingAddresses.size > 0
     ? leads.filter(l => {
         const key = l.address.toLowerCase().replace(/[\s,#.-]/g, "")
