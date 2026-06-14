@@ -23,7 +23,7 @@ import type {
   Map as LeafletMap, LayerGroup, CircleMarker, Marker, Polygon, Polyline, LeafletMouseEvent, TileLayer,
 } from "leaflet"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
-import { geocodeLeads, geocodePlace, geocodeAddress, type LatLng } from "@/lib/geocode"
+import { geocodeLeads, geocodePlace, geocodeAddress, reverseGeocode, type LatLng } from "@/lib/geocode"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 
 // ── Urgency model: how a pin is colored & sized ───────────────────────────────
@@ -58,6 +58,23 @@ function money(n: number | null | undefined): string {
   if (Math.abs(n) >= 1000) return "$" + Math.round(n / 1000) + "k"
   return "$" + Math.round(n)
 }
+
+// One-line verdict: is this a good deal? (combines grade + score)
+function dealVerdict(grade: string, score: number): { text: string; color: string } {
+  if (grade === "A" || score >= 80) return { text: "✅ Strong deal", color: "#34d399" }
+  if (grade === "B" || score >= 65) return { text: "👍 Solid deal", color: "#a3e635" }
+  if (grade === "F")                return { text: "🔻 Risky — likely underwater", color: "#f87171" }
+  if (grade === "C" || score >= 45) return { text: "⚠️ Marginal — negotiate hard", color: "#fbbf24" }
+  return { text: "🔻 Weak — low signal", color: "#f87171" }
+}
+
+// Haversine distance in meters (for click-to-analyze nearest-lead lookup).
+function distanceMeters(a: LatLng, b: LatLng): number {
+  const R = 6371000, toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng)
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(s))
+}
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c))
@@ -86,6 +103,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
     ? `<div style="color:#fbbf24;margin-top:2px">⚠ ${lead.juniorLiens.length} junior lien${lead.juniorLiens.length === 1 ? "" : "s"} behind 1st</div>` : ""
   const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat},${ll.lng}`
   const a = analyzeDeal(lead)
+  const verdict = dealVerdict(a.grade, lead.score ?? 0)
   const spreadVal = a.exit.strategy.startsWith("Fix") ? a.flipProfit : a.wholesaleSpread
   const spreadLabel = a.exit.strategy.startsWith("Fix") ? "Flip profit" : "Spread"
   const dealBox = a.hasValue
@@ -102,6 +120,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
       </div>
       <div style="font-weight:600;font-size:12px;line-height:1.3">${escapeHtml(lead.address)}</div>
       <div style="font-size:11px;color:#9ca3af">${escapeHtml([lead.city, lead.state, lead.zip].filter(Boolean).join(", "))}</div>
+      <div style="font-size:11.5px;font-weight:700;margin-top:3px;color:${verdict.color}">${verdict.text}</div>
       ${countdown}${liens}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;margin-top:6px">
         <span style="color:#9ca3af">Stage</span><span>${escapeHtml((lead.foreclosureStage ?? "").replace(/_/g, " ").toLowerCase())}</span>
@@ -182,6 +201,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const leadsRef    = useRef(leads)
   const coordsRef   = useRef<Record<number, LatLng>>({})
   const renderRef   = useRef<() => void>(() => {})
+  const analyzeRef  = useRef<(ll: { lat: number; lng: number }) => void>(() => {})
   const modeRef     = useRef<Mode>("explore")
 
   const [collapsed, setCollapsed]   = useState(false)
@@ -281,6 +301,47 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     window.open(url, "_blank", "noopener")
   }, [route])
 
+  // ── Click-to-analyze: click ANY point (in Explore mode) → show the address &
+  //    whether it's a flagged deal. If a known lead is within ~120m, open it;
+  //    otherwise reverse-geocode the spot and report honestly. ─────────────────
+  const analyzeAtPoint = useCallback(async (pt: { lat: number; lng: number }) => {
+    const L = LRef.current, map = mapRef.current
+    if (!L || !map) return
+    const here: LatLng = { lat: pt.lat, lng: pt.lng }
+
+    let best: { lead: ForeclosureLead; d: number; ll: LatLng } | null = null
+    for (const lead of leadsRef.current) {
+      const ll = coordsRef.current[lead.attomId]; if (!ll) continue
+      const d = distanceMeters(here, ll)
+      if (!best || d < best.d) best = { lead, d, ll }
+    }
+
+    // Clicked on/near a known deal → surface that deal.
+    if (best && best.d <= 120) {
+      map.flyTo([best.ll.lat, best.ll.lng], Math.max(map.getZoom(), 15), { duration: 0.4 })
+      const id = best.lead.attomId
+      const open = () => markerById.current.get(id)?.openPopup()
+      const m = markerById.current.get(id)
+      if (m) open(); else setTimeout(open, 600)
+      return
+    }
+
+    // Empty spot → reverse-geocode and report.
+    const popup = L.popup({ maxWidth: 264 }).setLatLng([here.lat, here.lng])
+      .setContent('<div style="font-family:ui-sans-serif,system-ui;color:#e5e7eb;font-size:12px">📍 Looking up this address…</div>')
+      .openOn(map)
+    const address = await reverseGeocode(here.lat, here.lng)
+    const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${here.lat},${here.lng}`
+    popup.setContent(`
+      <div style="min-width:210px;font-family:ui-sans-serif,system-ui;color:#e5e7eb">
+        <div style="font-weight:700;font-size:12px;line-height:1.3">📍 ${address ? escapeHtml(address) : "Address not found here"}</div>
+        <div style="color:#fbbf24;font-weight:700;font-size:11.5px;margin-top:4px">⚠️ Not a flagged distressed deal</div>
+        <div style="font-size:10.5px;color:#9ca3af;margin-top:3px">No active foreclosure, tax, or lien signal here in the current results — so we can't confirm it's a deal. To underwrite it we need value &amp; debt: search this area, or paste it into the "Check an address" box.</div>
+        <a href="${sv}" target="_blank" rel="noreferrer" style="display:inline-block;margin-top:8px;background:#374151;color:#e5e7eb;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;text-decoration:none">📷 Street View</a>
+      </div>`)
+  }, [])
+  useEffect(() => { analyzeRef.current = analyzeAtPoint }, [analyzeAtPoint])
+
   // ── Initialize Leaflet once ─────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false
@@ -303,13 +364,16 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         if (btn) btn.onclick = () => { const id = Number(btn.getAttribute("data-leadid")); if (Number.isFinite(id)) onSelectRef.current?.(id) }
       })
 
-      // Draw-a-zone: collect vertices on click, finish on double-click.
+      // Map clicks: draw mode adds zone vertices; explore mode analyzes the spot.
       map.on("click", (e: LeafletMouseEvent) => {
-        if (modeRef.current !== "draw") return
-        drawPtsRef.current = [...drawPtsRef.current, { lat: e.latlng.lat, lng: e.latlng.lng }]
-        const pts = drawPtsRef.current.map((p) => [p.lat, p.lng]) as [number, number][]
-        if (guideRef.current) { guideRef.current.setLatLngs(pts) }
-        else { guideRef.current = L.polyline(pts, { color: "#818cf8", weight: 2, dashArray: "4 4" }).addTo(map) }
+        if (modeRef.current === "draw") {
+          drawPtsRef.current = [...drawPtsRef.current, { lat: e.latlng.lat, lng: e.latlng.lng }]
+          const pts = drawPtsRef.current.map((p) => [p.lat, p.lng]) as [number, number][]
+          if (guideRef.current) { guideRef.current.setLatLngs(pts) }
+          else { guideRef.current = L.polyline(pts, { color: "#818cf8", weight: 2, dashArray: "4 4" }).addTo(map) }
+        } else if (modeRef.current === "explore") {
+          analyzeRef.current(e.latlng)
+        }
       })
       map.on("dblclick", () => { if (modeRef.current === "draw") finishZone() })
 
@@ -390,6 +454,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
           weight: l.isAbsentee ? 3 : 1.5,
           fillColor: URGENCY_COLOR[u],
           fillOpacity: 0.9,
+          bubblingMouseEvents: false, // don't trigger the map's click-to-analyze
         })
         m.bindPopup(popupHtml(l, ll, hasSelect), { maxWidth: 268 })
         // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
@@ -639,6 +704,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
               <span className="inline-block w-2.5 h-2.5 rounded-full border-2" style={{ borderColor: "#a78bfa", background: "transparent" }} />
               <span>Absentee · pin size = score · bubbles cluster</span>
             </div>
+            <div className="text-gray-500 pt-0.5">💡 Click a pin for the deal — or any spot to check its address</div>
           </div>
 
           <div ref={containerRef} className="w-full h-[460px] bg-slate-950" />

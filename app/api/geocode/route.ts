@@ -5,9 +5,10 @@
 // Proxying it through our own origin removes the CORS restriction entirely.
 // Census is free, no key, no rate limit, and US-only (perfect for US property).
 //
-// Two modes (one round-trip each):
-//   POST { addresses: string[] } → { results: (LatLng|null)[] }  (lead pins)
-//   POST { place: string }       → { result: LatLng|null }       (fly-to)
+// Modes (one round-trip each):
+//   POST { addresses: string[] }   → { results: (LatLng|null)[] }  (lead pins)
+//   POST { place: string }         → { result: LatLng|null }       (fly-to)
+//   POST { reverse: {lat,lng} }    → { address: string|null }      (click-to-analyze)
 //
 // Geocoding is non-sensitive public data, so this endpoint is intentionally
 // open (the embedded map calls it without admin headers). It never throws.
@@ -83,6 +84,27 @@ async function placeGeocode(place: string): Promise<LatLng | null> {
   return ll
 }
 
+// ── lat/lng → nearest street address via Nominatim reverse ────────────────────
+async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  if (!isValid(lat, lng)) return null
+  const key = `rev:${lat.toFixed(5)},${lng.toFixed(5)}`
+  if (SERVER_CACHE.has(key)) { const v = SERVER_CACHE.get(key) as unknown as string | null; return v }
+
+  const url = `${NOMINATIM.replace("/search", "/reverse")}?lat=${lat}&lon=${lng}&format=json&zoom=18&addressdetails=1`
+  const data = await fetchJson(url, 8000) as { display_name?: string; address?: Record<string, string> } | null
+  const a = data?.address
+  let address: string | null = null
+  if (a) {
+    const street = [a.house_number, a.road].filter(Boolean).join(" ")
+    const city = a.city || a.town || a.village || a.hamlet || a.county
+    address = [street, city, a.state, a.postcode].filter(Boolean).join(", ") || data?.display_name || null
+  } else {
+    address = data?.display_name ?? null
+  }
+  SERVER_CACHE.set(key, address as unknown as LatLng | null)
+  return address
+}
+
 // Run async tasks with bounded concurrency, preserving input order.
 async function mapWithConcurrency<I, O>(items: I[], limit: number, fn: (item: I) => Promise<O>): Promise<O[]> {
   const out = new Array<O>(items.length)
@@ -98,10 +120,16 @@ async function mapWithConcurrency<I, O>(items: I[], limit: number, fn: (item: I)
 }
 
 export async function POST(request: NextRequest) {
-  let body: { addresses?: unknown; place?: unknown }
+  let body: { addresses?: unknown; place?: unknown; reverse?: unknown }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
 
   try {
+    if (body.reverse && typeof body.reverse === "object") {
+      const r = body.reverse as { lat?: number; lng?: number }
+      const address = typeof r.lat === "number" && typeof r.lng === "number" ? await reverseGeocode(r.lat, r.lng) : null
+      return Response.json({ address })
+    }
+
     if (typeof body.place === "string" && body.place.trim()) {
       const result = await placeGeocode(body.place)
       return Response.json({ result })

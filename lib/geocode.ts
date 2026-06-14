@@ -109,6 +109,13 @@ export async function geocodePlace(query: string): Promise<LatLng | null> {
   return null
 }
 
+// ── lat/lng → nearest street address (click-to-analyze) ───────────────────────
+export async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  const data = await postJson({ reverse: { lat, lng } }, 12000) as { address?: string | null } | null
+  return data?.address ?? null
+}
+
 // ── Bulk geocode lead addresses ───────────────────────────────────────────────
 // Resolves cached addresses instantly, then batches the rest through the proxy
 // in chunks so pins appear progressively instead of all at once.
