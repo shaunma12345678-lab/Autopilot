@@ -117,6 +117,13 @@ export interface DealAnalysis {
   estimatedPayoff: number | null   // estimated current mortgage balance
   bankruptcy:      boolean         // possible bankruptcy / automatic stay
   chronic:         boolean         // repeat / chronic distress (high motivation)
+  distressed:      boolean         // is this property genuinely distressed?
+  distressType:    string          // short label, e.g. "Pre-foreclosure (NOD)"
+  cashIn:          number          // estimated capital in (acquisition + rehab)
+  roiPct:          number          // flip cash-on-cash return, %
+  headlineProfit:  number          // the money number for the chosen exit
+  headlineLabel:   string          // "Wholesale spread" | "Flip profit" | …
+  whyGood:         string[]        // specific reasons this is (or isn't) a deal
 }
 
 function money(n: number): string {
@@ -225,6 +232,35 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
     return { key: m.key, label: m.label, value, max: m.max, pct: Math.round((value / m.max) * 100) }
   })
 
+  // Is it distressed, and what kind?
+  const stageRaw = lead.foreclosureStage ?? ""
+  let distressType = ""
+  if (stageRaw === "NOTICE_OF_SALE" || stageRaw === "AUCTION") distressType = "Foreclosure auction"
+  else if (stageRaw === "NOTICE_OF_DEFAULT" || stageRaw === "LIS_PENDENS") distressType = "Pre-foreclosure (NOD)"
+  else if (stageRaw === "PRE_FORECLOSURE") distressType = "Pre-foreclosure"
+  else if (lead.taxDelinquent) distressType = "Tax delinquent"
+  else if (lead.occupancy === "vacant") distressType = "Vacant"
+  else if (chronic) distressType = "Chronic distress"
+  else if ((lead.distressSignals?.length ?? 0) > 0) distressType = "Distress signal"
+  const distressed = Boolean(distressType)
+
+  // Return on investment (flip cash-on-cash: profit ÷ capital in).
+  const cashIn = hasValue ? mao + repairCost : 0
+  const roiPct = cashIn > 0 ? Math.round((flipProfit / cashIn) * 100) : 0
+  const isFlip = exit.strategy.startsWith("Fix")
+  const headlineProfit = isFlip ? flipProfit : wholesaleSpread
+  const headlineLabel = isFlip ? "Flip profit" : "Wholesale spread"
+
+  // Specific "why it's a good deal" bullets (strongest first, max 5).
+  const whyGood: string[] = []
+  if (hasValue && equityPercent >= 25) whyGood.push(`${equityPercent}% equity (~${money(equityAvailable)}) — real room to negotiate`)
+  if (hasValue && headlineProfit > 0) whyGood.push(isFlip ? `~${money(flipProfit)} flip profit (${roiPct}% ROI)` : `~${money(wholesaleSpread)} assignment spread, little capital`)
+  if (typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0 && lead.daysUntilAuction <= 30) whyGood.push(`Auction in ${lead.daysUntilAuction}d — seller is under real pressure`)
+  if (lead.isAbsentee || lead.occupancy === "absentee") whyGood.push("Absentee / out-of-state owner — easier to let go")
+  if (lead.occupancy === "vacant") whyGood.push("Vacant — no one to evict, faster close")
+  if (chronic) whyGood.push("Repeat/chronic distress — among the most motivated sellers")
+  if (whyGood.length < 4) for (const s of lead.distressSignals ?? []) { if (whyGood.length >= 5) break; whyGood.push(s) }
+
   // Narrative.
   const stageTxt = (lead.foreclosureStage ?? "").replace(/_/g, " ").toLowerCase()
   const parts: string[] = []
@@ -242,6 +278,7 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
     equityAvailable, equityPercent, wholesaleSpread, flipProfit,
     grade, motivation, exit, risks, scoreParts, narrative,
     debtEstimated, estimatedPayoff: payoff?.balance ?? null, bankruptcy, chronic,
+    distressed, distressType, cashIn, roiPct, headlineProfit, headlineLabel, whyGood,
   }
 }
 

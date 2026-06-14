@@ -44,17 +44,35 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
           <div className="text-xl font-extrabold text-white">{a.hasValue ? fmtMoney(a.mao) : "—"}</div>
         </div>
         <div className="ml-auto text-right">
-          <div className="text-[11px] text-gray-500">{a.exit.strategy.startsWith("Fix") ? "Flip profit" : "Wholesale spread"}</div>
-          <div className={`text-lg font-bold ${(a.exit.strategy.startsWith("Fix") ? a.flipProfit : a.wholesaleSpread) > 0 ? "text-emerald-400" : "text-red-400"}`}>
-            {a.hasValue ? fmtMoney(a.exit.strategy.startsWith("Fix") ? a.flipProfit : a.wholesaleSpread) : "—"}
+          <div className="text-[11px] text-gray-500">{a.headlineLabel}{a.headlineLabel === "Flip profit" && a.hasValue ? ` · ${a.roiPct}% ROI` : ""}</div>
+          <div className={`text-lg font-bold ${a.headlineProfit > 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {a.hasValue ? fmtMoney(a.headlineProfit) : "—"}
           </div>
         </div>
+      </div>
+
+      {/* Distressed? */}
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-gray-500">Distressed:</span>
+        {a.distressed
+          ? <span className="text-red-300 font-semibold">✓ Yes — {a.distressType}</span>
+          : <span className="text-gray-400">not flagged</span>}
       </div>
 
       {(a.chronic || a.debtEstimated) && (
         <div className="flex flex-wrap gap-1.5">
           {a.chronic && <span className="text-[10px] px-2 py-0.5 rounded-lg bg-fuchsia-500/15 border border-fuchsia-500/30 text-fuchsia-300">🔁 Repeat/chronic distress — highly motivated</span>}
           {a.debtEstimated && <span className="text-[10px] px-2 py-0.5 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-300">≈ Debt estimated from mortgage payoff</span>}
+        </div>
+      )}
+
+      {/* Why it's a good deal */}
+      {a.whyGood.length > 0 && (
+        <div className="bg-emerald-950/30 border border-emerald-500/25 rounded-lg px-3 py-2">
+          <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wide mb-1">Why it&apos;s a good deal</div>
+          <div className="space-y-0.5">
+            {a.whyGood.map((w, i) => <div key={i} className="text-[11px] text-emerald-100/90">✓ {w}</div>)}
+          </div>
         </div>
       )}
 
@@ -84,7 +102,7 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
         {stat("Repairs", fmtMoney(a.repairCost), "text-orange-300")}
         {stat("Total debt", fmtMoney(a.totalDebt), "text-red-300")}
         {stat("Equity", a.hasValue ? `${a.equityPercent}%` : "—", "text-emerald-300")}
-        {stat("Equity $", a.hasValue ? fmtMoney(a.equityAvailable) : "—", "text-emerald-300")}
+        {stat("Flip ROI", a.hasValue ? `${a.roiPct}%` : "—", a.roiPct >= 15 ? "text-emerald-300" : "text-gray-300")}
         {stat("Motivation", `${a.motivation}/100`, a.motivation >= 70 ? "text-red-300" : a.motivation >= 45 ? "text-amber-300" : "text-gray-300")}
       </div>
 

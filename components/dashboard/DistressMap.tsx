@@ -95,7 +95,6 @@ function pointInPolygon(lat: number, lng: number, poly: LatLng[]): boolean {
 // Popup deal card with an optional "View in list" button and a Street View link.
 function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): string {
   const u = leadUrgency(lead)
-  const signals = (lead.distressSignals ?? []).slice(0, 4)
   const countdown =
     typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0
       ? `<div style="color:#fca5a5;font-weight:600;margin-top:2px">🔨 Auction in ${lead.daysUntilAuction} day${lead.daysUntilAuction === 1 ? "" : "s"}</div>` : ""
@@ -104,40 +103,56 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
   const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat},${ll.lng}`
   const a = analyzeDeal(lead)
   const verdict = dealVerdict(a.grade, lead.score ?? 0)
-  const spreadVal = a.exit.strategy.startsWith("Fix") ? a.flipProfit : a.wholesaleSpread
-  const spreadLabel = a.exit.strategy.startsWith("Fix") ? "Flip profit" : "Spread"
+  const profitColor = a.headlineProfit > 0 ? "#34d399" : "#f87171"
+
+  // Is it distressed?
+  const distressLine = `<div style="font-size:11px;margin-top:4px"><span style="color:#9ca3af">Distressed:</span> ${a.distressed ? `<span style="color:#fca5a5;font-weight:700">✓ Yes — ${escapeHtml(a.distressType)}</span>` : '<span style="color:#9ca3af">not flagged</span>'}</div>`
+
+  // The money: how much you could make + ROI.
+  const moneyBox = a.hasValue
+    ? `<div style="margin-top:6px;background:#0c1f17;border:1px solid #10b98144;border-radius:8px;padding:7px 9px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span style="color:#9ca3af;font-size:11px">${a.headlineLabel}</span>
+          <span style="font-weight:800;font-size:15px;color:${profitColor}">${fmtMoney(a.headlineProfit)}</span>
+        </div>
+        ${a.headlineLabel === "Flip profit" ? `<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:1px"><span style="color:#9ca3af">ROI (cash-on-cash)</span><span style="font-weight:700;color:${a.roiPct > 0 ? "#34d399" : "#f87171"}">${a.roiPct}%</span></div>` : ""}
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:1px"><span style="color:#9ca3af">Max offer (MAO)</span><span style="font-weight:700">${fmtMoney(a.mao)}</span></div>
+        <div style="font-size:10.5px;color:#a5b4fc;margin-top:3px">🎯 ${escapeHtml(a.exit.strategy)} · grade ${a.grade} · motivation ${a.motivation}/100</div>
+      </div>`
+    : `<div style="margin-top:6px;font-size:10.5px;color:#fcd34d;background:#1f1a0c;border:1px solid #f59e0b33;border-radius:8px;padding:6px 8px">No value estimate — run Live Valuation to size profit & ROI.</div>`
+
   const flagBadges = [
     a.chronic ? '<span style="color:#e879f9">🔁 chronic distress</span>' : "",
     a.bankruptcy ? '<span style="color:#f87171">⚖️ poss. bankruptcy</span>' : "",
     a.debtEstimated ? '<span style="color:#7dd3fc">≈ est. debt</span>' : "",
   ].filter(Boolean).join(" · ")
   const flagsLine = flagBadges ? `<div style="font-size:10px;margin-top:4px">${flagBadges}</div>` : ""
-  const dealBox = a.hasValue
-    ? `<div style="margin-top:6px;background:#111827;border:1px solid #4f46e533;border-radius:8px;padding:6px 8px">
-        <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#9ca3af">MAO (70%)</span><span style="font-weight:700">${fmtMoney(a.mao)}</span></div>
-        <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#9ca3af">${spreadLabel}</span><span style="font-weight:700;color:${spreadVal > 0 ? "#34d399" : "#f87171"}">${fmtMoney(spreadVal)}</span></div>
-        <div style="font-size:10.5px;color:#a5b4fc;margin-top:2px">🎯 ${escapeHtml(a.exit.strategy)} · grade ${a.grade} · motiv ${a.motivation}</div>
-      </div>` : ""
+
+  const why = a.whyGood.slice(0, 4)
+  const whyBox = why.length
+    ? `<div style="margin-top:6px"><div style="font-size:10px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.04em">Why it's a deal</div><div style="margin-top:2px;font-size:10.5px;color:#d1fae5">${why.map((s) => "✓ " + escapeHtml(s)).join("<br/>")}</div></div>`
+    : ""
+
   return `
-    <div style="min-width:212px;font-family:ui-sans-serif,system-ui;color:#e5e7eb">
+    <div style="min-width:220px;max-width:280px;font-family:ui-sans-serif,system-ui;color:#e5e7eb">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
         <span style="background:${URGENCY_COLOR[u]};color:#111;font-weight:700;font-size:11px;padding:1px 6px;border-radius:6px">${lead.score ?? 0}</span>
         <span style="font-weight:600;font-size:12px">${escapeHtml(lead.priority ?? "")}</span>
       </div>
-      <div style="font-weight:600;font-size:12px;line-height:1.3">${escapeHtml(lead.address)}</div>
+      <div style="font-weight:700;font-size:12.5px;line-height:1.3">${escapeHtml(lead.address)}</div>
       <div style="font-size:11px;color:#9ca3af">${escapeHtml([lead.city, lead.state, lead.zip].filter(Boolean).join(", "))}</div>
-      <div style="font-size:11.5px;font-weight:700;margin-top:3px;color:${verdict.color}">${verdict.text}</div>
-      ${countdown}${liens}
+      <div style="font-size:12px;font-weight:800;margin-top:3px;color:${verdict.color}">${verdict.text}</div>
+      ${distressLine}${countdown}${liens}
+      ${moneyBox}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;margin-top:6px">
-        <span style="color:#9ca3af">Stage</span><span>${escapeHtml((lead.foreclosureStage ?? "").replace(/_/g, " ").toLowerCase())}</span>
         <span style="color:#9ca3af">Est. value</span><span>${money(lead.estimatedValue)}</span>
-        <span style="color:#9ca3af">Equity</span><span>${lead.equityPercent != null ? Math.round(lead.equityPercent) + "%" : "—"}</span>
-        <span style="color:#9ca3af">Default</span><span>${money(lead.defaultAmount)}</span>
+        <span style="color:#9ca3af">Equity</span><span>${a.hasValue ? a.equityPercent + "%" : (lead.equityPercent != null ? Math.round(lead.equityPercent) + "%" : "—")}</span>
+        <span style="color:#9ca3af">Total debt</span><span>${money(a.totalDebt)}</span>
+        <span style="color:#9ca3af">Repairs</span><span>${a.hasValue ? money(a.repairCost) : "—"}</span>
       </div>
-      ${dealBox}${flagsLine}
-      ${signals.length ? `<div style="margin-top:6px;font-size:10.5px;color:#cbd5e1">${signals.map((s) => "• " + escapeHtml(s)).join("<br/>")}</div>` : ""}
+      ${whyBox}${flagsLine}
       <div style="display:flex;gap:6px;margin-top:8px">
-        ${withListButton ? `<button data-leadid="${lead.attomId}" style="flex:1;background:#4f46e5;color:#fff;border:0;border-radius:6px;padding:5px 0;font-size:11px;font-weight:600;cursor:pointer">View in list →</button>` : ""}
+        ${withListButton ? `<button data-leadid="${lead.attomId}" style="flex:1;background:#4f46e5;color:#fff;border:0;border-radius:6px;padding:5px 0;font-size:11px;font-weight:600;cursor:pointer">Full analysis →</button>` : ""}
         <a href="${sv}" target="_blank" rel="noreferrer" style="flex:1;text-align:center;background:#374151;color:#e5e7eb;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;text-decoration:none">📷 Street View</a>
       </div>
     </div>`
@@ -720,7 +735,6 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         fetch("/api/leads/notify", { method: "POST", headers: { "Content-Type": "application/json", ...(apiHeaders ?? {}) }, body: JSON.stringify({ phone: cfg.phone, message: msg }) }).catch(() => {})
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leads, geoProgress, ready, savedZones, apiHeaders])
 
   // ── In-map address assessment: "is this a good deal?" ───────────────────────
@@ -787,13 +801,23 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
             {assessment && (
               <div className={`rounded-lg px-3 py-2 text-xs shadow-lg border ${assessment.kind === "deal" ? "bg-emerald-950/95 border-emerald-500/40 text-emerald-100" : assessment.kind === "none" ? "bg-amber-950/95 border-amber-500/40 text-amber-100" : "bg-gray-900/95 border-gray-600/50 text-gray-200"}`}>
                 <div className="font-semibold flex items-center gap-1">{assessment.kind === "deal" ? "✅" : assessment.kind === "none" ? "⚠️" : "❓"} {assessment.title}</div>
-                {assessment.lead && (
-                  <div className="mt-1.5 space-y-0.5">
-                    {(assessment.lead.distressSignals ?? []).slice(0, 5).map((s, i) => <div key={i} className="text-emerald-200/90">• {s}</div>)}
-                    {assessment.lead.scoreReason && <div className="mt-1 text-emerald-100/80 italic">{assessment.lead.scoreReason}</div>}
-                    <button onClick={() => onSelectLead?.(assessment.lead!.attomId)} className="mt-1.5 text-emerald-300 hover:text-emerald-200 font-semibold">Open this lead →</button>
-                  </div>
-                )}
+                {assessment.lead && (() => {
+                  const da = analyzeDeal(assessment.lead!)
+                  return (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="text-emerald-200/90">Distressed: <span className="font-semibold text-red-200">✓ Yes — {da.distressType || "signal found"}</span></div>
+                      {da.hasValue && (
+                        <div className="flex items-center justify-between bg-emerald-900/40 rounded px-2 py-1">
+                          <span className="text-emerald-200/80">{da.headlineLabel}{da.headlineLabel === "Flip profit" ? ` · ${da.roiPct}% ROI` : ""}</span>
+                          <span className={`font-bold ${da.headlineProfit > 0 ? "text-emerald-300" : "text-red-300"}`}>{fmtMoney(da.headlineProfit)}</span>
+                        </div>
+                      )}
+                      {da.whyGood.slice(0, 4).map((s, i) => <div key={i} className="text-emerald-200/90">✓ {s}</div>)}
+                      {!da.hasValue && <div className="text-amber-200/80">No value estimate — run Live Valuation to size profit & ROI.</div>}
+                      <button onClick={() => onSelectLead?.(assessment.lead!.attomId)} className="text-emerald-300 hover:text-emerald-200 font-semibold">Open full analysis →</button>
+                    </div>
+                  )
+                })()}
                 {assessment.note && <div className="mt-1 text-amber-200/80">{assessment.note}</div>}
               </div>
             )}
