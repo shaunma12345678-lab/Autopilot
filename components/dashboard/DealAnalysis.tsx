@@ -51,6 +51,13 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
         </div>
       </div>
 
+      {(a.chronic || a.debtEstimated) && (
+        <div className="flex flex-wrap gap-1.5">
+          {a.chronic && <span className="text-[10px] px-2 py-0.5 rounded-lg bg-fuchsia-500/15 border border-fuchsia-500/30 text-fuchsia-300">🔁 Repeat/chronic distress — highly motivated</span>}
+          {a.debtEstimated && <span className="text-[10px] px-2 py-0.5 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-300">≈ Debt estimated from mortgage payoff</span>}
+        </div>
+      )}
+
       {!a.hasValue && (
         <div className="text-[11px] text-amber-300/90 bg-amber-950/40 border border-amber-500/25 rounded-lg px-3 py-2">
           No value estimate for this property yet — numbers are partial. Run <span className="font-semibold">Live Valuation</span> to fully underwrite it.

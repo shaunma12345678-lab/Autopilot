@@ -110,10 +110,11 @@ export async function geocodePlace(query: string): Promise<LatLng | null> {
 }
 
 // ── lat/lng → nearest street address (click-to-analyze) ───────────────────────
-export async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
-  const data = await postJson({ reverse: { lat, lng } }, 12000) as { address?: string | null } | null
-  return data?.address ?? null
+export interface ReverseResult { address: string | null; kind: "parcel" | "road" | "area" }
+export async function reverseGeocode(lat: number, lng: number): Promise<ReverseResult> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { address: null, kind: "area" }
+  const data = await postJson({ reverse: { lat, lng } }, 12000) as ReverseResult | null
+  return { address: data?.address ?? null, kind: data?.kind ?? "area" }
 }
 
 // ── Bulk geocode lead addresses ───────────────────────────────────────────────

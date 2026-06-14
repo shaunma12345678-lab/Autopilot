@@ -50,14 +50,29 @@ async function fetchJson(url: string, ms: number): Promise<unknown | null> {
 }
 
 // ── A single street address → lat/lng via U.S. Census ─────────────────────────
-async function censusGeocode(oneLine: string): Promise<LatLng | null> {
+// Forward-geocode a full street address via Nominatim (fallback to Census).
+async function nominatimAddress(oneLine: string): Promise<LatLng | null> {
+  const url = `${NOMINATIM}?q=${encodeURIComponent(oneLine)}&countrycodes=us&format=json&limit=1&addressdetails=1`
+  const arr = await fetchJson(url, 8000) as Array<{ lat: string; lon: string; class?: string }> | null
+  const first = Array.isArray(arr) ? arr[0] : null
+  // Reject results that resolved only to a road/neighborhood, not a building.
+  if (first && first.class === "highway") return null
+  const lat = first ? parseFloat(first.lat) : NaN
+  const lng = first ? parseFloat(first.lon) : NaN
+  return isValid(lat, lng) ? { lat, lng } : null
+}
+
+async function censusGeocode(oneLine: string, allowFallback = false): Promise<LatLng | null> {
   const key = "addr:" + oneLine.toLowerCase()
   if (SERVER_CACHE.has(key)) return SERVER_CACHE.get(key) ?? null
 
   const url = `${CENSUS}?address=${encodeURIComponent(oneLine)}&benchmark=Public_AR_Current&format=json`
   const data = await fetchJson(url, 8000) as { result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number } }> } } | null
   const m = data?.result?.addressMatches?.[0]?.coordinates
-  const ll = m && isValid(m.y, m.x) ? { lat: m.y, lng: m.x } : null
+  let ll = m && isValid(m.y, m.x) ? { lat: m.y, lng: m.x } : null
+  // Census is precise but US-parcel-only; fall back to Nominatim on a miss so we
+  // don't drop pins for valid addresses Census simply doesn't have.
+  if (!ll && allowFallback) ll = await nominatimAddress(oneLine)
   SERVER_CACHE.set(key, ll)
   return ll
 }
@@ -85,14 +100,27 @@ async function placeGeocode(place: string): Promise<LatLng | null> {
 }
 
 // ── lat/lng → nearest street address via Nominatim reverse ────────────────────
-async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
-  if (!isValid(lat, lng)) return null
-  const key = `rev:${lat.toFixed(5)},${lng.toFixed(5)}`
-  if (SERVER_CACHE.has(key)) { const v = SERVER_CACHE.get(key) as unknown as string | null; return v }
+// Returns the address plus a `kind` so the UI can be honest: clicking a freeway
+// or open land doesn't have a real property address.
+interface ReverseResult { address: string | null; kind: "parcel" | "road" | "area" }
+const REV_CACHE = new Map<string, ReverseResult>()
 
-  const url = `${NOMINATIM.replace("/search", "/reverse")}?lat=${lat}&lon=${lng}&format=json&zoom=18&addressdetails=1`
-  const data = await fetchJson(url, 8000) as { display_name?: string; address?: Record<string, string> } | null
+async function reverseGeocode(lat: number, lng: number): Promise<ReverseResult> {
+  if (!isValid(lat, lng)) return { address: null, kind: "area" }
+  const key = `${lat.toFixed(5)},${lng.toFixed(5)}`
+  const cached = REV_CACHE.get(key)
+  if (cached) return cached
+
+  const base = NOMINATIM.replace("/search", "/reverse")
+  const url = `${base}?lat=${lat}&lon=${lng}&format=json&zoom=18&addressdetails=1`
+  let data = await fetchJson(url, 8000) as { display_name?: string; class?: string; category?: string; address?: Record<string, string> } | null
+  if (!data) data = await fetchJson(url, 8000) as typeof data // one retry on transient failure
+
   const a = data?.address
+  const cls = data?.class ?? data?.category
+  const hasHouse = Boolean(a?.house_number)
+  const kind: ReverseResult["kind"] = hasHouse ? "parcel" : cls === "highway" ? "road" : "area"
+
   let address: string | null = null
   if (a) {
     const street = [a.house_number, a.road].filter(Boolean).join(" ")
@@ -101,8 +129,9 @@ async function reverseGeocode(lat: number, lng: number): Promise<string | null> 
   } else {
     address = data?.display_name ?? null
   }
-  SERVER_CACHE.set(key, address as unknown as LatLng | null)
-  return address
+  const result: ReverseResult = { address, kind }
+  REV_CACHE.set(key, result)
+  return result
 }
 
 // Run async tasks with bounded concurrency, preserving input order.
@@ -126,8 +155,9 @@ export async function POST(request: NextRequest) {
   try {
     if (body.reverse && typeof body.reverse === "object") {
       const r = body.reverse as { lat?: number; lng?: number }
-      const address = typeof r.lat === "number" && typeof r.lng === "number" ? await reverseGeocode(r.lat, r.lng) : null
-      return Response.json({ address })
+      if (typeof r.lat !== "number" || typeof r.lng !== "number") return Response.json({ address: null, kind: "area" })
+      const rev = await reverseGeocode(r.lat, r.lng)
+      return Response.json(rev)
     }
 
     if (typeof body.place === "string" && body.place.trim()) {
@@ -137,7 +167,11 @@ export async function POST(request: NextRequest) {
 
     if (Array.isArray(body.addresses)) {
       const addresses = body.addresses.slice(0, 400).map((a) => (typeof a === "string" ? a.trim() : ""))
-      const results = await mapWithConcurrency(addresses, 12, (a) => (a ? censusGeocode(a) : Promise.resolve(null)))
+      // Small batches (the "check this address" box / single lookups) get the
+      // Nominatim fallback for max accuracy; bulk pin geocoding stays Census-only
+      // to respect Nominatim's rate limits.
+      const allowFallback = addresses.length <= 3
+      const results = await mapWithConcurrency(addresses, 12, (a) => (a ? censusGeocode(a, allowFallback) : Promise.resolve(null)))
       return Response.json({ results })
     }
 

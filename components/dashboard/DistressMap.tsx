@@ -106,6 +106,12 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
   const verdict = dealVerdict(a.grade, lead.score ?? 0)
   const spreadVal = a.exit.strategy.startsWith("Fix") ? a.flipProfit : a.wholesaleSpread
   const spreadLabel = a.exit.strategy.startsWith("Fix") ? "Flip profit" : "Spread"
+  const flagBadges = [
+    a.chronic ? '<span style="color:#e879f9">🔁 chronic distress</span>' : "",
+    a.bankruptcy ? '<span style="color:#f87171">⚖️ poss. bankruptcy</span>' : "",
+    a.debtEstimated ? '<span style="color:#7dd3fc">≈ est. debt</span>' : "",
+  ].filter(Boolean).join(" · ")
+  const flagsLine = flagBadges ? `<div style="font-size:10px;margin-top:4px">${flagBadges}</div>` : ""
   const dealBox = a.hasValue
     ? `<div style="margin-top:6px;background:#111827;border:1px solid #4f46e533;border-radius:8px;padding:6px 8px">
         <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#9ca3af">MAO (70%)</span><span style="font-weight:700">${fmtMoney(a.mao)}</span></div>
@@ -128,7 +134,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
         <span style="color:#9ca3af">Equity</span><span>${lead.equityPercent != null ? Math.round(lead.equityPercent) + "%" : "—"}</span>
         <span style="color:#9ca3af">Default</span><span>${money(lead.defaultAmount)}</span>
       </div>
-      ${dealBox}
+      ${dealBox}${flagsLine}
       ${signals.length ? `<div style="margin-top:6px;font-size:10.5px;color:#cbd5e1">${signals.map((s) => "• " + escapeHtml(s)).join("<br/>")}</div>` : ""}
       <div style="display:flex;gap:6px;margin-top:8px">
         ${withListButton ? `<button data-leadid="${lead.attomId}" style="flex:1;background:#4f46e5;color:#fff;border:0;border-radius:6px;padding:5px 0;font-size:11px;font-weight:600;cursor:pointer">View in list →</button>` : ""}
@@ -326,18 +332,26 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       return
     }
 
-    // Empty spot → reverse-geocode and report.
+    // Empty spot → reverse-geocode and report (honest about road/open land).
     const popup = L.popup({ maxWidth: 264 }).setLatLng([here.lat, here.lng])
       .setContent('<div style="font-family:ui-sans-serif,system-ui;color:#e5e7eb;font-size:12px">📍 Looking up this address…</div>')
       .openOn(map)
-    const address = await reverseGeocode(here.lat, here.lng)
+    const { address, kind } = await reverseGeocode(here.lat, here.lng)
     const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${here.lat},${here.lng}`
+    const heading = kind === "parcel"
+      ? `📍 ${escapeHtml(address || "")}`
+      : kind === "road"
+      ? `🛣️ ${escapeHtml(address || "A road / freeway")} — not a property`
+      : address ? `📍 Near ${escapeHtml(address)}` : "📍 No address found at this exact spot"
+    const guidance = kind === "parcel"
+      ? "Not in the current distress results — no active foreclosure, tax, or lien signal. To underwrite it we need value &amp; debt: search this area or paste it into “Check an address”."
+      : "Click directly on a house/parcel (zoom in for accuracy) — this point is on a road or open land, which has no property address."
     popup.setContent(`
       <div style="min-width:210px;font-family:ui-sans-serif,system-ui;color:#e5e7eb">
-        <div style="font-weight:700;font-size:12px;line-height:1.3">📍 ${address ? escapeHtml(address) : "Address not found here"}</div>
+        <div style="font-weight:700;font-size:12px;line-height:1.3">${heading}</div>
         <div style="color:#fbbf24;font-weight:700;font-size:11.5px;margin-top:4px">⚠️ Not a flagged distressed deal</div>
-        <div style="font-size:10.5px;color:#9ca3af;margin-top:3px">No active foreclosure, tax, or lien signal here in the current results — so we can't confirm it's a deal. To underwrite it we need value &amp; debt: search this area, or paste it into the "Check an address" box.</div>
-        <a href="${sv}" target="_blank" rel="noreferrer" style="display:inline-block;margin-top:8px;background:#374151;color:#e5e7eb;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;text-decoration:none">📷 Street View</a>
+        <div style="font-size:10.5px;color:#9ca3af;margin-top:3px">${guidance}</div>
+        ${kind === "parcel" ? `<a href="${sv}" target="_blank" rel="noreferrer" style="display:inline-block;margin-top:8px;background:#374151;color:#e5e7eb;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;text-decoration:none">📷 Street View</a>` : ""}
       </div>`)
   }, [])
   useEffect(() => { analyzeRef.current = analyzeAtPoint }, [analyzeAtPoint])

@@ -33,6 +33,69 @@ const SCORE_META: { key: keyof ScoreBreakdown; label: string; max: number }[] = 
 export interface RiskFlag { label: string; severity: "high" | "medium" }
 export interface ScorePart { key: keyof ScoreBreakdown; label: string; value: number; max: number; pct: number }
 
+export interface PayoffEstimate { balance: number; rate: number; originalLoan: number; monthsPaid: number }
+
+// Approx U.S. average 30-yr fixed mortgage rate by purchase year (%).
+function avgRateForYear(year: number): number {
+  if (year >= 2023) return 6.8
+  if (year >= 2022) return 5.3
+  if (year >= 2020) return 3.1
+  if (year >= 2018) return 4.5
+  if (year >= 2015) return 3.9
+  if (year >= 2010) return 4.6
+  if (year >= 2007) return 6.3
+  if (year >= 2003) return 5.8
+  if (year >= 1999) return 7.4
+  return 8.0
+}
+
+// #1 Mortgage payoff estimator — amortize the original loan to "today" so equity
+// is usable even when no AVM or recorded lien total is available.
+export function estimateLoanPayoff(lead: ForeclosureLead): PayoffEstimate | null {
+  const price = lead.purchasePrice
+  if (!price || price <= 0) return null
+
+  let year: number | null = null
+  if (lead.purchaseDate) { const d = new Date(lead.purchaseDate); if (!Number.isNaN(d.getTime())) year = d.getFullYear() }
+  if (!year && lead.yearsOwned) year = new Date().getFullYear() - lead.yearsOwned
+  if (!year || year < 1970 || year > new Date().getFullYear()) return null
+
+  const monthsPaid = Math.max(0, Math.round((Date.now() - new Date(year, 0, 1).getTime()) / (1000 * 60 * 60 * 24 * 30.44)))
+  const originalLoan = Math.round(price * 0.8) // assume 80% LTV at purchase
+  const ratePct = avgRateForYear(year)
+  const r = ratePct / 100 / 12
+  const n = 360
+  const k = Math.min(monthsPaid, n)
+  if (k >= n) return { balance: 0, rate: ratePct, originalLoan, monthsPaid }
+  const f = Math.pow(1 + r, n), g = Math.pow(1 + r, k)
+  const balance = r > 0 ? Math.max(0, Math.round((originalLoan * (f - g)) / (f - 1))) : Math.round(originalLoan * (1 - k / n))
+  return { balance, rate: ratePct, originalLoan, monthsPaid }
+}
+
+function leadText(lead: ForeclosureLead): string {
+  return [lead.distressSignals?.join(" "), lead.lender, lead.foreclosureType, lead.scoreReason]
+    .filter(Boolean).join(" ").toLowerCase()
+}
+
+// #3 Bankruptcy / automatic-stay detection (signal-based, not PACER-confirmed).
+export function detectBankruptcy(lead: ForeclosureLead): boolean {
+  return /bankrupt|chapter\s?(7|11|13)|automatic stay|341 meeting/.test(leadText(lead))
+}
+
+// #2 Repeat / chronic distress — a prior default, or 3+ distress categories
+// stacked. Chronic distress = the most motivated sellers.
+export function detectChronicDistress(lead: ForeclosureLead): boolean {
+  const t = leadText(lead)
+  if (/\b(prior|second|re-?filed|reinstat|previously|repeat|again)\b/.test(t) && /default|foreclos|nod\b/.test(t)) return true
+  let cats = 0
+  if (lead.foreclosureStage || /foreclos|notice of default|lis pendens|trustee sale|\bnod\b|\bnos\b/.test(t)) cats++
+  if (lead.taxDelinquent || /tax delinquen|tax default|back taxes/.test(t)) cats++
+  if ((lead.juniorLiens?.length ?? 0) > 0 || /\blien\b/.test(t)) cats++
+  if (/code violation|vacant|condemn/.test(t)) cats++
+  if (/probate|deceased|estate|divorce/.test(t)) cats++
+  return cats >= 3
+}
+
 export interface DealAnalysis {
   hasValue:        boolean
   arv:             number          // after-repair / current value estimate
@@ -50,6 +113,10 @@ export interface DealAnalysis {
   risks:           RiskFlag[]
   scoreParts:      ScorePart[]
   narrative:       string
+  debtEstimated:   boolean         // totalDebt came from the payoff estimator
+  estimatedPayoff: number | null   // estimated current mortgage balance
+  bankruptcy:      boolean         // possible bankruptcy / automatic stay
+  chronic:         boolean         // repeat / chronic distress (high motivation)
 }
 
 function money(n: number): string {
@@ -78,9 +145,13 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
   const arv = lead.avmValue ?? lead.estimatedValue ?? 0
   const hasValue = arv > 0
 
-  const totalDebt = lead.totalLiens > 0
+  const recordedDebt = lead.totalLiens > 0
     ? lead.totalLiens
     : (lead.defaultAmount ?? 0) + (lead.juniorLiens?.reduce((s, l) => s + (l.amount ?? 0), 0) ?? 0)
+  // #1: when nothing is recorded, fall back to the amortized payoff estimate.
+  const payoff = estimateLoanPayoff(lead)
+  const debtEstimated = recordedDebt <= 0 && payoff !== null
+  const totalDebt = recordedDebt > 0 ? recordedDebt : (payoff?.balance ?? 0)
 
   const repairCost = hasValue ? repairCostFor(lead, repairLevel) : 0
   const mao = hasValue ? Math.max(0, Math.round(arv * 0.7 - repairCost - ASSIGNMENT_FEE)) : 0
@@ -109,7 +180,13 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
     motivation += lead.daysUntilAuction <= 14 ? 15 : lead.daysUntilAuction <= 30 ? 8 : 3
   }
   if (lead.taxDelinquent) motivation += 6
+  // #2: repeat/chronic distress = the most motivated sellers.
+  const chronic = detectChronicDistress(lead)
+  if (chronic) motivation += 10
   motivation = Math.max(0, Math.min(100, Math.round(motivation)))
+
+  // #3: possible bankruptcy / automatic stay.
+  const bankruptcy = detectBankruptcy(lead)
 
   // Exit-strategy recommendation.
   let exit: DealAnalysis["exit"]
@@ -140,6 +217,8 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
   const superLien = lead.juniorLiens?.some((l) => l.type === "hoa_lien" || l.type === "tax_lien")
   if (superLien) risks.push({ label: "HOA/tax lien — can survive foreclosure", severity: "high" })
   if ((lead.juniorLiens?.length ?? 0) >= 2) risks.push({ label: `${lead.juniorLiens!.length} junior liens stacked behind 1st`, severity: "medium" })
+  if (bankruptcy) risks.push({ label: "⚖️ Possible bankruptcy — automatic stay may block foreclosure; verify", severity: "high" })
+  if (debtEstimated) risks.push({ label: "Debt is estimated from payoff (no recorded liens) — verify balance", severity: "medium" })
 
   const scoreParts: ScorePart[] = SCORE_META.map((m) => {
     const value = b?.[m.key] ?? 0
@@ -153,13 +232,16 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
   if (hasValue) parts.push(`~${equityPercent}% equity (${money(equityAvailable)}) on a ${money(arv)} home`)
   if (stageTxt) parts.push(stageTxt)
   if (typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0) parts.push(`auction in ${lead.daysUntilAuction}d`)
+  if (chronic) parts.push("repeat/chronic distress")
   let narrative = parts.join(" · ") + "."
   if (hasValue) narrative += ` Best exit: ${exit.strategy} — MAO ${money(mao)}, ${exit.strategy.startsWith("Fix") ? `flip profit ${money(flipProfit)}` : `spread ${money(wholesaleSpread)}`}.`
+  if (debtEstimated && payoff) narrative += ` Debt ${money(totalDebt)} is an estimate (orig. ~${money(payoff.originalLoan)} @ ${payoff.rate}%, ${Math.round(payoff.monthsPaid / 12)}y paid).`
 
   return {
     hasValue, arv, repairLevel, repairCost, totalDebt, mao,
     equityAvailable, equityPercent, wholesaleSpread, flipProfit,
     grade, motivation, exit, risks, scoreParts, narrative,
+    debtEstimated, estimatedPayoff: payoff?.balance ?? null, bankruptcy, chronic,
   }
 }
 
