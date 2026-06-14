@@ -1342,6 +1342,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
             onSelectLead={focusLeadFromMap}
             highlightId={mapHighlight}
             onZoneFilter={(ids) => setZoneIds(ids ? new Set(ids) : null)}
+            apiHeaders={apiHeaders}
           />
 
           {/* Data source badge */}

@@ -164,6 +164,30 @@ function persistZones(zones: SavedZone[]): void {
   try { window.localStorage.setItem(ZONES_KEY, JSON.stringify(zones)) } catch { /* quota */ }
 }
 
+// #6 Driving for Dollars — houses logged in the field, persisted locally.
+interface DrivingLead { id: string; lat: number; lng: number; address: string | null; note: string; ts: number }
+const DRIVE_KEY = "ap_driving_leads_v1"
+function loadDrivingLeads(): DrivingLead[] {
+  if (typeof window === "undefined") return []
+  try { const raw = window.localStorage.getItem(DRIVE_KEY); const a = raw ? JSON.parse(raw) : []; return Array.isArray(a) ? a : [] } catch { return [] }
+}
+function persistDrivingLeads(list: DrivingLead[]): void {
+  if (typeof window === "undefined") return
+  try { window.localStorage.setItem(DRIVE_KEY, JSON.stringify(list)) } catch { /* quota */ }
+}
+
+// #13 Zone deal alerts — phone + the lead IDs already seen per saved zone.
+interface AlertConfig { phone: string; zones: Record<string, number[]> }
+const ALERTS_KEY = "ap_zone_alerts_v1"
+function loadAlerts(): AlertConfig {
+  if (typeof window === "undefined") return { phone: "", zones: {} }
+  try { const raw = window.localStorage.getItem(ALERTS_KEY); const a = raw ? JSON.parse(raw) : null; return a && typeof a === "object" ? { phone: a.phone ?? "", zones: a.zones ?? {} } : { phone: "", zones: {} } } catch { return { phone: "", zones: {} } }
+}
+function persistAlerts(cfg: AlertConfig): void {
+  if (typeof window === "undefined") return
+  try { window.localStorage.setItem(ALERTS_KEY, JSON.stringify(cfg)) } catch { /* quota */ }
+}
+
 // Heat weight 0..1 for a lead under the chosen metric.
 function heatWeight(lead: ForeclosureLead, metric: HeatMetric): number {
   if (metric === "score") return Math.max(0, Math.min(100, lead.score ?? 0)) / 100
@@ -181,9 +205,11 @@ interface Props {
   highlightId?: number | null
   /** Called with the attomIds inside a drawn zone, or null when cleared. */
   onZoneFilter?: (attomIds: number[] | null) => void
+  /** Auth headers for /api/leads/notify (zone deal alerts). */
+  apiHeaders?: Record<string, string>
 }
 
-export default function DistressMap({ leads, flyToQuery, onSelectLead, highlightId, onZoneFilter }: Props) {
+export default function DistressMap({ leads, flyToQuery, onSelectLead, highlightId, onZoneFilter, apiHeaders }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef       = useRef<LeafletMap | null>(null)
   const layerRef     = useRef<LayerGroup | null>(null)   // pins + clusters
@@ -199,6 +225,11 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const streetTileRef = useRef<TileLayer | null>(null)
   const satTileRef    = useRef<TileLayer | null>(null)
   const finishedZoneRef = useRef<LatLng[] | null>(null)
+  const driveLayerRef = useRef<LayerGroup | null>(null)
+  const meMarkerRef   = useRef<CircleMarker | null>(null)
+  const watchIdRef    = useRef<number | null>(null)
+  const myPosRef      = useRef<LatLng | null>(null)
+  const alertsRef     = useRef<AlertConfig>({ phone: "", zones: {} })
 
   // Refs so map event handlers always read the latest values (no stale closures).
   // These are kept in sync inside effects (never written during render).
@@ -227,6 +258,12 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [savedZones, setSavedZones] = useState<SavedZone[]>([])
   const [showZones, setShowZones]   = useState(false)
   const [canSaveZone, setCanSaveZone] = useState(false)
+  const [driving, setDriving]       = useState(false)
+  const [driveLeads, setDriveLeads] = useState<DrivingLead[]>([])
+  const [showDriveList, setShowDriveList] = useState(false)
+  const [gpsError, setGpsError]     = useState<string | null>(null)
+  const [alerts, setAlerts]         = useState<AlertConfig>({ phone: "", zones: {} })
+  const [alertBanner, setAlertBanner] = useState<string | null>(null)
 
   // Keep latest props/state available to imperative Leaflet handlers via refs.
   useEffect(() => { onSelectRef.current = onSelectLead }, [onSelectLead])
@@ -234,6 +271,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { leadsRef.current = leads }, [leads])
   useEffect(() => { coordsRef.current = coords }, [coords])
   useEffect(() => { modeRef.current = mode }, [mode])
+  useEffect(() => { alertsRef.current = alerts }, [alerts])
 
   // ── Zone drawing (defined before the map init effect that references them) ──
   // Apply a polygon: draw it, count leads inside, filter the table.
@@ -368,9 +406,12 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       streetTileRef.current = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(map)
       satTileRef.current = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "&copy; Esri" })
       setSavedZones(loadZones())
+      setDriveLeads(loadDrivingLeads())
+      setAlerts(loadAlerts())
       layerRef.current = L.layerGroup().addTo(map)
       heatLayerRef.current = L.layerGroup().addTo(map)
       compLayerRef.current = L.layerGroup().addTo(map)
+      driveLayerRef.current = L.layerGroup().addTo(map)
 
       // "View in list" delegation from popups.
       map.on("popupopen", (e: { popup: { getElement: () => HTMLElement | undefined } }) => {
@@ -575,6 +616,113 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     else { if (map.hasLayer(sat)) map.removeLayer(sat); if (!map.hasLayer(street)) street.addTo(map) }
   }, [baseLayer, ready])
 
+  // ── #6 Driving for Dollars — GPS follow + log houses in the field ───────────
+  const toggleDriving = useCallback(() => {
+    if (driving) {
+      if (watchIdRef.current !== null && typeof navigator !== "undefined" && navigator.geolocation) navigator.geolocation.clearWatch(watchIdRef.current)
+      watchIdRef.current = null
+      meMarkerRef.current?.remove(); meMarkerRef.current = null
+      setDriving(false)
+      return
+    }
+    if (typeof navigator === "undefined" || !navigator.geolocation) { setGpsError("Location isn't available on this device/browser."); return }
+    setGpsError(null); setDriving(true); setMode("explore")
+    let first = true
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const L = LRef.current, map = mapRef.current; if (!L || !map) return
+        const ll: LatLng = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+        myPosRef.current = ll
+        if (meMarkerRef.current) meMarkerRef.current.setLatLng([ll.lat, ll.lng])
+        else meMarkerRef.current = L.circleMarker([ll.lat, ll.lng], { radius: 8, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 1, className: "ap-pulse-pin" }).addTo(map)
+        if (first) { map.flyTo([ll.lat, ll.lng], 16, { duration: 0.6 }); first = false }
+      },
+      (err) => setGpsError(err.message || "Couldn't get your location — allow location access."),
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
+    )
+  }, [driving])
+
+  const logHouse = useCallback(async () => {
+    const map = mapRef.current; if (!map) return
+    const c = myPosRef.current ?? { lat: map.getCenter().lat, lng: map.getCenter().lng }
+    const { address } = await reverseGeocode(c.lat, c.lng)
+    const note = (typeof window !== "undefined" ? window.prompt("Quick note (condition, boarded up, overgrown…) — optional:", "") : "") ?? ""
+    const dl: DrivingLead = { id: `${Date.now()}`, lat: c.lat, lng: c.lng, address, note, ts: Date.now() }
+    setDriveLeads((prev) => { const next = [dl, ...prev]; persistDrivingLeads(next); return next })
+  }, [])
+
+  const deleteDriveLead = useCallback((id: string) => setDriveLeads((prev) => { const n = prev.filter((d) => d.id !== id); persistDrivingLeads(n); return n }), [])
+  const exportDriveLeads = useCallback(() => {
+    if (typeof window === "undefined" || !driveLeads.length) return
+    const rows = [["address", "note", "lat", "lng", "logged"], ...driveLeads.map((d) => [d.address ?? "", d.note, String(d.lat), String(d.lng), new Date(d.ts).toISOString()])]
+    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n")
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }))
+    const a = document.createElement("a"); a.href = url; a.download = "driving-for-dollars.csv"; a.click(); URL.revokeObjectURL(url)
+  }, [driveLeads])
+
+  // Render logged houses (persisted) as 🏠 markers.
+  useEffect(() => {
+    const L = LRef.current, layer = driveLayerRef.current
+    if (!L || !layer || !ready) return
+    layer.clearLayers()
+    for (const d of driveLeads) {
+      const icon = L.divIcon({ className: "", html: '<div style="font-size:18px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))">🏠</div>', iconSize: [18, 18], iconAnchor: [9, 16] })
+      L.marker([d.lat, d.lng], { icon }).bindPopup(
+        `<div style="font-family:ui-sans-serif,system-ui;color:#e5e7eb;min-width:170px"><div style="font-weight:700;font-size:12px">🏠 ${d.address ? escapeHtml(d.address) : "Logged house"}</div>${d.note ? `<div style="font-size:11px;color:#cbd5e1;margin-top:2px">${escapeHtml(d.note)}</div>` : ""}<div style="font-size:10px;color:#9ca3af;margin-top:2px">Logged ${new Date(d.ts).toLocaleDateString()}</div><a href="https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}" target="_blank" rel="noreferrer" style="display:inline-block;margin-top:6px;color:#a5b4fc;font-size:11px;font-weight:600;text-decoration:none">Navigate →</a></div>`,
+      ).addTo(layer)
+    }
+  }, [driveLeads, ready])
+
+  // Stop GPS watching on unmount.
+  useEffect(() => () => { if (watchIdRef.current !== null && typeof navigator !== "undefined" && navigator.geolocation) navigator.geolocation.clearWatch(watchIdRef.current) }, [])
+
+  // ── #13 Zone deal alerts — fire when NEW HOT deals enter a watched farm ─────
+  const toggleZoneAlert = useCallback((zone: SavedZone) => {
+    setAlerts((prev) => {
+      const zones = { ...prev.zones }
+      let phone = prev.phone
+      if (zones[zone.id]) { delete zones[zone.id] }
+      else {
+        if (!phone) { const p = (typeof window !== "undefined" ? window.prompt("Phone number to text deal alerts to (e.g. +13105551234):", "") : "")?.trim() ?? ""; if (!p) return prev; phone = p }
+        // Baseline with current HOT leads so we only alert on FUTURE new ones.
+        zones[zone.id] = leadsRef.current.filter((l) => l.priority === "HOT")
+          .filter((l) => { const ll = coordsRef.current[l.attomId]; return ll && pointInPolygon(ll.lat, ll.lng, zone.points) })
+          .map((l) => l.attomId)
+      }
+      const next = { phone, zones }; persistAlerts(next); alertsRef.current = next; return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!ready || geoProgress !== null || !leads.length) return
+    const cfg = alertsRef.current
+    const watched = Object.keys(cfg.zones)
+    if (watched.length === 0) return
+    const byId = new Map(savedZones.map((z) => [z.id, z]))
+    const zones = { ...cfg.zones }
+    let totalNew = 0
+    const lines: string[] = []
+    for (const zid of watched) {
+      const zone = byId.get(zid); if (!zone) continue
+      const seen = new Set(cfg.zones[zid] ?? [])
+      const hotInside = leads.filter((l) => l.priority === "HOT")
+        .filter((l) => { const ll = coordsRef.current[l.attomId]; return ll && pointInPolygon(ll.lat, ll.lng, zone.points) })
+      const fresh = hotInside.filter((l) => !seen.has(l.attomId))
+      if (fresh.length) { totalNew += fresh.length; lines.push(`${fresh.length} in "${zone.name}"`) }
+      zones[zid] = Array.from(new Set([...(cfg.zones[zid] ?? []), ...hotInside.map((l) => l.attomId)]))
+    }
+    const next: AlertConfig = { phone: cfg.phone, zones }
+    alertsRef.current = next; persistAlerts(next); setAlerts(next)
+    if (totalNew > 0) {
+      const msg = `🔔 ${totalNew} new HOT pre-foreclosure deal${totalNew === 1 ? "" : "s"} in your farm: ${lines.join(", ")}.`
+      setAlertBanner(msg)
+      if (cfg.phone) {
+        fetch("/api/leads/notify", { method: "POST", headers: { "Content-Type": "application/json", ...(apiHeaders ?? {}) }, body: JSON.stringify({ phone: cfg.phone, message: msg }) }).catch(() => {})
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, geoProgress, ready, savedZones, apiHeaders])
+
   // ── In-map address assessment: "is this a good deal?" ───────────────────────
   const assess = useCallback(async () => {
     const q = addrInput.trim()
@@ -661,7 +809,10 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
               <button onClick={() => setShowHeat((v) => !v)} className={toolBtn(showHeat)}>🔥 Heat</button>
               <button onClick={() => setBaseLayer((b) => (b === "street" ? "satellite" : "street"))} className={toolBtn(baseLayer === "satellite")}>🛰 {baseLayer === "satellite" ? "Map" : "Satellite"}</button>
               <button onClick={() => setShowZones((v) => !v)} className={toolBtn(showZones)}>📁 Zones</button>
+              <button onClick={toggleDriving} className={toolBtn(driving)}>🚗 {driving ? "Stop" : "Drive"}</button>
+              <button onClick={() => setShowDriveList((v) => !v)} className={toolBtn(showDriveList)}>📋 Logged{driveLeads.length ? ` ${driveLeads.length}` : ""}</button>
             </div>
+            {gpsError && <div className="bg-red-950/90 border border-red-500/40 rounded-lg px-2.5 py-1 text-[10px] text-red-200 shadow-lg max-w-[220px]">{gpsError}</div>}
             {/* Heat metric selector */}
             {showHeat && (
               <div className="flex gap-1 bg-gray-900/90 border border-gray-700/50 rounded-lg p-1 shadow-lg">
@@ -681,9 +832,33 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
                 {savedZones.length === 0 ? (
                   <div className="text-[11px] text-gray-600 px-1 py-2">None yet. Draw a zone, then “Save this zone”.</div>
                 ) : savedZones.map((z) => (
-                  <div key={z.id} className="flex items-center justify-between gap-2 px-1 py-1 hover:bg-white/5 rounded">
+                  <div key={z.id} className="flex items-center justify-between gap-1.5 px-1 py-1 hover:bg-white/5 rounded">
                     <button onClick={() => loadSavedZone(z)} className="text-[11px] text-indigo-300 hover:text-indigo-200 font-semibold truncate flex-1 text-left">{z.name}</button>
+                    <button onClick={() => toggleZoneAlert(z)} title="Text me when new HOT deals land here" className={`text-[11px] shrink-0 ${alerts.zones[z.id] ? "text-amber-300" : "text-gray-600 hover:text-amber-300"}`}>{alerts.zones[z.id] ? "🔔" : "🔕"}</button>
                     <button onClick={() => deleteSavedZone(z.id)} className="text-[11px] text-gray-600 hover:text-red-400 shrink-0">✕</button>
+                  </div>
+                ))}
+                {Object.keys(alerts.zones).length > 0 && (
+                  <div className="text-[9.5px] text-gray-500 px-1 pt-1 mt-1 border-t border-gray-700/50">🔔 alerts text {alerts.phone || "—"} on new HOT deals</div>
+                )}
+              </div>
+            )}
+
+            {/* Logged houses panel (Driving for Dollars) */}
+            {showDriveList && (
+              <div className="bg-gray-900/95 border border-gray-700/60 rounded-lg p-2 shadow-xl w-60 max-h-56 overflow-y-auto">
+                <div className="flex items-center justify-between mb-1 px-1">
+                  <span className="text-[10px] text-gray-500">Logged houses ({driveLeads.length})</span>
+                  <div className="flex gap-2">
+                    <button onClick={exportDriveLeads} disabled={!driveLeads.length} className="text-[10px] text-indigo-300 hover:text-indigo-200 disabled:opacity-40">Export CSV</button>
+                  </div>
+                </div>
+                {driveLeads.length === 0 ? (
+                  <div className="text-[11px] text-gray-600 px-1 py-2">Tap “🚗 Drive”, then “Log this house” as you drive for dollars.</div>
+                ) : driveLeads.map((d) => (
+                  <div key={d.id} className="flex items-center justify-between gap-1.5 px-1 py-1 hover:bg-white/5 rounded">
+                    <button onClick={() => { mapRef.current?.flyTo([d.lat, d.lng], 17, { duration: 0.5 }) }} className="text-[11px] text-gray-200 hover:text-white truncate flex-1 text-left">{d.address || `${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}`}{d.note ? ` · ${d.note}` : ""}</button>
+                    <button onClick={() => deleteDriveLead(d.id)} className="text-[11px] text-gray-600 hover:text-red-400 shrink-0">✕</button>
                   </div>
                 ))}
               </div>
@@ -703,6 +878,22 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
               <span className="text-xs text-indigo-200 font-semibold">{route.length} stop{route.length === 1 ? "" : "s"}</span>
               <button onClick={openRoute} disabled={!route.length} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-[11px] font-semibold px-3 py-1 rounded-lg">Open in Google Maps</button>
               <button onClick={() => setRoute([])} disabled={!route.length} className="text-[11px] text-gray-400 hover:text-white disabled:opacity-40">Clear</button>
+            </div>
+          )}
+
+          {/* Driving for Dollars — log button */}
+          {driving && mode !== "route" && (
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[1000] flex items-center gap-2 bg-gray-900/95 border border-blue-500/40 rounded-xl px-3 py-2 shadow-xl">
+              <span className="text-xs text-blue-200 font-semibold">🚗 Driving</span>
+              <button onClick={logHouse} className="bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold px-3 py-1 rounded-lg">+ Log this house</button>
+            </div>
+          )}
+
+          {/* Deal-alert banner */}
+          {alertBanner && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1100] flex items-center gap-2 bg-amber-950/95 border border-amber-500/50 rounded-xl px-3 py-2 shadow-xl max-w-[80%]">
+              <span className="text-[11px] text-amber-100 font-semibold">{alertBanner}</span>
+              <button onClick={() => setAlertBanner(null)} className="text-[11px] text-amber-300 hover:text-amber-100 shrink-0">✕</button>
             </div>
           )}
 
