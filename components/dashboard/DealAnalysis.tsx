@@ -98,7 +98,7 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
 
       {/* Number grid */}
       <div className="grid grid-cols-3 gap-2">
-        {stat("ARV", a.hasValue ? fmtMoney(a.arv) : "—")}
+        {stat(a.valueEstimated ? "ARV (est.)" : "ARV", a.hasValue ? fmtMoney(a.arv) : "—", a.valueEstimated ? "text-sky-300" : "text-white")}
         {stat("Repairs", fmtMoney(a.repairCost), "text-orange-300")}
         {stat("Total debt", fmtMoney(a.totalDebt), "text-red-300")}
         {stat("Equity", a.hasValue ? `${a.equityPercent}%` : "—", "text-emerald-300")}
@@ -124,6 +124,22 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
         <div className="text-[11px] text-indigo-300 font-semibold">🎯 Best exit: {a.exit.strategy}</div>
         <div className="text-[11px] text-gray-400 mt-0.5">{a.exit.why}</div>
       </div>
+
+      {/* Rental analysis (buy & hold) */}
+      {a.rental && (
+        <div className="bg-gray-900/50 rounded-lg px-3 py-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] text-gray-400 font-semibold">🏦 Rental (buy &amp; hold)</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${a.rental.onePercent ? "bg-emerald-500/20 text-emerald-300" : "bg-gray-700/50 text-gray-400"}`}>{a.rental.onePercent ? "✓ passes 1% rule" : "below 1% rule"}</span>
+          </div>
+          <div className="grid grid-cols-4 gap-2 text-center">
+            <div><div className="text-[9px] text-gray-500">Rent/mo</div><div className="text-xs font-bold text-white">{fmtMoney(a.rental.rent)}</div></div>
+            <div><div className="text-[9px] text-gray-500">Cap rate</div><div className={`text-xs font-bold ${a.rental.capRate >= 6 ? "text-emerald-300" : "text-gray-300"}`}>{a.rental.capRate}%</div></div>
+            <div><div className="text-[9px] text-gray-500">Cash flow</div><div className={`text-xs font-bold ${a.rental.cashFlowMo > 0 ? "text-emerald-300" : "text-red-300"}`}>{fmtMoney(a.rental.cashFlowMo)}</div></div>
+            <div><div className="text-[9px] text-gray-500">DSCR</div><div className={`text-xs font-bold ${a.rental.dscr >= 1.2 ? "text-emerald-300" : "text-amber-300"}`}>{a.rental.dscr}</div></div>
+          </div>
+        </div>
+      )}
 
       {/* Score breakdown */}
       <div>

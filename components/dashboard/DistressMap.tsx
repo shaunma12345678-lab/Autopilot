@@ -386,7 +386,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     }
 
     // Empty spot → reverse-geocode and report (honest about road/open land).
-    const popup = L.popup({ maxWidth: 264 }).setLatLng([here.lat, here.lng])
+    const popup = L.popup({ maxWidth: 264, autoClose: false, closeOnClick: false }).setLatLng([here.lat, here.lng])
       .setContent('<div style="font-family:ui-sans-serif,system-ui;color:#e5e7eb;font-size:12px">📍 Looking up this address…</div>')
       .openOn(map)
     const { address, kind } = await reverseGeocode(here.lat, here.lng)
@@ -526,7 +526,9 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
           fillOpacity: 0.9,
           bubblingMouseEvents: false, // don't trigger the map's click-to-analyze
         })
-        m.bindPopup(popupHtml(l, ll, hasSelect), { maxWidth: 268 })
+        // Persistent: stays open (with an X) until the user closes it, so deal
+        // info doesn't vanish when they click elsewhere on the map.
+        m.bindPopup(popupHtml(l, ll, hasSelect), { maxWidth: 268, autoClose: false, closeOnClick: false })
         // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
         // hover tooltip with score + address (keeps the view uncluttered).
         const zoomedIn = zoom >= 15
@@ -684,6 +686,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       const icon = L.divIcon({ className: "", html: '<div style="font-size:18px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))">🏠</div>', iconSize: [18, 18], iconAnchor: [9, 16] })
       L.marker([d.lat, d.lng], { icon }).bindPopup(
         `<div style="font-family:ui-sans-serif,system-ui;color:#e5e7eb;min-width:170px"><div style="font-weight:700;font-size:12px">🏠 ${d.address ? escapeHtml(d.address) : "Logged house"}</div>${d.note ? `<div style="font-size:11px;color:#cbd5e1;margin-top:2px">${escapeHtml(d.note)}</div>` : ""}<div style="font-size:10px;color:#9ca3af;margin-top:2px">Logged ${new Date(d.ts).toLocaleDateString()}</div><a href="https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}" target="_blank" rel="noreferrer" style="display:inline-block;margin-top:6px;color:#a5b4fc;font-size:11px;font-weight:600;text-decoration:none">Navigate →</a></div>`,
+        { autoClose: false, closeOnClick: false },
       ).addTo(layer)
     }
   }, [driveLeads, ready])

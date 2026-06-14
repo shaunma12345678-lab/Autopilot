@@ -124,6 +124,46 @@ export interface DealAnalysis {
   headlineProfit:  number          // the money number for the chosen exit
   headlineLabel:   string          // "Wholesale spread" | "Flip profit" | …
   whyGood:         string[]        // specific reasons this is (or isn't) a deal
+  valueEstimated:  boolean         // ARV came from a fallback, not a real estimate
+  rental:          RentalAnalysis | null  // buy-&-hold numbers
+}
+
+export interface RentalAnalysis {
+  rent:       number   // estimated monthly rent
+  grossYield: number   // annual rent / value, %
+  capRate:    number   // NOI / value, %
+  cashFlowMo: number   // monthly cash flow after a 75% LTV loan
+  dscr:       number   // NOI / annual debt service
+  onePercent: boolean  // passes the 1% rule
+}
+
+export interface AnalyzeOpts { fallbackPsf?: number; maoPct?: number; assignmentFee?: number }
+
+// #3 ARV fallback: appreciate the purchase price to today when no value exists.
+function appreciatedValue(lead: ForeclosureLead): number | null {
+  const price = lead.purchasePrice
+  if (!price || price <= 0) return null
+  let year: number | null = null
+  if (lead.purchaseDate) { const d = new Date(lead.purchaseDate); if (!Number.isNaN(d.getTime())) year = d.getFullYear() }
+  if (!year && lead.yearsOwned) year = new Date().getFullYear() - lead.yearsOwned
+  if (!year || year < 1970) return null
+  const yrs = Math.max(0, new Date().getFullYear() - year)
+  return Math.round(price * Math.pow(1.04, yrs)) // ~4%/yr appreciation
+}
+
+// #6 Rental analysis — buy-&-hold underwriting from value + rent.
+function rentalAnalysis(arv: number, mao: number, rentEstimate: number | null | undefined): RentalAnalysis {
+  const rent = rentEstimate && rentEstimate > 0 ? Math.round(rentEstimate) : Math.round(arv * 0.007) // 0.7%/mo default
+  const grossYield = Math.round(((rent * 12) / arv) * 1000) / 10
+  const noi = rent * 12 * 0.6 // ~40% operating expense ratio
+  const capRate = Math.round((noi / arv) * 1000) / 10
+  const loan = Math.max(0, (mao > 0 ? mao : arv * 0.8) * 0.75) // 75% LTV on the buy
+  const r = 0.075 / 12, n = 360
+  const payment = loan > 0 ? (loan * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1) : 0
+  const cashFlowMo = Math.round(noi / 12 - payment)
+  const dscr = payment > 0 ? Math.round((noi / (payment * 12)) * 100) / 100 : 0
+  const onePercent = rent / arv >= 0.01
+  return { rent, grossYield, capRate, cashFlowMo, dscr, onePercent }
 }
 
 function money(n: number): string {
@@ -147,9 +187,17 @@ export function recommendedRepairLevel(lead: ForeclosureLead): RepairLevel {
   return "heavy"
 }
 
-export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): DealAnalysis {
+export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?: AnalyzeOpts): DealAnalysis {
   const repairLevel = levelArg ?? recommendedRepairLevel(lead)
-  const arv = lead.avmValue ?? lead.estimatedValue ?? 0
+  const maoPct = opts?.maoPct ?? 0.7
+  const assignmentFee = opts?.assignmentFee ?? ASSIGNMENT_FEE
+
+  // #3 Auto-ARV: real estimate first, then appreciated purchase price, then a
+  // peer median $/sqft (passed in) — so profit/ROI populate on (almost) every lead.
+  let arv = lead.avmValue ?? lead.estimatedValue ?? 0
+  let valueEstimated = false
+  if (arv <= 0) { const ap = appreciatedValue(lead); if (ap) { arv = ap; valueEstimated = true } }
+  if (arv <= 0 && opts?.fallbackPsf && lead.sqft && lead.sqft > 200) { arv = Math.round(lead.sqft * opts.fallbackPsf); valueEstimated = true }
   const hasValue = arv > 0
 
   const recordedDebt = lead.totalLiens > 0
@@ -161,7 +209,7 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
   const totalDebt = recordedDebt > 0 ? recordedDebt : (payoff?.balance ?? 0)
 
   const repairCost = hasValue ? repairCostFor(lead, repairLevel) : 0
-  const mao = hasValue ? Math.max(0, Math.round(arv * 0.7 - repairCost - ASSIGNMENT_FEE)) : 0
+  const mao = hasValue ? Math.max(0, Math.round(arv * maoPct - repairCost - assignmentFee)) : 0
   const equityAvailable = hasValue ? Math.max(0, arv - totalDebt) : 0
   const equityPercent = hasValue ? Math.round((equityAvailable / arv) * 100) : (lead.equityPercent ?? 0)
   const wholesaleSpread = hasValue ? mao - totalDebt : 0
@@ -273,12 +321,15 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel): Deal
   if (hasValue) narrative += ` Best exit: ${exit.strategy} — MAO ${money(mao)}, ${exit.strategy.startsWith("Fix") ? `flip profit ${money(flipProfit)}` : `spread ${money(wholesaleSpread)}`}.`
   if (debtEstimated && payoff) narrative += ` Debt ${money(totalDebt)} is an estimate (orig. ~${money(payoff.originalLoan)} @ ${payoff.rate}%, ${Math.round(payoff.monthsPaid / 12)}y paid).`
 
+  const rental = hasValue ? rentalAnalysis(arv, mao, lead.rentEstimate) : null
+
   return {
     hasValue, arv, repairLevel, repairCost, totalDebt, mao,
     equityAvailable, equityPercent, wholesaleSpread, flipProfit,
     grade, motivation, exit, risks, scoreParts, narrative,
     debtEstimated, estimatedPayoff: payoff?.balance ?? null, bankruptcy, chronic,
     distressed, distressType, cashIn, roiPct, headlineProfit, headlineLabel, whyGood,
+    valueEstimated, rental,
   }
 }
 
