@@ -17,7 +17,7 @@
 //   • Comps layer  — show comparable sales (from on-demand valuations) for ARV.
 //   • Density layer— a heat overlay revealing the hottest blocks to farm.
 
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import "leaflet/dist/leaflet.css"
 import type {
   Map as LeafletMap, LayerGroup, CircleMarker, Marker, Polygon, Polyline, LeafletMouseEvent, TileLayer,
@@ -25,6 +25,9 @@ import type {
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import { geocodeLeads, geocodePlace, geocodeAddress, reverseGeocode, type LatLng } from "@/lib/geocode"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
+import { marketSnapshot, type MarketSnapshot } from "@/lib/market-stats"
+import { loadBuyBox, saveBuyBox, matchesBuyBox, DEFAULT_BUYBOX, type BuyBox } from "@/lib/buy-box"
+import { CRM_STAGES, loadCrm, persistCrm, crmColor, type CrmStage, type CrmMap } from "@/lib/crm"
 
 // ── Urgency model: how a pin is colored & sized ───────────────────────────────
 type Urgency = "imminent" | "soon" | "active" | "early"
@@ -93,7 +96,7 @@ function pointInPolygon(lat: number, lng: number, poly: LatLng[]): boolean {
 }
 
 // Popup deal card with an optional "View in list" button and a Street View link.
-function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): string {
+function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, fallbackPsf?: number | null, crmStage?: CrmStage): string {
   const u = leadUrgency(lead)
   const countdown =
     typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0
@@ -101,8 +104,9 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
   const liens = lead.juniorLiens?.length
     ? `<div style="color:#fbbf24;margin-top:2px">⚠ ${lead.juniorLiens.length} junior lien${lead.juniorLiens.length === 1 ? "" : "s"} behind 1st</div>` : ""
   const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat},${ll.lng}`
-  const a = analyzeDeal(lead)
+  const a = analyzeDeal(lead, undefined, fallbackPsf ? { fallbackPsf } : undefined)
   const verdict = dealVerdict(a.grade, lead.score ?? 0)
+  const crmRow = `<div style="margin-top:7px;border-top:1px solid #ffffff14;padding-top:6px"><div style="font-size:9px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Pipeline</div><div style="display:flex;gap:3px;flex-wrap:wrap">${CRM_STAGES.map((s) => `<button data-crm-lead="${lead.attomId}" data-crm-stage="${s.id}" style="font-size:9px;padding:2px 5px;border-radius:5px;border:1px solid ${s.color}66;background:${crmStage === s.id ? s.color : "transparent"};color:${crmStage === s.id ? "#111" : s.color};cursor:pointer;font-weight:700">${s.label}</button>`).join("")}</div></div>`
   const profitColor = a.headlineProfit > 0 ? "#34d399" : "#f87171"
 
   // Is it distressed?
@@ -150,7 +154,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
         <span style="color:#9ca3af">Total debt</span><span>${money(a.totalDebt)}</span>
         <span style="color:#9ca3af">Repairs</span><span>${a.hasValue ? money(a.repairCost) : "—"}</span>
       </div>
-      ${whyBox}${flagsLine}
+      ${whyBox}${flagsLine}${crmRow}
       <div style="display:flex;gap:6px;margin-top:8px">
         ${withListButton ? `<button data-leadid="${lead.attomId}" style="flex:1;background:#4f46e5;color:#fff;border:0;border-radius:6px;padding:5px 0;font-size:11px;font-weight:600;cursor:pointer">Full analysis →</button>` : ""}
         <a href="${sv}" target="_blank" rel="noreferrer" style="flex:1;text-align:center;background:#374151;color:#e5e7eb;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;text-decoration:none">📷 Street View</a>
@@ -245,6 +249,10 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const watchIdRef    = useRef<number | null>(null)
   const myPosRef      = useRef<LatLng | null>(null)
   const alertsRef     = useRef<AlertConfig>({ phone: "", zones: {} })
+  const buyBoxRef     = useRef<BuyBox>(DEFAULT_BUYBOX)
+  const crmRef        = useRef<CrmMap>({})
+  const pipelineRef   = useRef(false)
+  const psfRef        = useRef<number | null>(null)
 
   // Refs so map event handlers always read the latest values (no stale closures).
   // These are kept in sync inside effects (never written during render).
@@ -254,6 +262,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const coordsRef   = useRef<Record<number, LatLng>>({})
   const renderRef   = useRef<() => void>(() => {})
   const analyzeRef  = useRef<(ll: { lat: number; lng: number }) => void>(() => {})
+  const setCrmStageRef = useRef<(id: number, stage: CrmStage) => void>(() => {})
   const modeRef     = useRef<Mode>("explore")
 
   const [collapsed, setCollapsed]   = useState(false)
@@ -279,6 +288,12 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [gpsError, setGpsError]     = useState<string | null>(null)
   const [alerts, setAlerts]         = useState<AlertConfig>({ phone: "", zones: {} })
   const [alertBanner, setAlertBanner] = useState<string | null>(null)
+  const [buyBox, setBuyBox]         = useState<BuyBox>(DEFAULT_BUYBOX)
+  const [showBuyBox, setShowBuyBox] = useState(false)
+  const [crm, setCrm]               = useState<CrmMap>({})
+  const [pipelineView, setPipelineView] = useState(false)
+  const [showMarket, setShowMarket] = useState(false)
+  const snapshot: MarketSnapshot = useMemo(() => marketSnapshot(leads), [leads])
 
   // Keep latest props/state available to imperative Leaflet handlers via refs.
   useEffect(() => { onSelectRef.current = onSelectLead }, [onSelectLead])
@@ -287,6 +302,18 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { coordsRef.current = coords }, [coords])
   useEffect(() => { modeRef.current = mode }, [mode])
   useEffect(() => { alertsRef.current = alerts }, [alerts])
+  useEffect(() => { buyBoxRef.current = buyBox }, [buyBox])
+  useEffect(() => { crmRef.current = crm }, [crm])
+  useEffect(() => { pipelineRef.current = pipelineView }, [pipelineView])
+  useEffect(() => { psfRef.current = snapshot.medianPsf }, [snapshot])
+  // Re-draw pins when buy-box / pipeline / CRM / market psf changes.
+  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, ready])
+
+  // #9 CRM stage setter (persisted) — wired into popup chips via a ref.
+  const setCrmStage = useCallback((id: number, stage: CrmStage) => {
+    setCrm((prev) => { const next = { ...prev, [id]: stage }; persistCrm(next); return next })
+  }, [])
+  useEffect(() => { setCrmStageRef.current = setCrmStage }, [setCrmStage])
 
   // ── Zone drawing (defined before the map init effect that references them) ──
   // Apply a polygon: draw it, count leads inside, filter the table.
@@ -423,15 +450,25 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       setSavedZones(loadZones())
       setDriveLeads(loadDrivingLeads())
       setAlerts(loadAlerts())
+      setBuyBox(loadBuyBox())
+      setCrm(loadCrm())
       layerRef.current = L.layerGroup().addTo(map)
       heatLayerRef.current = L.layerGroup().addTo(map)
       compLayerRef.current = L.layerGroup().addTo(map)
       driveLayerRef.current = L.layerGroup().addTo(map)
 
-      // "View in list" delegation from popups.
+      // Delegate popup buttons: "Full analysis" and the CRM stage chips.
       map.on("popupopen", (e: { popup: { getElement: () => HTMLElement | undefined } }) => {
-        const btn = e.popup.getElement?.()?.querySelector<HTMLButtonElement>("button[data-leadid]")
+        const el = e.popup.getElement?.()
+        const btn = el?.querySelector<HTMLButtonElement>("button[data-leadid]")
         if (btn) btn.onclick = () => { const id = Number(btn.getAttribute("data-leadid")); if (Number.isFinite(id)) onSelectRef.current?.(id) }
+        el?.querySelectorAll<HTMLButtonElement>("button[data-crm-stage]").forEach((b) => {
+          b.onclick = () => {
+            const id = Number(b.getAttribute("data-crm-lead"))
+            const stage = b.getAttribute("data-crm-stage") as CrmStage | null
+            if (Number.isFinite(id) && stage) setCrmStageRef.current(id, stage)
+          }
+        })
       })
 
       // Map clicks: draw mode adds zone vertices; explore mode analyzes the spot.
@@ -502,10 +539,24 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
 
     const zoom = map.getZoom()
     const CELL = 64
+    const psf = psfRef.current
+    const box = buyBoxRef.current
+    const analysisOf = (l: ForeclosureLead) => analyzeDeal(l, undefined, psf ? { fallbackPsf: psf } : undefined)
     const pts = leadsRef.current.map((l) => ({ l, ll: coordsRef.current[l.attomId] })).filter((x): x is { l: ForeclosureLead; ll: LatLng } => Boolean(x.ll))
 
+    // #1 Buy-box: when on, only fitting deals cluster/pin; the rest become faint
+    // grey dots so you still see context but your matches pop.
+    let clusterPts = pts
+    if (box.enabled) {
+      clusterPts = []
+      for (const p of pts) {
+        if (matchesBuyBox(p.l, analysisOf(p.l), box)) clusterPts.push(p)
+        else L.circleMarker([p.ll.lat, p.ll.lng], { radius: 3, stroke: false, fillColor: "#475569", fillOpacity: 0.35, bubblingMouseEvents: false }).addTo(layer)
+      }
+    }
+
     const buckets = new Map<string, { items: { l: ForeclosureLead; ll: LatLng }[]; x: number; y: number }>()
-    for (const p of pts) {
+    for (const p of clusterPts) {
       const pix = map.project([p.ll.lat, p.ll.lng], zoom)
       const key = Math.floor(pix.x / CELL) + ":" + Math.floor(pix.y / CELL)
       const b = buckets.get(key)
@@ -517,18 +568,19 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       if (b.items.length === 1) {
         const { l, ll } = b.items[0]
         const u = leadUrgency(l)
+        const stage = crmRef.current[l.attomId]
         const radius = 6 + Math.round((Math.max(0, Math.min(100, l.score ?? 0)) / 100) * 10)
         const m = L.circleMarker([ll.lat, ll.lng], {
           radius,
           color: l.isAbsentee ? "#a78bfa" : "#0b0f17",
           weight: l.isAbsentee ? 3 : 1.5,
-          fillColor: URGENCY_COLOR[u],
+          fillColor: pipelineRef.current ? crmColor(stage) : URGENCY_COLOR[u],
           fillOpacity: 0.9,
           bubblingMouseEvents: false, // don't trigger the map's click-to-analyze
         })
         // Persistent: stays open (with an X) until the user closes it, so deal
         // info doesn't vanish when they click elsewhere on the map.
-        m.bindPopup(popupHtml(l, ll, hasSelect), { maxWidth: 268, autoClose: false, closeOnClick: false })
+        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage), { maxWidth: 268, autoClose: false, closeOnClick: false })
         // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
         // hover tooltip with score + address (keeps the view uncluttered).
         const zoomedIn = zoom >= 15
@@ -838,8 +890,55 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
               <button onClick={() => setShowZones((v) => !v)} className={toolBtn(showZones)}>📁 Zones</button>
               <button onClick={toggleDriving} className={toolBtn(driving)}>🚗 {driving ? "Stop" : "Drive"}</button>
               <button onClick={() => setShowDriveList((v) => !v)} className={toolBtn(showDriveList)}>📋 Logged{driveLeads.length ? ` ${driveLeads.length}` : ""}</button>
+              <button onClick={() => setShowBuyBox((v) => !v)} className={toolBtn(buyBox.enabled || showBuyBox)}>🎯 Buy-box{buyBox.enabled ? " ✓" : ""}</button>
+              <button onClick={() => setPipelineView((v) => !v)} className={toolBtn(pipelineView)}>🗂 Pipeline</button>
+              <button onClick={() => setShowMarket((v) => !v)} className={toolBtn(showMarket)}>📊 Market</button>
             </div>
             {gpsError && <div className="bg-red-950/90 border border-red-500/40 rounded-lg px-2.5 py-1 text-[10px] text-red-200 shadow-lg max-w-[220px]">{gpsError}</div>}
+
+            {/* Pipeline legend */}
+            {pipelineView && (
+              <div className="flex flex-wrap gap-1.5 bg-gray-900/90 border border-gray-700/50 rounded-lg p-1.5 shadow-lg max-w-[260px]">
+                {CRM_STAGES.map((s) => <span key={s.id} className="flex items-center gap-1 text-[9px] text-gray-300"><span className="inline-block w-2 h-2 rounded-full" style={{ background: s.color }} />{s.label}</span>)}
+              </div>
+            )}
+
+            {/* Market snapshot */}
+            {showMarket && (
+              <div className="bg-gray-900/95 border border-gray-700/60 rounded-lg p-2.5 shadow-xl w-56 text-[11px]">
+                <div className="text-[10px] text-gray-500 mb-1.5">📊 Area snapshot ({snapshot.count} deals)</div>
+                <div className="grid grid-cols-2 gap-y-1">
+                  <span className="text-gray-500">Median value</span><span className="text-white text-right font-semibold">{snapshot.medianValue ? fmtMoney(snapshot.medianValue) : "—"}</span>
+                  <span className="text-gray-500">Median $/sqft</span><span className="text-white text-right font-semibold">{snapshot.medianPsf ? `$${snapshot.medianPsf}` : "—"}</span>
+                  <span className="text-gray-500">Median equity</span><span className="text-emerald-300 text-right font-semibold">{snapshot.medianEquityPct != null ? `${snapshot.medianEquityPct}%` : "—"}</span>
+                  <span className="text-gray-500">HOT deals</span><span className="text-red-300 text-right font-semibold">{snapshot.hot}</span>
+                  <span className="text-gray-500">Avg score</span><span className="text-white text-right font-semibold">{snapshot.avgScore}</span>
+                </div>
+                <div className="text-[9px] text-gray-600 mt-1.5 pt-1.5 border-t border-gray-700/50">Median $/sqft auto-fills ARV on leads with no value.</div>
+              </div>
+            )}
+
+            {/* Buy-box panel */}
+            {showBuyBox && (
+              <div className="bg-gray-900/95 border border-gray-700/60 rounded-lg p-2.5 shadow-xl w-60 space-y-2">
+                <label className="flex items-center justify-between text-[11px] text-white font-semibold">
+                  <span>🎯 My buy-box filter</span>
+                  <input type="checkbox" checked={buyBox.enabled} onChange={(e) => { const b = { ...buyBox, enabled: e.target.checked }; setBuyBox(b); saveBuyBox(b) }} className="accent-indigo-500" />
+                </label>
+                {([["minScore", "Min score"], ["minEquityPct", "Min equity %"], ["minProfit", "Min profit $"], ["maxPrice", "Max price $ (0=any)"]] as [keyof BuyBox, string][]).map(([k, label]) => (
+                  <div key={k} className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-gray-400">{label}</span>
+                    <input type="number" value={buyBox[k] as number} onChange={(e) => { const b = { ...buyBox, [k]: Number(e.target.value) || 0 }; setBuyBox(b); saveBuyBox(b) }}
+                      className="w-20 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-white text-right focus:outline-none focus:border-indigo-500" />
+                  </div>
+                ))}
+                <label className="flex items-center justify-between text-[10px] text-gray-400">
+                  <span>Absentee owners only</span>
+                  <input type="checkbox" checked={buyBox.absenteeOnly} onChange={(e) => { const b = { ...buyBox, absenteeOnly: e.target.checked }; setBuyBox(b); saveBuyBox(b) }} className="accent-indigo-500" />
+                </label>
+                <div className="text-[9px] text-gray-600">Non-matching deals fade to grey dots so your matches pop.</div>
+              </div>
+            )}
             {/* Heat metric selector */}
             {showHeat && (
               <div className="flex gap-1 bg-gray-900/90 border border-gray-700/50 rounded-lg p-1 shadow-lg">
