@@ -20,10 +20,11 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import "leaflet/dist/leaflet.css"
 import type {
-  Map as LeafletMap, LayerGroup, CircleMarker, Marker, Polygon, Polyline, LeafletMouseEvent,
+  Map as LeafletMap, LayerGroup, CircleMarker, Marker, Polygon, Polyline, LeafletMouseEvent, TileLayer,
 } from "leaflet"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import { geocodeLeads, geocodePlace, geocodeAddress, type LatLng } from "@/lib/geocode"
+import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 
 // ── Urgency model: how a pin is colored & sized ───────────────────────────────
 type Urgency = "imminent" | "soon" | "active" | "early"
@@ -84,6 +85,15 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
   const liens = lead.juniorLiens?.length
     ? `<div style="color:#fbbf24;margin-top:2px">⚠ ${lead.juniorLiens.length} junior lien${lead.juniorLiens.length === 1 ? "" : "s"} behind 1st</div>` : ""
   const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat},${ll.lng}`
+  const a = analyzeDeal(lead)
+  const spreadVal = a.exit.strategy.startsWith("Fix") ? a.flipProfit : a.wholesaleSpread
+  const spreadLabel = a.exit.strategy.startsWith("Fix") ? "Flip profit" : "Spread"
+  const dealBox = a.hasValue
+    ? `<div style="margin-top:6px;background:#111827;border:1px solid #4f46e533;border-radius:8px;padding:6px 8px">
+        <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#9ca3af">MAO (70%)</span><span style="font-weight:700">${fmtMoney(a.mao)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#9ca3af">${spreadLabel}</span><span style="font-weight:700;color:${spreadVal > 0 ? "#34d399" : "#f87171"}">${fmtMoney(spreadVal)}</span></div>
+        <div style="font-size:10.5px;color:#a5b4fc;margin-top:2px">🎯 ${escapeHtml(a.exit.strategy)} · grade ${a.grade} · motiv ${a.motivation}</div>
+      </div>` : ""
   return `
     <div style="min-width:212px;font-family:ui-sans-serif,system-ui;color:#e5e7eb">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
@@ -99,6 +109,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
         <span style="color:#9ca3af">Equity</span><span>${lead.equityPercent != null ? Math.round(lead.equityPercent) + "%" : "—"}</span>
         <span style="color:#9ca3af">Default</span><span>${money(lead.defaultAmount)}</span>
       </div>
+      ${dealBox}
       ${signals.length ? `<div style="margin-top:6px;font-size:10.5px;color:#cbd5e1">${signals.map((s) => "• " + escapeHtml(s)).join("<br/>")}</div>` : ""}
       <div style="display:flex;gap:6px;margin-top:8px">
         ${withListButton ? `<button data-leadid="${lead.attomId}" style="flex:1;background:#4f46e5;color:#fff;border:0;border-radius:6px;padding:5px 0;font-size:11px;font-weight:600;cursor:pointer">View in list →</button>` : ""}
@@ -108,6 +119,35 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean): 
 }
 
 type Mode = "explore" | "draw" | "route"
+type HeatMetric = "score" | "equity" | "profit"
+
+const HEAT_LABEL: Record<HeatMetric, string> = { score: "Score", equity: "Equity $", profit: "Profit $" }
+
+interface SavedZone { id: string; name: string; points: LatLng[] }
+const ZONES_KEY = "ap_farm_zones_v1"
+
+function loadZones(): SavedZone[] {
+  if (typeof window === "undefined") return []
+  try {
+    const raw = window.localStorage.getItem(ZONES_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.filter((z) => z && Array.isArray(z.points) && z.points.length >= 3) : []
+  } catch { return [] }
+}
+function persistZones(zones: SavedZone[]): void {
+  if (typeof window === "undefined") return
+  try { window.localStorage.setItem(ZONES_KEY, JSON.stringify(zones)) } catch { /* quota */ }
+}
+
+// Heat weight 0..1 for a lead under the chosen metric.
+function heatWeight(lead: ForeclosureLead, metric: HeatMetric): number {
+  if (metric === "score") return Math.max(0, Math.min(100, lead.score ?? 0)) / 100
+  const a = analyzeDeal(lead)
+  if (!a.hasValue) return 0.15
+  if (metric === "equity") return Math.max(0, Math.min(1, a.equityAvailable / 250_000))
+  const p = a.exit.strategy.startsWith("Fix") ? a.flipProfit : a.wholesaleSpread
+  return Math.max(0, Math.min(1, p / 80_000))
+}
 
 interface Props {
   leads: ForeclosureLead[]
@@ -131,6 +171,9 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const LRef         = useRef<typeof import("leaflet") | null>(null)
   const drawPtsRef   = useRef<LatLng[]>([])
   const didFitRef    = useRef(false)
+  const streetTileRef = useRef<TileLayer | null>(null)
+  const satTileRef    = useRef<TileLayer | null>(null)
+  const finishedZoneRef = useRef<LatLng[] | null>(null)
 
   // Refs so map event handlers always read the latest values (no stale closures).
   // These are kept in sync inside effects (never written during render).
@@ -153,6 +196,11 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [route, setRoute]           = useState<ForeclosureLead[]>([])
   const [showComps, setShowComps]   = useState(false)
   const [showHeat, setShowHeat]     = useState(false)
+  const [heatMetric, setHeatMetric] = useState<HeatMetric>("profit")
+  const [baseLayer, setBaseLayer]   = useState<"street" | "satellite">("street")
+  const [savedZones, setSavedZones] = useState<SavedZone[]>([])
+  const [showZones, setShowZones]   = useState(false)
+  const [canSaveZone, setCanSaveZone] = useState(false)
 
   // Keep latest props/state available to imperative Leaflet handlers via refs.
   useEffect(() => { onSelectRef.current = onSelectLead }, [onSelectLead])
@@ -162,29 +210,54 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { modeRef.current = mode }, [mode])
 
   // ── Zone drawing (defined before the map init effect that references them) ──
-  const finishZone = useCallback(() => {
+  // Apply a polygon: draw it, count leads inside, filter the table.
+  const applyZone = useCallback((pts: LatLng[]) => {
     const L = LRef.current, map = mapRef.current
-    if (!L || !map) return
-    const pts = drawPtsRef.current
-    if (pts.length < 3) return
+    if (!L || !map || pts.length < 3) return
     if (guideRef.current) { guideRef.current.remove(); guideRef.current = null }
     if (zonePolyRef.current) { zonePolyRef.current.remove(); zonePolyRef.current = null }
     zonePolyRef.current = L.polygon(pts.map((p) => [p.lat, p.lng]), { color: "#818cf8", weight: 2, fillColor: "#6366f1", fillOpacity: 0.12 }).addTo(map)
+    try { map.fitBounds(pts.map((p) => [p.lat, p.lng]) as [number, number][], { padding: [30, 30], maxZoom: 15 }) } catch {}
     const inside = leadsRef.current.filter((l) => { const ll = coordsRef.current[l.attomId]; return ll && pointInPolygon(ll.lat, ll.lng, pts) })
     setZoneCount(inside.length)
     onZoneRef.current?.(inside.map((l) => l.attomId))
-    setMode("explore")
+    finishedZoneRef.current = pts
+    setCanSaveZone(true)
   }, [])
+
+  const finishZone = useCallback(() => {
+    const pts = drawPtsRef.current
+    if (pts.length < 3) return
+    applyZone(pts)
+    setMode("explore")
+  }, [applyZone])
 
   const clearZone = useCallback(() => {
     drawPtsRef.current = []
     guideRef.current?.remove(); guideRef.current = null
     zonePolyRef.current?.remove(); zonePolyRef.current = null
+    finishedZoneRef.current = null
+    setCanSaveZone(false)
     setZoneCount(null)
     onZoneRef.current?.(null)
   }, [])
 
   const startDraw = useCallback(() => { clearZone(); drawPtsRef.current = []; setMode("draw") }, [clearZone])
+
+  // Save the just-drawn zone as a named farm (localStorage).
+  const saveZone = useCallback(() => {
+    const pts = finishedZoneRef.current
+    if (!pts || pts.length < 3) return
+    const name = (typeof window !== "undefined" ? window.prompt("Name this farm zone:", "My farm") : "")?.trim()
+    if (!name) return
+    const zone: SavedZone = { id: `${Date.now()}`, name, points: pts }
+    setSavedZones((prev) => { const next = [...prev, zone]; persistZones(next); return next })
+  }, [])
+
+  const loadSavedZone = useCallback((zone: SavedZone) => { applyZone(zone.points); setShowZones(false) }, [applyZone])
+  const deleteSavedZone = useCallback((id: string) => {
+    setSavedZones((prev) => { const next = prev.filter((z) => z.id !== id); persistZones(next); return next })
+  }, [])
 
   // ── Route building ──────────────────────────────────────────────────────────
   const addToRoute = useCallback((lead: ForeclosureLead) => {
@@ -217,7 +290,9 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       LRef.current = L
       const map = L.map(containerRef.current, { scrollWheelZoom: true, zoomControl: false }).setView([34.0, -117.6], 9)
       L.control.zoom({ position: "bottomleft" }).addTo(map)
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(map)
+      streetTileRef.current = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(map)
+      satTileRef.current = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "&copy; Esri" })
+      setSavedZones(loadZones())
       layerRef.current = L.layerGroup().addTo(map)
       heatLayerRef.current = L.layerGroup().addTo(map)
       compLayerRef.current = L.layerGroup().addTo(map)
@@ -397,7 +472,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     return () => { ctrl.abort() }
   }, [showComps, leads, ready])
 
-  // ── Distress-density heat overlay (translucent stacked circles) ─────────────
+  // ── Heat overlay — density weighted by Score / Equity $ / Profit $ ──────────
   useEffect(() => {
     const L = LRef.current, layer = heatLayerRef.current
     if (!L || !layer || !ready) return
@@ -405,11 +480,21 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     if (!showHeat) return
     for (const l of leads) {
       const ll = coords[l.attomId]; if (!ll) continue
-      const weight = 0.4 + (Math.max(0, Math.min(100, l.score ?? 0)) / 100) * 0.6
-      L.circleMarker([ll.lat, ll.lng], { radius: 26, stroke: false, fillColor: "#ef4444", fillOpacity: 0.10 * weight })
+      const w = heatWeight(l, heatMetric)
+      if (w <= 0) continue
+      // Hotter (more equity/profit/score) = larger + more opaque red.
+      L.circleMarker([ll.lat, ll.lng], { radius: 18 + Math.round(w * 16), stroke: false, fillColor: "#ef4444", fillOpacity: 0.07 + w * 0.16 })
         .addTo(layer)
     }
-  }, [showHeat, coords, leads, ready])
+  }, [showHeat, heatMetric, coords, leads, ready])
+
+  // ── Base layer swap (Street ↔ Satellite) ────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current, street = streetTileRef.current, sat = satTileRef.current
+    if (!map || !street || !sat) return
+    if (baseLayer === "satellite") { if (map.hasLayer(street)) map.removeLayer(street); if (!map.hasLayer(sat)) sat.addTo(map) }
+    else { if (map.hasLayer(sat)) map.removeLayer(sat); if (!map.hasLayer(street)) street.addTo(map) }
+  }, [baseLayer, ready])
 
   // ── In-map address assessment: "is this a good deal?" ───────────────────────
   const assess = useCallback(async () => {
@@ -488,19 +573,48 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
           </div>
 
           {/* Toolbar */}
-          <div className="absolute top-3 right-3 z-[1000] flex flex-wrap gap-1.5 justify-end max-w-[60%]">
-            <button onClick={() => setMode("explore")} className={toolBtn(mode === "explore")}>✋ Explore</button>
-            <button onClick={() => (mode === "draw" ? clearZone() : startDraw())} className={toolBtn(mode === "draw")}>✏️ {mode === "draw" ? "Cancel" : "Draw zone"}</button>
-            <button onClick={() => setMode(mode === "route" ? "explore" : "route")} className={toolBtn(mode === "route")}>🧭 Route</button>
-            <button onClick={() => setShowComps((v) => !v)} className={toolBtn(showComps)}>🏷️ Comps</button>
-            <button onClick={() => setShowHeat((v) => !v)} className={toolBtn(showHeat)}>🔥 Density</button>
-            {zoneCount != null && <button onClick={clearZone} className={toolBtn(false)}>✖ Clear zone</button>}
+          <div className="absolute top-3 right-3 z-[1000] flex flex-col items-end gap-1.5 max-w-[64%]">
+            <div className="flex flex-wrap gap-1.5 justify-end">
+              <button onClick={() => setMode("explore")} className={toolBtn(mode === "explore")}>✋ Explore</button>
+              <button onClick={() => (mode === "draw" ? clearZone() : startDraw())} className={toolBtn(mode === "draw")}>✏️ {mode === "draw" ? "Cancel" : "Draw zone"}</button>
+              <button onClick={() => setMode(mode === "route" ? "explore" : "route")} className={toolBtn(mode === "route")}>🧭 Route</button>
+              <button onClick={() => setShowComps((v) => !v)} className={toolBtn(showComps)}>🏷️ Comps</button>
+              <button onClick={() => setShowHeat((v) => !v)} className={toolBtn(showHeat)}>🔥 Heat</button>
+              <button onClick={() => setBaseLayer((b) => (b === "street" ? "satellite" : "street"))} className={toolBtn(baseLayer === "satellite")}>🛰 {baseLayer === "satellite" ? "Map" : "Satellite"}</button>
+              <button onClick={() => setShowZones((v) => !v)} className={toolBtn(showZones)}>📁 Zones</button>
+            </div>
+            {/* Heat metric selector */}
+            {showHeat && (
+              <div className="flex gap-1 bg-gray-900/90 border border-gray-700/50 rounded-lg p-1 shadow-lg">
+                <span className="text-[10px] text-gray-500 self-center px-1">Heat by:</span>
+                {(["profit", "equity", "score"] as HeatMetric[]).map((m) => (
+                  <button key={m} onClick={() => setHeatMetric(m)} className={`px-2 py-0.5 rounded text-[10px] font-semibold ${heatMetric === m ? "bg-red-600 text-white" : "text-gray-400 hover:text-white"}`}>{HEAT_LABEL[m]}</button>
+                ))}
+              </div>
+            )}
+            {/* Save zone + saved zones panel */}
+            {canSaveZone && (
+              <button onClick={saveZone} className="bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold px-2.5 py-1 rounded-lg shadow-lg">💾 Save this zone as a farm</button>
+            )}
+            {showZones && (
+              <div className="bg-gray-900/95 border border-gray-700/60 rounded-lg p-2 shadow-xl w-56 max-h-48 overflow-y-auto">
+                <div className="text-[10px] text-gray-500 mb-1 px-1">Saved farm zones</div>
+                {savedZones.length === 0 ? (
+                  <div className="text-[11px] text-gray-600 px-1 py-2">None yet. Draw a zone, then “Save this zone”.</div>
+                ) : savedZones.map((z) => (
+                  <div key={z.id} className="flex items-center justify-between gap-2 px-1 py-1 hover:bg-white/5 rounded">
+                    <button onClick={() => loadSavedZone(z)} className="text-[11px] text-indigo-300 hover:text-indigo-200 font-semibold truncate flex-1 text-left">{z.name}</button>
+                    <button onClick={() => deleteSavedZone(z.id)} className="text-[11px] text-gray-600 hover:text-red-400 shrink-0">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Mode hint */}
-          {(mode === "draw" || mode === "route") && (
-            <div className="absolute top-16 right-3 z-[1000] bg-gray-900/95 border border-indigo-500/40 rounded-lg px-3 py-1.5 text-[11px] text-indigo-200 shadow-lg max-w-[60%]">
-              {mode === "draw" ? "Click to add points around your farm area; double-click to finish." : "Tap pins to add door-knock stops, then open the route."}
+          {/* Mode hint (draw only — route has its own bar) */}
+          {mode === "draw" && (
+            <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-[1000] bg-gray-900/95 border border-indigo-500/40 rounded-lg px-3 py-1.5 text-[11px] text-indigo-200 shadow-lg">
+              Click to drop points around your farm area; double-click to finish.
             </div>
           )}
 

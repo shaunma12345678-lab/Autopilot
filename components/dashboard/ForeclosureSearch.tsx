@@ -4,6 +4,7 @@ import React, { useState, useCallback, useMemo, useRef } from "react"
 import type { ForeclosureLead, OutreachPackage, ScoreBreakdown, DealCalc } from "@/lib/agents/foreclosure-agent"
 import type { AtRiskLead } from "@/app/api/leads/at-risk-search/route"
 import DistressMap from "@/components/dashboard/DistressMap"
+import DealAnalysis from "@/components/dashboard/DealAnalysis"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -675,22 +676,11 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
                     </div>
                   </div>
                 )}
-                {detailTab === "deal" && lead.dealCalc && (
-                  <div className="space-y-1.5">
-                    {[["ARV", fmt(lead.dealCalc.arv, "$")],["Est. Repairs", fmt(lead.dealCalc.estimatedRepairs, "$")],["Max Offer (70%)", fmt(lead.dealCalc.maxOffer, "$")],["Total Debt", fmt(lead.dealCalc.totalDebt, "$")],["Equity Available", fmt(lead.dealCalc.equityAvailable, "$")],["Est. Profit", fmt(lead.dealCalc.potentialProfit, "$")]].map(([l,v]) => (
-                      <div key={l} className="flex justify-between">
-                        <span className="text-xs text-gray-500">{l}</span>
-                        <span className="text-xs font-semibold text-white">{v}</span>
-                      </div>
-                    ))}
-                    <div className="pt-2 border-t border-gray-700/40 flex justify-between">
-                      <span className="text-xs text-gray-400 font-semibold">Deal Grade</span>
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-lg border ${GRADE_CLR[lead.dealCalc.dealGrade]}`}>
-                        {lead.dealCalc.dealGrade} {lead.dealCalc.dealGrade === "A" ? "— Excellent" : lead.dealCalc.dealGrade === "B" ? "— Strong" : lead.dealCalc.dealGrade === "C" ? "— Marginal" : "— Weak"}
-                      </span>
-                    </div>
+                {detailTab === "deal" && (
+                  <div className="space-y-3">
+                    <DealAnalysis lead={lead} />
                     {liens.length > 0 && (
-                      <div className="mt-2 bg-red-950/30 border border-red-500/25 rounded-lg p-2.5">
+                      <div className="bg-red-950/30 border border-red-500/25 rounded-lg p-2.5">
                         <p className="text-[10px] font-bold text-red-300 uppercase tracking-wider mb-1">⚠ Junior liens behind the first</p>
                         {liens.map((l, i) => (
                           <div key={i} className="flex justify-between">
