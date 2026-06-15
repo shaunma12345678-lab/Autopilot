@@ -5,6 +5,7 @@ import type { ForeclosureLead, OutreachPackage, ScoreBreakdown, DealCalc } from 
 import type { AtRiskLead } from "@/app/api/leads/at-risk-search/route"
 import DistressMap from "@/components/dashboard/DistressMap"
 import DealAnalysis from "@/components/dashboard/DealAnalysis"
+import PropertyModal from "@/components/dashboard/PropertyModal"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -413,18 +414,6 @@ function OutreachPanel({ lead, businessId }: { lead: ForeclosureLead; businessId
 
 // ─── Lead intelligence helpers ────────────────────────────────────────────────
 
-// External research links — eyeball the property and pull records in one click.
-function quickLinks(lead: ForeclosureLead) {
-  const full = `${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`.trim()
-  const q = encodeURIComponent(full)
-  return {
-    maps:    `https://www.google.com/maps/search/?api=1&query=${q}`,
-    street:  `https://www.google.com/maps?q=${q}&layer=c`,
-    zillow:  `https://www.zillow.com/homes/${q}_rb/`,
-    records: `https://www.google.com/search?q=${encodeURIComponent(`${full} county property records owner of record`)}`,
-  }
-}
-
 // Auction countdown badge — urgency is everything on Notice-of-Sale leads.
 function AuctionBadge({ days }: { days: number | null | undefined }) {
   if (days == null || days < 0) return null
@@ -472,9 +461,9 @@ function printDealSheet(lead: ForeclosureLead) {
 
 // On-demand premium actions: live valuation, skip trace, direct mail.
 function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead; apiHeaders: Record<string, string>; onEnrich: (attomId: number, patch: Record<string, unknown>) => void }) {
-  const links = quickLinks(lead)
   const [enrichState, setEnrichState] = useState<"idle"|"loading"|"note">("idle")
   const [enrichNote, setEnrichNote]   = useState("")
+  const [showProperty, setShowProperty] = useState(false)
 
   const runEnrich = async () => {
     setEnrichState("loading"); setEnrichNote("")
@@ -536,12 +525,10 @@ function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead;
       </button>
       {enrichState === "note" && <p className={`text-[10px] ${enrichNote.startsWith("✓") ? "text-emerald-400" : "text-gray-500"}`}>{enrichNote}</p>}
       <div className="flex flex-wrap gap-1.5">
-        <a href={links.maps}    target="_blank" rel="noreferrer" className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>🗺 Map</a>
-        <a href={links.street}  target="_blank" rel="noreferrer" className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>📷 Street View</a>
-        <a href={links.zillow}  target="_blank" rel="noreferrer" className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>🏠 Zillow</a>
-        <a href={links.records} target="_blank" rel="noreferrer" className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>📜 Records</a>
+        <button onClick={() => setShowProperty(true)} className={`${btn} bg-indigo-600/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30`}>🔎 Property & Records</button>
         <button onClick={() => printDealSheet(lead)} className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>🖨 Deal Sheet</button>
       </div>
+      {showProperty && <PropertyModal lead={lead} apiHeaders={apiHeaders} onClose={() => setShowProperty(false)} onEnrich={onEnrich} />}
 
       <div className="flex flex-wrap gap-1.5">
         <button onClick={runValuation} disabled={valState === "loading"} className={`${btn} bg-emerald-600/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-50`}>
