@@ -414,6 +414,28 @@ function OutreachPanel({ lead, businessId }: { lead: ForeclosureLead; businessId
 
 // ─── Lead intelligence helpers ────────────────────────────────────────────────
 
+// AI assistant filter — apply a plain-English-derived spec to a lead.
+type AssistantFilter = {
+  minPrice?: number; maxPrice?: number; minEquityPct?: number; minScore?: number; maxScore?: number
+  priority?: string; absentee?: boolean; vacant?: boolean; taxDelinquent?: boolean
+  city?: string; zip?: string; minProfit?: number; exit?: string
+}
+function matchesAssistant(lead: ForeclosureLead, f: AssistantFilter): boolean {
+  const value = lead.avmValue ?? lead.estimatedValue ?? 0
+  if (f.minPrice && value && value < f.minPrice) return false
+  if (f.maxPrice && value && value > f.maxPrice) return false
+  if (f.minEquityPct != null && (lead.equityPercent ?? 0) < f.minEquityPct) return false
+  if (f.minScore != null && (lead.score ?? 0) < f.minScore) return false
+  if (f.maxScore != null && (lead.score ?? 0) > f.maxScore) return false
+  if (f.priority && lead.priority !== f.priority.toUpperCase()) return false
+  if (f.absentee && !lead.isAbsentee && lead.occupancy !== "absentee") return false
+  if (f.vacant && lead.occupancy !== "vacant") return false
+  if (f.taxDelinquent && !lead.taxDelinquent) return false
+  if (f.city && !`${lead.city}`.toLowerCase().includes(f.city.toLowerCase())) return false
+  if (f.zip && `${lead.zip}` !== f.zip) return false
+  return true
+}
+
 // Auction countdown badge — urgency is everything on Notice-of-Sale leads.
 function AuctionBadge({ days }: { days: number | null | undefined }) {
   if (days == null || days < 0) return null
@@ -1075,6 +1097,10 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [searchedArea, setSearchedArea] = useState<string | undefined>(undefined)
   const [mapHighlight, setMapHighlight] = useState<number | null>(null)
   const [zoneIds, setZoneIds] = useState<Set<number> | null>(null)
+  const [askQ, setAskQ]               = useState("")
+  const [asking, setAsking]           = useState(false)
+  const [askAnswer, setAskAnswer]     = useState<string | null>(null)
+  const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
   const resultsRef = useRef<HTMLDivElement | null>(null)
   const focusLeadFromMap = useCallback((attomId: number) => {
     setSelected(prev => { const s = new Set(prev); s.add(attomId); return s })
@@ -1282,11 +1308,28 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     })
   , [filtered, sortCol, sortDir])
 
-  // When a zone is drawn on the map, the table narrows to leads inside it.
-  const tableLeads = useMemo(
-    () => (zoneIds ? sorted.filter(l => zoneIds.has(l.attomId)) : sorted),
-    [sorted, zoneIds],
-  )
+  // Table narrows to the drawn map zone and/or the AI assistant's filter.
+  const tableLeads = useMemo(() => {
+    let ls = sorted
+    if (zoneIds) ls = ls.filter(l => zoneIds.has(l.attomId))
+    if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
+    return ls
+  }, [sorted, zoneIds, assistantFilter])
+
+  const ask = async () => {
+    const q = askQ.trim(); if (!q) return
+    setAsking(true); setAskAnswer(null)
+    try {
+      const res = await fetch("/api/leads/assistant", {
+        method: "POST", headers: apiHeaders,
+        body: JSON.stringify({ question: q, count: result?.leads.length ?? 0 }),
+      })
+      const data = await res.json()
+      setAssistantFilter(data.filter && Object.keys(data.filter).length ? data.filter : null)
+      setAskAnswer(data.answer ?? null)
+    } catch { setAskAnswer("Assistant is unavailable right now.") }
+    finally { setAsking(false) }
+  }
 
   const counts = useMemo(() => result ? {
     hot: result.leads.filter(l => l.priority === "HOT").length,
@@ -1460,6 +1503,23 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
               <div className="flex items-end"><button onClick={() => { setFilterPri("ALL"); setFilterMinScore(0); setFilterAbsentee(false); setFilterTaxDelq(false); setFilterMinEq(0); setFilterMaxDays(365); setFilterStage("ALL") }} className="text-xs text-gray-500 hover:text-white underline">Reset</button></div>
             </div>
           )}
+
+          {/* AI Deal Assistant */}
+          <div className="bg-gradient-to-r from-violet-950/50 to-indigo-950/40 border border-violet-500/25 rounded-xl p-3">
+            <div className="flex gap-2">
+              <span className="text-lg self-center">🤖</span>
+              <input value={askQ} onChange={e => setAskQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") ask() }}
+                placeholder="Ask anything — e.g. “sub-300k with 30%+ equity, absentee owners”"
+                className="flex-1 bg-gray-900/80 border border-gray-700/50 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-violet-500" />
+              <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg">{asking ? "Thinking…" : "Ask"}</button>
+            </div>
+            {(askAnswer || assistantFilter) && (
+              <div className="flex items-center justify-between gap-2 mt-2">
+                <p className="text-[11px] text-violet-200">{askAnswer} <span className="text-violet-400 font-semibold">{assistantFilter ? `· ${tableLeads.length} match` : ""}</span></p>
+                {assistantFilter && <button onClick={() => { setAssistantFilter(null); setAskAnswer(null); setAskQ("") }} className="text-[11px] text-gray-400 hover:text-white shrink-0">clear ✕</button>}
+              </div>
+            )}
+          </div>
 
           <p className="text-xs text-gray-600">
             {tableLeads.length.toLocaleString()} leads shown · click any row to expand score + deal + outreach
