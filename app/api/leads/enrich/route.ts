@@ -3,11 +3,12 @@
 // returns a patch the client merges into the lead. Key-gated (RentCast free
 // tier) and graceful: returns { configured:false } with no key, never throws.
 
-export const maxDuration = 25
+export const maxDuration = 30
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { fetchPropertyRecord, valuateProperty, isValuationConfigured } from "@/lib/property-valuation"
+import { enrichPropertyFromWeb } from "@/lib/property-enrichment"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 
@@ -20,17 +21,15 @@ function norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "")
 }
 
+// Set a patch key only if the value is present and the key isn't already filled.
+function set(patch: Record<string, unknown>, key: string, value: unknown): void {
+  if (value != null && value !== "" && patch[key] == null) patch[key] = value
+}
+
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
-
-  if (!isValuationConfigured()) {
-    return Response.json({
-      configured: false,
-      note: "Property enrichment is off. Add RENTCAST_API_KEY (free 50/mo at rentcast.io) to auto-fill beds, baths, sqft, owner, last sale & live value.",
-    })
-  }
 
   let body: { address?: string; city?: string; state?: string; zip?: string; totalLiens?: number }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
@@ -39,53 +38,74 @@ export async function POST(request: NextRequest) {
   const p = { address: body.address, city: body.city ?? "", state: body.state ?? "", zip: body.zip ?? "" }
 
   try {
-    const [record, valuation] = await Promise.all([
-      fetchPropertyRecord(p).catch(() => null),
-      valuateProperty(p).catch(() => null),
+    // Our own free web+AI enrichment runs ALWAYS; RentCast (if configured) is
+    // layered on top for accuracy. RentCast values win on overlap.
+    const [web, record, valuation] = await Promise.all([
+      enrichPropertyFromWeb(p).catch(() => null),
+      isValuationConfigured() ? fetchPropertyRecord(p).catch(() => null) : Promise.resolve(null),
+      isValuationConfigured() ? valuateProperty(p).catch(() => null) : Promise.resolve(null),
     ])
-    if (!record && !valuation) {
-      return Response.json({ configured: true, found: false, note: "No public record found for this address." })
+
+    if (!web && !record && !valuation) {
+      return Response.json({ configured: true, found: false, note: "Couldn't find public details for this address. Try a more complete address." })
     }
 
-    const avm = valuation?.value ?? null
-    const totalLiens = typeof body.totalLiens === "number" ? body.totalLiens : 0
-    const equityDollars = avm != null && avm > 0 ? Math.max(0, Math.round(avm - totalLiens)) : null
-    const equityPercent = avm != null && avm > 0 && equityDollars != null ? Math.round((equityDollars / avm) * 100) : null
-
-    // Absentee = owner's mailing address differs from the property.
-    const isAbsentee = record?.mailingAddress
-      ? !norm(record.mailingAddress).includes(norm(p.address)) && norm(record.mailingAddress) !== norm([p.address, p.city, p.state, p.zip].join(""))
-      : null
-
-    // A patch of ForeclosureLead-compatible fields (all optional).
     const patch: Record<string, unknown> = {}
+    const sources: string[] = []
+
+    // RentCast property record (most accurate) wins first.
     if (record) {
-      if (record.beds != null) patch.beds = record.beds
-      if (record.baths != null) patch.baths = record.baths
-      if (record.sqft != null) patch.sqft = record.sqft
-      if (record.yearBuilt != null) patch.yearBuilt = record.yearBuilt
-      if (record.lotSize != null) patch.lotSize = record.lotSize
-      if (record.propertyType) patch.propertyType = record.propertyType
-      if (record.lastSalePrice != null) patch.purchasePrice = record.lastSalePrice
-      if (record.lastSaleDate) patch.purchaseDate = record.lastSaleDate
-      if (record.ownerName) patch.ownerName = record.ownerName
-      if (record.mailingAddress) patch.mailingAddress = record.mailingAddress
-      if (isAbsentee != null) patch.isAbsentee = isAbsentee
-    }
-    if (valuation) {
-      patch.avmValue = valuation.value
-      patch.estimatedValue = valuation.value
-      patch.avmConfidence = valuation.confidence
-      patch.valuationSource = valuation.source
-      if (valuation.rentEstimate != null) patch.rentEstimate = valuation.rentEstimate
-      if (valuation.rentToValue != null) patch.rentToValue = valuation.rentToValue
-      if (valuation.comps?.length) patch.comps = valuation.comps
-      if (equityDollars != null) patch.estimatedEquity = equityDollars
-      if (equityPercent != null) patch.equityPercent = equityPercent
+      sources.push("RentCast records")
+      set(patch, "beds", record.beds); set(patch, "baths", record.baths); set(patch, "sqft", record.sqft)
+      set(patch, "yearBuilt", record.yearBuilt); set(patch, "lotSize", record.lotSize); set(patch, "propertyType", record.propertyType)
+      set(patch, "purchasePrice", record.lastSalePrice); set(patch, "purchaseDate", record.lastSaleDate)
+      set(patch, "ownerName", record.ownerName); set(patch, "mailingAddress", record.mailingAddress)
+      if (record.mailingAddress) {
+        const absentee = !norm(record.mailingAddress).includes(norm(p.address))
+        set(patch, "isAbsentee", absentee)
+      }
     }
 
-    return Response.json({ configured: true, found: true, patch, record, valuation })
+    // Our own web extraction fills any remaining gaps.
+    if (web) {
+      sources.push(web.source)
+      set(patch, "beds", web.beds); set(patch, "baths", web.baths); set(patch, "sqft", web.sqft)
+      set(patch, "yearBuilt", web.yearBuilt); set(patch, "lotSize", web.lotSize); set(patch, "propertyType", web.propertyType)
+      set(patch, "purchasePrice", web.lastSalePrice); set(patch, "purchaseDate", web.lastSaleDate)
+      set(patch, "ownerName", web.ownerName)
+    }
+
+    // Value: RentCast AVM preferred; else web-estimated value.
+    const totalLiens = typeof body.totalLiens === "number" ? body.totalLiens : 0
+    let avm: number | null = null
+    if (valuation) {
+      sources.push(valuation.source)
+      avm = valuation.value
+      set(patch, "avmValue", valuation.value); patch.estimatedValue = valuation.value
+      set(patch, "avmConfidence", valuation.confidence); set(patch, "valuationSource", valuation.source)
+      set(patch, "rentEstimate", valuation.rentEstimate); set(patch, "rentToValue", valuation.rentToValue)
+      if (valuation.comps?.length) set(patch, "comps", valuation.comps)
+    } else if (web?.estimatedValue) {
+      avm = web.estimatedValue
+      patch.estimatedValue = web.estimatedValue
+      set(patch, "valuationSource", web.source)
+    }
+
+    // Recompute equity from the best value we have.
+    if (avm != null && avm > 0) {
+      const equityDollars = Math.max(0, Math.round(avm - totalLiens))
+      patch.estimatedEquity = equityDollars
+      patch.equityPercent = Math.round((equityDollars / avm) * 100)
+    }
+
+    return Response.json({
+      configured: true,
+      found: Object.keys(patch).length > 0,
+      patch,
+      sources: Array.from(new Set(sources)),
+      premium: isValuationConfigured(),
+    })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : "Enrichment failed" }, { status: 500 })
+    return Response.json({ error: err instanceof Error ? err.message : "Enrichment failed", patch: {} }, { status: 200 })
   }
 }

@@ -475,9 +475,10 @@ function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead;
       const data = await res.json()
       if (data.patch && Object.keys(data.patch).length > 0) {
         onEnrich(lead.attomId, data.patch)
-        setEnrichState("note"); setEnrichNote("✓ Details filled from public records.")
+        const src = Array.isArray(data.sources) && data.sources.length ? ` (${data.sources.join(", ")})` : ""
+        setEnrichState("note"); setEnrichNote(`✓ Filled ${Object.keys(data.patch).length} fields${src}.`)
       } else {
-        setEnrichState("note"); setEnrichNote(data.note ?? "No additional records found for this address.")
+        setEnrichState("note"); setEnrichNote(data.note ?? "No additional details found for this address.")
       }
     } catch { setEnrichState("note"); setEnrichNote("Enrichment failed.") }
   }
@@ -521,7 +522,7 @@ function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead;
       <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Research & Enrich</p>
       <button onClick={runEnrich} disabled={enrichState === "loading"}
         className={`${btn} w-full bg-gradient-to-r from-amber-600/30 to-orange-600/30 border-amber-500/40 text-amber-200 hover:from-amber-600/40 hover:to-orange-600/40 disabled:opacity-50`}>
-        {enrichState === "loading" ? "Filling in details…" : "✨ Enrich — fill beds/baths/sqft/owner/value"}
+        {enrichState === "loading" ? "Researching property…" : "✨ Enrich — fill beds/baths/sqft/owner/value (free)"}
       </button>
       {enrichState === "note" && <p className={`text-[10px] ${enrichNote.startsWith("✓") ? "text-emerald-400" : "text-gray-500"}`}>{enrichNote}</p>}
       <div className="flex flex-wrap gap-1.5">
