@@ -26,6 +26,20 @@ export interface ValuationResult {
   source:       string          // "RentCast AVM"
 }
 
+export interface PropertyRecord {
+  beds:          number | null
+  baths:         number | null
+  sqft:          number | null
+  yearBuilt:     number | null
+  lotSize:       number | null
+  propertyType:  string | null
+  lastSalePrice: number | null
+  lastSaleDate:  string | null
+  ownerName:     string | null
+  ownerOccupied: boolean | null
+  mailingAddress: string | null
+}
+
 const BASE = "https://api.rentcast.io/v1"
 
 export function isValuationConfigured(): boolean {
@@ -58,6 +72,49 @@ async function rentcastGet(path: string, params: Record<string, string>, signal:
   })
   if (!res.ok) return null
   return (await res.json()) as Record<string, unknown>
+}
+
+/**
+ * Fetch the public property record (beds/baths/sqft/year/lot/owner/last-sale)
+ * to fill the blank fields on a scraped lead. Free tier; null when no key.
+ */
+export async function fetchPropertyRecord(
+  p: { address: string; city: string; state: string; zip: string },
+  timeoutMs = 8000,
+): Promise<PropertyRecord | null> {
+  if (!isValuationConfigured()) return null
+  if (!p.address?.trim()) return null
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const raw = await rentcastGet("/properties", { address: buildAddress(p) }, controller.signal)
+    // /properties returns an array (or a single object) of records.
+    const rec = (Array.isArray(raw) ? raw[0] : raw) as Record<string, unknown> | undefined
+    if (!rec) return null
+
+    const ownerObj = rec.owner as Record<string, unknown> | undefined
+    const names = Array.isArray(ownerObj?.names) ? (ownerObj!.names as string[]) : []
+    const mail = ownerObj?.mailingAddress as Record<string, unknown> | undefined
+
+    return {
+      beds:           num(rec.bedrooms),
+      baths:          num(rec.bathrooms),
+      sqft:           num(rec.squareFootage),
+      yearBuilt:      num(rec.yearBuilt),
+      lotSize:        num(rec.lotSize),
+      propertyType:   typeof rec.propertyType === "string" ? rec.propertyType : null,
+      lastSalePrice:  num(rec.lastSalePrice),
+      lastSaleDate:   typeof rec.lastSaleDate === "string" ? rec.lastSaleDate.slice(0, 10) : null,
+      ownerName:      names[0] ?? null,
+      ownerOccupied:  typeof rec.ownerOccupied === "boolean" ? rec.ownerOccupied : null,
+      mailingAddress: typeof mail?.formattedAddress === "string" ? (mail.formattedAddress as string) : null,
+    }
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**

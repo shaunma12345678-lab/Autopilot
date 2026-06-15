@@ -471,8 +471,27 @@ function printDealSheet(lead: ForeclosureLead) {
 }
 
 // On-demand premium actions: live valuation, skip trace, direct mail.
-function PremiumActions({ lead, apiHeaders }: { lead: ForeclosureLead; apiHeaders: Record<string, string> }) {
+function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead; apiHeaders: Record<string, string>; onEnrich: (attomId: number, patch: Record<string, unknown>) => void }) {
   const links = quickLinks(lead)
+  const [enrichState, setEnrichState] = useState<"idle"|"loading"|"note">("idle")
+  const [enrichNote, setEnrichNote]   = useState("")
+
+  const runEnrich = async () => {
+    setEnrichState("loading"); setEnrichNote("")
+    try {
+      const res = await fetch("/api/leads/enrich", {
+        method: "POST", headers: apiHeaders,
+        body: JSON.stringify({ address: lead.address, city: lead.city, state: lead.state, zip: lead.zip, totalLiens: lead.totalLiens }),
+      })
+      const data = await res.json()
+      if (data.patch && Object.keys(data.patch).length > 0) {
+        onEnrich(lead.attomId, data.patch)
+        setEnrichState("note"); setEnrichNote("✓ Details filled from public records.")
+      } else {
+        setEnrichState("note"); setEnrichNote(data.note ?? "No additional records found for this address.")
+      }
+    } catch { setEnrichState("note"); setEnrichNote("Enrichment failed.") }
+  }
   const [val, setVal]         = useState<null | { value: number; confidence: number; rentEstimate: number | null; rentToValue: number | null; comps: Array<{ address: string; price: number }>; source: string }>(null)
   const [valState, setValState] = useState<"idle"|"loading"|"note">("idle")
   const [valNote, setValNote]   = useState("")
@@ -511,6 +530,11 @@ function PremiumActions({ lead, apiHeaders }: { lead: ForeclosureLead; apiHeader
   return (
     <div className="space-y-2.5">
       <p className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Research & Enrich</p>
+      <button onClick={runEnrich} disabled={enrichState === "loading"}
+        className={`${btn} w-full bg-gradient-to-r from-amber-600/30 to-orange-600/30 border-amber-500/40 text-amber-200 hover:from-amber-600/40 hover:to-orange-600/40 disabled:opacity-50`}>
+        {enrichState === "loading" ? "Filling in details…" : "✨ Enrich — fill beds/baths/sqft/owner/value"}
+      </button>
+      {enrichState === "note" && <p className={`text-[10px] ${enrichNote.startsWith("✓") ? "text-emerald-400" : "text-gray-500"}`}>{enrichNote}</p>}
       <div className="flex flex-wrap gap-1.5">
         <a href={links.maps}    target="_blank" rel="noreferrer" className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>🗺 Map</a>
         <a href={links.street}  target="_blank" rel="noreferrer" className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>📷 Street View</a>
@@ -560,10 +584,11 @@ function PremiumActions({ lead, apiHeaders }: { lead: ForeclosureLead; apiHeader
 
 // ─── Expandable lead row ──────────────────────────────────────────────────────
 
-function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHeaders }: {
+function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHeaders, onEnrich }: {
   lead: ForeclosureLead; sel: boolean; onToggle: () => void
   saved: boolean; onSave: () => void; saving: boolean; businessId: string
   apiHeaders: Record<string, string>
+  onEnrich: (attomId: number, patch: Record<string, unknown>) => void
 }) {
   const [expanded, setExpanded]   = useState(false)
   const [detailTab, setDetailTab] = useState<"score"|"deal"|"outreach">("score")
@@ -735,7 +760,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
                 )}
 
                 <div className="pt-3 mt-1 border-t border-gray-700/40">
-                  <PremiumActions lead={lead} apiHeaders={apiHeaders} />
+                  <PremiumActions lead={lead} apiHeaders={apiHeaders} onEnrich={onEnrich} />
                 </div>
               </div>
             </div>
@@ -1066,6 +1091,10 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     setSelected(prev => { const s = new Set(prev); s.add(attomId); return s })
     setMapHighlight(attomId)
     resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [])
+  // Merge live-enrichment data into a lead so its blank fields fill in.
+  const enrichLead = useCallback((attomId: number, patch: Record<string, unknown>) => {
+    setResult(r => r ? { ...r, leads: r.leads.map(l => l.attomId === attomId ? ({ ...l, ...patch } as ForeclosureLead) : l) } : r)
   }, [])
   // Deep Search mode state
   const [deepMode, setDeepMode]           = useState(true)
@@ -1449,7 +1478,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
                 </thead>
                 <tbody>
                   {tableLeads.map(lead => (
-                    <LeadRow key={lead.attomId} lead={lead} sel={selected.has(lead.attomId)} onToggle={() => setSelected(prev => { const s = new Set(prev); s.has(lead.attomId) ? s.delete(lead.attomId) : s.add(lead.attomId); return s })} saved={savedIds.has(lead.attomId)} onSave={() => saveSingle(lead)} saving={saving} businessId={businessId} apiHeaders={apiHeaders} />
+                    <LeadRow key={lead.attomId} lead={lead} sel={selected.has(lead.attomId)} onToggle={() => setSelected(prev => { const s = new Set(prev); s.has(lead.attomId) ? s.delete(lead.attomId) : s.add(lead.attomId); return s })} saved={savedIds.has(lead.attomId)} onSave={() => saveSingle(lead)} saving={saving} businessId={businessId} apiHeaders={apiHeaders} onEnrich={enrichLead} />
                   ))}
                 </tbody>
               </table>
