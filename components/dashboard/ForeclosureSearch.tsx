@@ -510,6 +510,7 @@ function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead;
         body: JSON.stringify({ address: lead.address, city: lead.city, state: lead.state, zip: lead.zip, ownerName: lead.ownerName }),
       })
       const data = await res.json()
+      if (data.ownerName && (!lead.ownerName || /unknown/i.test(lead.ownerName))) onEnrich(lead.attomId, { ownerName: data.ownerName })
       if (data.contact) { setTrace(data.contact); setTraceState("idle") }
       else { setTraceNote(data.note ?? "No contact found."); setTraceState("note") }
     } catch { setTraceNote("Skip trace failed."); setTraceState("note") }
@@ -1084,6 +1085,29 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const enrichLead = useCallback((attomId: number, patch: Record<string, unknown>) => {
     setResult(r => r ? { ...r, leads: r.leads.map(l => l.attomId === attomId ? ({ ...l, ...patch } as ForeclosureLead) : l) } : r)
   }, [])
+  const searchSeqRef = useRef(0)
+  const [autoEnrichBusy, setAutoEnrichBusy] = useState(false)
+  // After a search, quietly fill in the best (thin) HOT leads in the background.
+  const autoEnrichTopLeads = useCallback(async (leads: ForeclosureLead[], seq: number) => {
+    const targets = leads
+      .filter(l => l.priority === "HOT" && !l.sqft && !l.avmValue)
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .slice(0, 6)
+    if (!targets.length) return
+    setAutoEnrichBusy(true)
+    for (const l of targets) {
+      if (searchSeqRef.current !== seq) break // a newer search started — stop
+      try {
+        const res = await fetch("/api/leads/enrich", {
+          method: "POST", headers: apiHeaders,
+          body: JSON.stringify({ address: l.address, city: l.city, state: l.state, zip: l.zip, totalLiens: l.totalLiens }),
+        })
+        const data = await res.json()
+        if (data.patch && Object.keys(data.patch).length) enrichLead(l.attomId, data.patch)
+      } catch { /* best-effort */ }
+    }
+    if (searchSeqRef.current === seq) setAutoEnrichBusy(false)
+  }, [apiHeaders, enrichLead])
   // Deep Search mode state
   const [deepMode, setDeepMode]           = useState(true)
   const [progressPct, setProgressPct]     = useState(0)
@@ -1124,7 +1148,8 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     if (p.searchType === "county" && (!p.county || !p.state)) { setError("Enter county and state."); return }
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
     setProgressPct(0); setProgressMsg(""); setSourceSummary(null); setNewCount(null)
-    setMapHighlight(null)
+    setMapHighlight(null); setAutoEnrichBusy(false)
+    const seq = ++searchSeqRef.current
     setSearchedArea(
       p.searchType === "zip"    ? (p.zipCode || undefined)
     : p.searchType === "city"   ? ([p.city, p.state].filter(Boolean).join(", ") || undefined)
@@ -1182,6 +1207,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
         setResult({ leads: data.leads ?? [], total: data.total ?? 0, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
         setSourceSummary(data.sourceCounts ?? null)
         setNewCount(data.newTotal ?? null)
+        autoEnrichTopLeads(data.leads ?? [], seq) // background: fill the best HOT leads
       } catch (e) {
         stopProgressTimer()
         setError(e instanceof Error ? e.message : "Deep search failed — please try again")
@@ -1437,6 +1463,12 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
 
           <p className="text-xs text-gray-600">
             {tableLeads.length.toLocaleString()} leads shown · click any row to expand score + deal + outreach
+            {autoEnrichBusy && (
+              <span className="ml-2 inline-flex items-center gap-1 text-amber-400">
+                <span className="w-2.5 h-2.5 border-2 border-amber-400/40 border-t-amber-400 rounded-full animate-spin" />
+                auto-filling top HOT leads…
+              </span>
+            )}
             {zoneIds && (
               <button onClick={() => setZoneIds(null)} className="ml-2 text-indigo-400 hover:text-indigo-300 underline">
                 filtered to drawn map zone — clear
