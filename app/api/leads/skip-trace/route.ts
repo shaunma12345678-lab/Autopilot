@@ -1,11 +1,12 @@
 // On-demand skip trace — premium (BatchData) with a free public-records fallback.
 // Called from the lead row's "Skip trace" button. One owner per click.
 
-export const maxDuration = 20
+export const maxDuration = 30
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { skipTrace, isSkipTraceConfigured } from "@/lib/skip-trace"
+import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
 import { enrichLeadsWithContact } from "@/lib/contact-enrichment"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
@@ -39,12 +40,16 @@ export async function POST(request: NextRequest) {
       if (result) return Response.json({ found: true, premium: true, contact: result })
     }
 
-    // 2) Free public-records fallback (phone only, best-effort).
+    // 2) Our OWN web+AI tracer — finds phone/email/relatives from public pages
+    //    (only contacts that actually appear in the source text). No key needed.
+    const web = await traceOwnerFromWeb(p).catch(() => null)
+    if (web) return Response.json({ found: true, premium: false, contact: web })
+
+    // 3) Free public-records phone fallback (best-effort).
     const map = await enrichLeadsWithContact([
       { address: p.address, ownerName: p.ownerName || "Owner Unknown", city: p.city, state: p.state },
     ])
     const phone = map.get((p.address + p.city).toLowerCase().replace(/[\s,#.-]/g, "")) ?? null
-
     if (phone) {
       return Response.json({
         found: true, premium: false,
@@ -56,7 +61,7 @@ export async function POST(request: NextRequest) {
       found: false, premium: isSkipTraceConfigured(),
       note: isSkipTraceConfigured()
         ? "No contact found for this owner."
-        : "No contact found. Add BATCHDATA_API_KEY for verified cell phones, emails & relatives.",
+        : "No contact found in public sources. Add BATCHDATA_API_KEY for verified cell phones & emails.",
     })
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : "Skip trace failed" }, { status: 500 })
