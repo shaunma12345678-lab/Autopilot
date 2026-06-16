@@ -577,32 +577,37 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     if (mode === "draw") map.doubleClickZoom.disable(); else map.doubleClickZoom.enable()
   }, [mode])
 
-  // Reset the mapped coordinates the moment a new lead set arrives. This is
-  // React's recommended "adjust state during render when a prop changes" pattern
-  // (cheaper and cleaner than resetting inside an effect).
-  const [coordsForLeads, setCoordsForLeads] = useState(leads)
-  if (leads !== coordsForLeads) {
-    setCoordsForLeads(leads)
+  // A stable key based only on ADDRESSES — so enrichment patches (which change
+  // the leads array identity but not the addresses) don't wipe the pins and
+  // restart geocoding. This is the "only 2 mapped" fix.
+  const leadsKey = useMemo(() => leads.map((l) => `${l.attomId}~${l.address ?? ""}~${l.zip ?? ""}`).join("|"), [leads])
+
+  // Reset mapped coordinates only when the actual address set changes.
+  const [coordsKey, setCoordsKey] = useState(leadsKey)
+  if (leadsKey !== coordsKey) {
+    setCoordsKey(leadsKey)
     setCoords({})
     setGeoProgress(leads.length ? { done: 0, total: leads.length } : null)
   }
 
   // ── Geocode the current lead set (cached, bounded concurrency, abortable) ───
+  // Keyed on leadsKey so a value/owner patch never restarts an in-flight run.
   useEffect(() => {
     didFitRef.current = false
-    if (!leads.length) return
+    const current = leadsRef.current
+    if (!current.length) return
     const ctrl = new AbortController()
     geocodeLeads(
-      leads,
+      current,
       (index, ll) => {
-        const id = leads[index].attomId
+        const id = current[index].attomId
         setCoords((prev) => (prev[id] ? prev : { ...prev, [id]: ll }))
         setGeoProgress((g) => (g ? { done: g.done + 1, total: g.total } : g))
       },
       { signal: ctrl.signal },
     ).catch(() => {}).finally(() => { if (!ctrl.signal.aborted) setGeoProgress(null) })
     return () => { ctrl.abort() }
-  }, [leads])
+  }, [leadsKey])
 
   // ── Cluster + render pins (grid-clustering by screen pixels) ────────────────
   const hasSelect = Boolean(onSelectLead)

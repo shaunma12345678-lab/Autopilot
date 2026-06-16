@@ -40,6 +40,9 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
 
+  // An explicit pre-foreclosure stage (no filing yet) is itself a forecast base.
+  if (lead.foreclosureStage === "PRE_FORECLOSURE") add(28, "Pre-foreclosure stage (no notice filed yet)")
+
   const taxDelq = lead.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(text)
   const probate = /probate|deceased|estate|inherited|obituary/.test(text)
   const divorce = /divorce|marital|dissolution/.test(text)
