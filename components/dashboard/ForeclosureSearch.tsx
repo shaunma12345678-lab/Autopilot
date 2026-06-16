@@ -11,6 +11,7 @@ import { CRM_STAGES, loadCrm, persistCrm, loadReminders, setReminder, reminderSt
 import { fillComps } from "@/lib/comp-engine"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { learnProfile, fitsProfile } from "@/lib/deal-learning"
+import { rankZones } from "@/lib/opportunity-zones"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1159,6 +1160,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [askAnswer, setAskAnswer]     = useState<string | null>(null)
   const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
   const [forYou, setForYou]           = useState(false)
+  const [showZoneRank, setShowZoneRank] = useState(false)
   const [showBuyers, setShowBuyers]   = useState(false)
   const [autopilotRunning, setAutopilotRunning] = useState(false)
   const [autopilotResult, setAutopilotResult]   = useState<string | null>(null)
@@ -1431,6 +1433,14 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     for (const l of result.leads) if (fitsProfile(l, analyzeDeal(l), learned)) s.add(l.attomId)
     return s
   }, [forYou, learned, result])
+  const zones = useMemo(() => (result ? rankZones(result.leads).slice(0, 8) : []), [result])
+
+  const searchZone = (zoneKey: string, state: string) => {
+    const isZip = /^\d{5}$/.test(zoneKey.split(" ")[0])
+    setP(prev => ({ ...prev, searchType: isZip ? "zip" : "city", zipCode: isZip ? zoneKey.split(" ")[0] : "", city: isZip ? "" : zoneKey, state: state || prev.state }))
+    setShowZoneRank(false)
+    setTimeout(() => latestSearchRef.current(), 90)
+  }
 
   // Table narrows to the drawn map zone and/or the AI assistant's filter.
   const tableLeads = useMemo(() => {
@@ -1671,10 +1681,29 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
               <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg" title="Filter the current results">{asking ? "…" : "Ask"}</button>
               <button onClick={searchFromAI} disabled={asking || !askQ.trim()} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold px-3 rounded-lg" title="Run this as a new search (e.g. 'vacant absentee homes in Phoenix under 250k')">🔎 Search</button>
               <button onClick={() => setForYou(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${forYou ? "bg-violet-600 border-violet-500 text-white" : "bg-violet-700/30 border-violet-500/40 text-violet-200 hover:bg-violet-700/50"}`} title={learned ? "Rank deals like the ones you pursue in your CRM" : "Move deals to Offer/Contract/Closed in your CRM to teach this"}>🎯 For you</button>
+              <button onClick={() => setShowZoneRank(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showZoneRank ? "bg-teal-600 border-teal-500 text-white" : "bg-teal-700/30 border-teal-500/40 text-teal-200 hover:bg-teal-700/50"}`} title="Rank the best ZIPs in these results">📍 Best zones</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
             </div>
             {forYou && !learned && <p className="text-[11px] text-violet-300/80 mt-2">Teaching mode: move 3+ deals to Offer/Contract/Closed in their CRM, then “For you” ranks new deals like those.</p>}
+            {showZoneRank && (
+              <div className="mt-2 bg-gray-900/60 border border-teal-500/20 rounded-lg p-2">
+                <div className="text-[10px] text-gray-500 mb-1 px-1">📍 Best zones in these results — ranked by A/B-grade density × profit × score</div>
+                {zones.length === 0 ? (
+                  <div className="text-[11px] text-gray-600 px-1 py-2">Run a search first.</div>
+                ) : (
+                  <div className="space-y-0.5">
+                    {zones.map(z => (
+                      <div key={z.key} className="flex items-center justify-between gap-2 px-1 py-1 hover:bg-white/5 rounded text-[11px]">
+                        <span className="text-gray-200 font-semibold truncate flex-1">{z.label}{z.state ? `, ${z.state}` : ""}</span>
+                        <span className="text-gray-500 shrink-0">{z.count} deals · {z.topGrade} A/B · ~${(z.medianProfit / 1000).toFixed(0)}k{z.predicted ? ` · 🔮${z.predicted}` : ""}</span>
+                        <button onClick={() => searchZone(z.key, z.state)} className="text-teal-300 hover:text-teal-200 font-semibold shrink-0">Search →</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {(askAnswer || assistantFilter) && (
               <div className="flex items-center justify-between gap-2 mt-2">
                 <p className="text-[11px] text-violet-200">{askAnswer} <span className="text-violet-400 font-semibold">{assistantFilter ? `· ${tableLeads.length} match` : ""}</span></p>
