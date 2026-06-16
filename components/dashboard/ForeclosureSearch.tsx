@@ -1180,6 +1180,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     }
     if (searchSeqRef.current === seq) setAutoEnrichBusy(false)
   }, [apiHeaders, enrichLead])
+  const [enrichAllDone, setEnrichAllDone] = useState(false)
   // Deep Search mode state
   const [deepMode, setDeepMode]           = useState(true)
   const [progressPct, setProgressPct]     = useState(0)
@@ -1377,6 +1378,23 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     finally { setAsking(false) }
   }
 
+  // Fill in every (thin) lead currently shown, on demand. Capped + seq-guarded.
+  const enrichAllShown = async () => {
+    const seq = searchSeqRef.current
+    const targets = tableLeads.filter(l => !l.sqft && !l.avmValue).slice(0, 25)
+    if (!targets.length) return
+    setAutoEnrichBusy(true); setEnrichAllDone(false)
+    for (const l of targets) {
+      if (searchSeqRef.current !== seq) break
+      try {
+        const res = await fetch("/api/leads/enrich", { method: "POST", headers: apiHeaders, body: JSON.stringify({ address: l.address, city: l.city, state: l.state, zip: l.zip, totalLiens: l.totalLiens }) })
+        const data = await res.json()
+        if (data.patch && Object.keys(data.patch).length) enrichLead(l.attomId, data.patch)
+      } catch { /* best-effort */ }
+    }
+    if (searchSeqRef.current === seq) { setAutoEnrichBusy(false); setEnrichAllDone(true); setTimeout(() => setEnrichAllDone(false), 2500) }
+  }
+
   const counts = useMemo(() => result ? {
     hot: result.leads.filter(l => l.priority === "HOT").length,
     warm: result.leads.filter(l => l.priority === "WARM").length,
@@ -1559,6 +1577,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
                 className="flex-1 bg-gray-900/80 border border-gray-700/50 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-violet-500" />
               <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg">{asking ? "Thinking…" : "Ask"}</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
+              <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
             </div>
             {(askAnswer || assistantFilter) && (
               <div className="flex items-center justify-between gap-2 mt-2">
