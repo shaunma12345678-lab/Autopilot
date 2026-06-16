@@ -17,6 +17,7 @@ import { deepSearch } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
+import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
 import { sendEmail } from "@/lib/email"
 import { sendSms } from "@/lib/sms"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
@@ -32,10 +33,12 @@ function authorized(request: NextRequest): boolean {
   return request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
-function digestHtml(deals: { lead: ForeclosureLead; mao: number; profit: number; label: string; roi: number; isNew: boolean }[]): string {
+interface Deal { lead: ForeclosureLead; mao: number; profit: number; label: string; roi: number; isNew: boolean; owner?: string | null; contact?: string | null }
+
+function digestHtml(deals: Deal[]): string {
   const rows = deals.map((d) => `
     <tr style="border-bottom:1px solid #eee">
-      <td style="padding:8px 6px"><strong>${d.lead.address}</strong><br/><span style="color:#888;font-size:12px">${d.lead.city}, ${d.lead.state} ${d.lead.zip}</span>${d.isNew ? ' <span style="background:#0ea5e9;color:#fff;font-size:10px;padding:1px 5px;border-radius:4px">NEW</span>' : ""}</td>
+      <td style="padding:8px 6px"><strong>${d.lead.address}</strong><br/><span style="color:#888;font-size:12px">${d.lead.city}, ${d.lead.state} ${d.lead.zip}</span>${d.isNew ? ' <span style="background:#0ea5e9;color:#fff;font-size:10px;padding:1px 5px;border-radius:4px">NEW</span>' : ""}${d.owner || d.contact ? `<br/><span style="color:#0369a1;font-size:12px">👤 ${d.owner ?? "owner"}${d.contact ? ` · ${d.contact}` : ""}</span>` : ""}</td>
       <td style="padding:8px 6px;text-align:center"><strong>${d.lead.score}</strong><br/><span style="color:#888;font-size:11px">${d.lead.priority}</span></td>
       <td style="padding:8px 6px;text-align:right">MAO ${fmtMoney(d.mao)}<br/><span style="color:#16a34a;font-size:12px">${d.label} ${fmtMoney(d.profit)}${d.label === "Flip profit" ? ` · ${d.roi}% ROI` : ""}</span></td>
     </tr>`).join("")
@@ -69,7 +72,7 @@ export async function GET(request: NextRequest) {
     leads = fillComps(leads)
     const newKeys = new Set(result.newLeads.map((l) => l.address.toLowerCase().replace(/[\s,#.-]/g, "")))
 
-    const ranked = leads
+    const ranked: Deal[] = leads
       .filter((l) => (l.score ?? 0) >= minScore)
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .slice(0, 15)
@@ -80,6 +83,15 @@ export async function GET(request: NextRequest) {
           isNew: newKeys.has(lead.address.toLowerCase().replace(/[\s,#.-]/g, "")),
         }
       })
+
+    // #3 Auto skip-trace the top deals with our own web tracer, so the digest
+    // arrives with owner + contact ready to call. Capped to keep the run light.
+    for (const d of ranked.slice(0, 6)) {
+      try {
+        const c = await traceOwnerFromWeb({ address: d.lead.address, city: d.lead.city, state: d.lead.state, zip: d.lead.zip, ownerName: d.lead.ownerName })
+        if (c) { d.contact = c.phone ?? c.email ?? null; d.owner = d.lead.ownerName || null }
+      } catch { /* best-effort */ }
+    }
 
     const newCount = ranked.filter((d) => d.isNew).length
     let emailed = false, texted = false

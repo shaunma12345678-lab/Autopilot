@@ -10,6 +10,7 @@ import BuyersModal from "@/components/dashboard/BuyersModal"
 import { CRM_STAGES, loadCrm, persistCrm, loadReminders, setReminder, reminderStatus, CRM_EVENT, type CrmStage } from "@/lib/crm"
 import { fillComps } from "@/lib/comp-engine"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
+import { learnProfile, fitsProfile } from "@/lib/deal-learning"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1157,6 +1158,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [asking, setAsking]           = useState(false)
   const [askAnswer, setAskAnswer]     = useState<string | null>(null)
   const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
+  const [forYou, setForYou]           = useState(false)
   const [showBuyers, setShowBuyers]   = useState(false)
   const [autopilotRunning, setAutopilotRunning] = useState(false)
   const [autopilotResult, setAutopilotResult]   = useState<string | null>(null)
@@ -1394,13 +1396,27 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     })
   , [filtered, sortCol, sortDir])
 
+  // #1 Self-improving ranking: learn the profile of deals you advance in the CRM
+  // and (when "For you" is on) float matching deals to the top.
+  const learned = useMemo(
+    () => (result ? learnProfile(result.leads, loadCrm(), (l) => analyzeDeal(l)) : null),
+    [result],
+  )
+  const fitIds = useMemo(() => {
+    if (!forYou || !learned || !result) return null
+    const s = new Set<number>()
+    for (const l of result.leads) if (fitsProfile(l, analyzeDeal(l), learned)) s.add(l.attomId)
+    return s
+  }, [forYou, learned, result])
+
   // Table narrows to the drawn map zone and/or the AI assistant's filter.
   const tableLeads = useMemo(() => {
     let ls = sorted
     if (zoneIds) ls = ls.filter(l => zoneIds.has(l.attomId))
     if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
+    if (fitIds) ls = [...ls].sort((a, b) => (fitIds.has(b.attomId) ? 1 : 0) - (fitIds.has(a.attomId) ? 1 : 0) || (b.score ?? 0) - (a.score ?? 0))
     return ls
-  }, [sorted, zoneIds, assistantFilter])
+  }, [sorted, zoneIds, assistantFilter, fitIds])
 
   const ask = async () => {
     const q = askQ.trim(); if (!q) return
@@ -1630,9 +1646,11 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
                 placeholder="Ask anything — e.g. “sub-300k with 30%+ equity, absentee owners”"
                 className="flex-1 bg-gray-900/80 border border-gray-700/50 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-violet-500" />
               <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg">{asking ? "Thinking…" : "Ask"}</button>
+              <button onClick={() => setForYou(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${forYou ? "bg-violet-600 border-violet-500 text-white" : "bg-violet-700/30 border-violet-500/40 text-violet-200 hover:bg-violet-700/50"}`} title={learned ? "Rank deals like the ones you pursue in your CRM" : "Move deals to Offer/Contract/Closed in your CRM to teach this"}>🎯 For you</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
             </div>
+            {forYou && !learned && <p className="text-[11px] text-violet-300/80 mt-2">Teaching mode: move 3+ deals to Offer/Contract/Closed in their CRM, then “For you” ranks new deals like those.</p>}
             {(askAnswer || assistantFilter) && (
               <div className="flex items-center justify-between gap-2 mt-2">
                 <p className="text-[11px] text-violet-200">{askAnswer} <span className="text-violet-400 font-semibold">{assistantFilter ? `· ${tableLeads.length} match` : ""}</span></p>
