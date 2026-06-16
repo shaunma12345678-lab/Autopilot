@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useCallback, useMemo, useRef } from "react"
+import React, { useState, useCallback, useMemo, useRef, useEffect } from "react"
 import type { ForeclosureLead, OutreachPackage, ScoreBreakdown, DealCalc } from "@/lib/agents/foreclosure-agent"
 import type { AtRiskLead } from "@/app/api/leads/at-risk-search/route"
 import DistressMap from "@/components/dashboard/DistressMap"
@@ -1163,6 +1163,28 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [autopilotRunning, setAutopilotRunning] = useState(false)
   const [autopilotResult, setAutopilotResult]   = useState<string | null>(null)
   const resultsRef = useRef<HTMLDivElement | null>(null)
+  const latestSearchRef = useRef<() => void>(() => {})
+
+  // AI search: parse the request into a search area + filter, set the form, run it.
+  const searchFromAI = async () => {
+    const q = askQ.trim(); if (!q) return
+    setAsking(true); setAskAnswer(null)
+    try {
+      const res = await fetch("/api/leads/assistant", { method: "POST", headers: apiHeaders, body: JSON.stringify({ question: q, count: result?.leads.length ?? 0 }) })
+      const d = await res.json()
+      const s = d.search
+      setAssistantFilter(d.filter && Object.keys(d.filter).length ? d.filter : null)
+      if (s && (s.zip || s.city || s.county)) {
+        const type: AreaParams["searchType"] = s.zip ? "zip" : s.county ? "county" : "city"
+        setP(prev => ({ ...prev, searchType: type, zipCode: s.zip ?? "", city: s.city ?? "", state: (s.state ?? prev.state ?? "").toUpperCase().slice(0, 2), county: s.county ?? "" }))
+        setAskAnswer((d.answer ?? "Searching…"))
+        setTimeout(() => latestSearchRef.current(), 90) // after the form state commits
+      } else {
+        setAskAnswer((d.answer ?? "") + " — no area detected, filtered current results.")
+      }
+    } catch { setAskAnswer("Search assistant unavailable.") }
+    finally { setAsking(false) }
+  }
 
   const runAutopilot = async () => {
     setAutopilotRunning(true); setAutopilotResult(null)
@@ -1339,6 +1361,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     } catch (e) { setError(e instanceof Error ? e.message : "Search failed") }
     setLoading(false)
   }
+  useEffect(() => { latestSearchRef.current = search })
 
   const saveSingle = async (lead: ForeclosureLead) => {
     setSaving(true)
@@ -1645,7 +1668,8 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
               <input value={askQ} onChange={e => setAskQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") ask() }}
                 placeholder="Ask anything — e.g. “sub-300k with 30%+ equity, absentee owners”"
                 className="flex-1 bg-gray-900/80 border border-gray-700/50 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-violet-500" />
-              <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg">{asking ? "Thinking…" : "Ask"}</button>
+              <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg" title="Filter the current results">{asking ? "…" : "Ask"}</button>
+              <button onClick={searchFromAI} disabled={asking || !askQ.trim()} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold px-3 rounded-lg" title="Run this as a new search (e.g. 'vacant absentee homes in Phoenix under 250k')">🔎 Search</button>
               <button onClick={() => setForYou(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${forYou ? "bg-violet-600 border-violet-500 text-white" : "bg-violet-700/30 border-violet-500/40 text-violet-200 hover:bg-violet-700/50"}`} title={learned ? "Rank deals like the ones you pursue in your CRM" : "Move deals to Offer/Contract/Closed in your CRM to teach this"}>🎯 For you</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>

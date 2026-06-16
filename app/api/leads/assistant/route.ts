@@ -21,13 +21,11 @@ function safeParse(s: string): Record<string, unknown> | null {
 }
 
 const SYSTEM =
-  "You are a real-estate deal assistant. Convert the investor's request into a JSON filter over their deal list and give a one-sentence answer. " +
-  "Available filter keys (include ONLY the ones the request implies, omit the rest): " +
-  "minPrice, maxPrice (numbers, property value), minEquityPct (0-100), minScore, maxScore (0-100), " +
-  "priority ('HOT'|'WARM'|'COLD'), absentee (true), vacant (true), taxDelinquent (true), " +
-  "city (string), zip (string), minProfit (number), exit (one of 'Wholesale','Flip','BRRRR','Subject-to'), " +
-  "sort ('score'|'equity'|'profit'|'price'). " +
-  "Return raw JSON: { \"filter\": {...}, \"sort\": string|null, \"answer\": string }. Never invent deals; only build the filter."
+  "You are a real-estate deal assistant. Convert the investor's request into (a) a JSON filter over their current deal list and (b) — if the request names a place to search — a search target. Give a one-sentence answer. " +
+  "Filter keys (include ONLY the ones implied): minPrice, maxPrice (property value), minEquityPct (0-100), minScore, maxScore (0-100), " +
+  "priority ('HOT'|'WARM'|'COLD'), absentee (true), vacant (true), taxDelinquent (true), city, zip, minProfit, exit ('Wholesale'|'Flip'|'BRRRR'|'Subject-to'). " +
+  "search: if the request mentions a city/ZIP/county to look in, return { type:'zip'|'city'|'county', zip, city, state (2-letter), county }, else omit. " +
+  "Return raw JSON: { \"filter\": {...}, \"search\": {...}|null, \"sort\": string|null, \"answer\": string }. Never invent deals."
 
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
@@ -46,6 +44,7 @@ export async function POST(request: NextRequest) {
     if (!obj) return Response.json({ filter: {}, sort: null, answer: "I couldn't parse that — try rephrasing." })
     return Response.json({
       filter: (obj.filter && typeof obj.filter === "object") ? obj.filter : {},
+      search: (obj.search && typeof obj.search === "object") ? obj.search : null,
       sort: typeof obj.sort === "string" ? obj.sort : null,
       answer: typeof obj.answer === "string" ? obj.answer : "Here are the matching deals.",
     })
