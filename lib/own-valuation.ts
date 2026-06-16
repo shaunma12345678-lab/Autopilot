@@ -24,6 +24,25 @@ function safeParse(s: string): Record<string, unknown> | null {
 const SYSTEM =
   "You are a real-estate appraiser. From web snippets, estimate the subject property's current market value (ARV) and list nearby comparable sales. Use ONLY figures present in the text; never fabricate. If you cannot find a value, return null. Output raw JSON only."
 
+// Last-resort estimate from data we already have, so the button is never empty.
+// Low confidence and clearly labeled — it's a model, not live data.
+export function modelValuation(baseValue: number, sqft?: number | null, areaPsf?: number | null): ValuationResult | null {
+  let value = baseValue > 0 ? Math.round(baseValue) : 0
+  if (!value && sqft && sqft > 200 && areaPsf && areaPsf > 0) value = Math.round(sqft * areaPsf)
+  if (!value) return null
+  const rent = Math.round(value * 0.007)
+  return {
+    value,
+    rangeLow: Math.round(value * 0.88),
+    rangeHigh: Math.round(value * 1.12),
+    confidence: 35,
+    rentEstimate: rent,
+    rentToValue: Math.round(((rent * 12) / value) * 1000) / 10,
+    comps: [],
+    source: "Model estimate (no live data)",
+  }
+}
+
 export async function estimateValueFromWeb(
   p: { address: string; city: string; state: string; zip: string },
 ): Promise<ValuationResult | null> {

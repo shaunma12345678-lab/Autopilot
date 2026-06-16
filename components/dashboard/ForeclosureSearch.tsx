@@ -560,7 +560,7 @@ function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead;
     try {
       const res = await fetch("/api/leads/valuation", {
         method: "POST", headers: apiHeaders,
-        body: JSON.stringify({ address: lead.address, city: lead.city, state: lead.state, zip: lead.zip }),
+        body: JSON.stringify({ address: lead.address, city: lead.city, state: lead.state, zip: lead.zip, estimatedValue: lead.avmValue ?? lead.estimatedValue ?? undefined, sqft: lead.sqft ?? undefined }),
       })
       const data = await res.json()
       if (data.valuation) { setVal(data.valuation); setValState("idle") }
