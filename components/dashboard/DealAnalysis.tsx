@@ -12,6 +12,7 @@ import {
   type RepairLevel, type DealAnalysis as DealAnalysisType,
 } from "@/lib/deal-analysis"
 import { loadBuyers, matchBuyers, BUYERS_EVENT, type Buyer } from "@/lib/buyers"
+import { predictPreForeclosure } from "@/lib/predictive"
 
 // Shows which of your saved cash buyers fit this deal — instant disposition.
 function BuyerMatch({ lead, a }: { lead: ForeclosureLead; a: DealAnalysisType }) {
@@ -58,8 +59,20 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
   // Equity bar: debt portion vs equity portion of ARV.
   const debtPct = a.arv > 0 ? Math.min(100, Math.round((a.totalDebt / a.arv) * 100)) : 100
 
+  const pred = predictPreForeclosure(lead)
+
   return (
     <div className="space-y-3">
+      {/* Predicted pre-foreclosure — clearly OUR forecast, not a filed case */}
+      {pred.predicted && (
+        <div className="bg-fuchsia-950/40 border border-fuchsia-500/30 rounded-lg px-3 py-2">
+          <div className="text-[11px] font-extrabold text-fuchsia-300">🔮 PREDICTED PRE-FORECLOSURE</div>
+          <div className="text-[11px] text-fuchsia-100 mt-0.5">{pred.probability}% likely · {pred.timeframe} · {pred.confidence} confidence</div>
+          <div className="text-[10px] text-fuchsia-200/80 mt-1">Signals: {pred.factors.join(", ")}</div>
+          <div className="text-[9.5px] text-fuchsia-300/70 italic mt-1">⚠ Our forecast from early-warning signals — NOT a filed foreclosure. Verify before acting.</div>
+        </div>
+      )}
+
       {/* Headline: grade + MAO + spread/profit */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-extrabold text-lg ${GRADE_COLOR[a.grade]}`}>{a.grade}</div>

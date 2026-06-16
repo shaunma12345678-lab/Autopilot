@@ -25,6 +25,7 @@ import type {
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import { geocodeLeads, geocodePlace, geocodeAddress, reverseGeocode, type LatLng } from "@/lib/geocode"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
+import { predictPreForeclosure } from "@/lib/predictive"
 import { marketSnapshot, type MarketSnapshot } from "@/lib/market-stats"
 import { loadBuyBox, saveBuyBox, matchesBuyBox, DEFAULT_BUYBOX, type BuyBox } from "@/lib/buy-box"
 import { CRM_STAGES, loadCrm, persistCrm, crmColor, CRM_EVENT, type CrmStage, type CrmMap } from "@/lib/crm"
@@ -46,6 +47,11 @@ function leadUrgency(lead: ForeclosureLead): Urgency {
   if (activeStage || (lead.score ?? 0) >= 45) return "active"
   return "early"
 }
+
+// Distinct color for OUR predictions (not a filed foreclosure). Dashed ring +
+// magenta signals "forecast / uncertain" so it can never be mistaken for a
+// confirmed distress pin.
+const PREDICT_COLOR = "#d946ef"
 
 const URGENCY_RANK: Record<Urgency, number> = { imminent: 3, soon: 2, active: 1, early: 0 }
 const URGENCY_COLOR: Record<Urgency, string> = {
@@ -108,6 +114,15 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
   const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat},${ll.lng}`
   const a = analyzeDeal(lead, undefined, fallbackPsf ? { fallbackPsf } : undefined)
   const verdict = dealVerdict(a.grade, lead.score ?? 0)
+  const pred = predictPreForeclosure(lead)
+  const predBanner = pred.predicted
+    ? `<div style="margin-top:5px;background:#3b0764;border:1px solid #d946ef66;border-radius:8px;padding:6px 8px">
+        <div style="color:#f0abfc;font-weight:800;font-size:11px">🔮 PREDICTED PRE-FORECLOSURE</div>
+        <div style="font-size:10.5px;color:#e9d5ff;margin-top:1px">${pred.probability}% likely · ${pred.timeframe} · ${pred.confidence} confidence</div>
+        <div style="font-size:10px;color:#d8b4fe;margin-top:2px">Signals: ${pred.factors.slice(0, 4).map(escapeHtml).join(", ")}</div>
+        <div style="font-size:9.5px;color:#c084fc;margin-top:3px;font-style:italic">⚠ Our forecast — NOT a filed foreclosure. Verify before acting.</div>
+      </div>`
+    : ""
   const crmRow = `<div style="margin-top:7px;border-top:1px solid #ffffff14;padding-top:6px"><div style="font-size:9px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Pipeline</div><div style="display:flex;gap:3px;flex-wrap:wrap">${CRM_STAGES.map((s) => `<button data-crm-lead="${lead.attomId}" data-crm-stage="${s.id}" style="font-size:9px;padding:2px 5px;border-radius:5px;border:1px solid ${s.color}66;background:${crmStage === s.id ? s.color : "transparent"};color:${crmStage === s.id ? "#111" : s.color};cursor:pointer;font-weight:700">${s.label}</button>`).join("")}</div></div>`
   const profitColor = a.headlineProfit > 0 ? "#34d399" : "#f87171"
 
@@ -149,6 +164,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
       <div style="font-size:11px;color:#9ca3af">${escapeHtml([lead.city, lead.state, lead.zip].filter(Boolean).join(", "))}</div>
       <div style="font-size:12px;font-weight:800;margin-top:3px;color:${verdict.color}">${verdict.text}</div>
       ${(isNew || fits) ? `<div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${isNew ? '<span style="font-size:9.5px;font-weight:700;background:#0ea5e9;color:#04293a;border-radius:5px;padding:1px 5px">🆕 NEW</span>' : ""}${fits ? '<span style="font-size:9.5px;font-weight:700;background:#16a34a33;color:#86efac;border:1px solid #16a34a66;border-radius:5px;padding:1px 5px">📈 Matches your deals</span>' : ""}</div>` : ""}
+      ${predBanner}
       ${distressLine}${countdown}${liens}
       ${moneyBox}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;margin-top:6px">
@@ -260,6 +276,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const psfRef        = useRef<number | null>(null)
   const newIdsRef     = useRef<Set<number>>(new Set())
   const newOnlyRef    = useRef(false)
+  const predOnlyRef   = useRef(false)
   const profileRef    = useRef<LearnedProfile | null>(null)
   const onRefreshRef  = useRef(onRefresh)
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -306,6 +323,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [pipelineView, setPipelineView] = useState(false)
   const [showMarket, setShowMarket] = useState(false)
   const [newOnly, setNewOnly]       = useState(false)
+  const [predOnly, setPredOnly]     = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [toolsOpen, setToolsOpen]   = useState(true)
   const snapshot: MarketSnapshot = useMemo(() => marketSnapshot(leads), [leads])
@@ -333,6 +351,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { pipelineRef.current = pipelineView }, [pipelineView])
   useEffect(() => { psfRef.current = snapshot.medianPsf }, [snapshot])
   useEffect(() => { newOnlyRef.current = newOnly }, [newOnly])
+  useEffect(() => { predOnlyRef.current = predOnly }, [predOnly])
   useEffect(() => { profileRef.current = profile }, [profile])
   useEffect(() => { onRefreshRef.current = onRefresh }, [onRefresh])
   useEffect(() => { newIdsRef.current = newIds }, [newIds])
@@ -342,7 +361,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { if (leads.length) addSeen(leads.map((l) => leadSignature(l))) }, [leads])
 
   // Re-draw pins when filters / pipeline / CRM / market / new-set change.
-  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, newOnly, newIds, profile, ready])
+  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, newOnly, predOnly, newIds, profile, ready])
 
   // #1 Auto-refresh / per-farm auto-crawl: periodically re-run the search so new
   // deals surface (and zone alerts fire) while the map is open.
@@ -600,16 +619,18 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     const analysisOf = (l: ForeclosureLead) => analyzeDeal(l, undefined, psf ? { fallbackPsf: psf } : undefined)
     const pts = leadsRef.current.map((l) => ({ l, ll: coordsRef.current[l.attomId] })).filter((x): x is { l: ForeclosureLead; ll: LatLng } => Boolean(x.ll))
 
-    // Buy-box (#1) and New (#2) filters: matching deals cluster/pin; the rest
-    // fade to faint grey dots so your matches pop.
+    // Buy-box (#1), New (#2) and Predicted filters: matching deals cluster/pin;
+    // the rest fade to faint grey dots so your matches pop.
     const newOnly = newOnlyRef.current
+    const predOnly = predOnlyRef.current
     let clusterPts = pts
-    if (box.enabled || newOnly) {
+    if (box.enabled || newOnly || predOnly) {
       clusterPts = []
       for (const p of pts) {
         const passBox = !box.enabled || matchesBuyBox(p.l, analysisOf(p.l), box)
         const passNew = !newOnly || newIdsRef.current.has(p.l.attomId)
-        if (passBox && passNew) clusterPts.push(p)
+        const passPred = !predOnly || predictPreForeclosure(p.l).predicted
+        if (passBox && passNew && passPred) clusterPts.push(p)
         else L.circleMarker([p.ll.lat, p.ll.lng], { radius: 3, stroke: false, fillColor: "#475569", fillOpacity: 0.35, bubblingMouseEvents: false }).addTo(layer)
       }
     }
@@ -628,12 +649,15 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         const { l, ll } = b.items[0]
         const u = leadUrgency(l)
         const stage = crmRef.current[l.attomId]
+        const predicted = predictPreForeclosure(l).predicted
         const radius = 6 + Math.round((Math.max(0, Math.min(100, l.score ?? 0)) / 100) * 10)
         const m = L.circleMarker([ll.lat, ll.lng], {
           radius,
-          color: l.isAbsentee ? "#a78bfa" : "#0b0f17",
-          weight: l.isAbsentee ? 3 : 1.5,
-          fillColor: pipelineRef.current ? crmColor(stage) : URGENCY_COLOR[u],
+          // Predicted (no filing) gets a magenta dashed ring — clearly a forecast.
+          color: predicted && !pipelineRef.current ? PREDICT_COLOR : l.isAbsentee ? "#a78bfa" : "#0b0f17",
+          weight: predicted && !pipelineRef.current ? 2.5 : l.isAbsentee ? 3 : 1.5,
+          dashArray: predicted && !pipelineRef.current ? "3 3" : undefined,
+          fillColor: pipelineRef.current ? crmColor(stage) : predicted ? PREDICT_COLOR : URGENCY_COLOR[u],
           fillOpacity: 0.9,
           bubblingMouseEvents: false, // don't trigger the map's click-to-analyze
         })
@@ -965,6 +989,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
                   <button onClick={() => setShowDriveList((v) => !v)} className={toolBtn(showDriveList)} title="Logged houses">📋{driveLeads.length ? driveLeads.length : ""}</button>
                   <button onClick={() => setShowBuyBox((v) => !v)} className={toolBtn(buyBox.enabled || showBuyBox)} title="My buy-box filter">🎯{buyBox.enabled ? "✓" : ""}</button>
                   <button onClick={() => setNewOnly((v) => !v)} className={toolBtn(newOnly)} title="New leads only">🆕{newCount ? newCount : ""}</button>
+                  <button onClick={() => setPredOnly((v) => !v)} className={toolBtn(predOnly)} title="Predicted pre-foreclosures only (our forecast)">🔮</button>
                   <button onClick={() => setPipelineView((v) => !v)} className={toolBtn(pipelineView)} title="Pipeline view (color by CRM stage)">🗂</button>
                   <button onClick={() => setShowMarket((v) => !v)} className={toolBtn(showMarket)} title="Area market snapshot">📊</button>
                   {onRefresh && <button onClick={() => setAutoRefresh((v) => !v)} className={toolBtn(autoRefresh)} title="Auto-refresh every 15 min">🔄{autoRefresh ? "✓" : ""}</button>}
@@ -1108,6 +1133,10 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
                 <span>{URGENCY_LABEL[u]}</span>
               </div>
             ))}
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: PREDICT_COLOR, border: "1.5px dashed #fff" }} />
+              <span>🔮 Predicted pre-foreclosure (our forecast)</span>
+            </div>
             <div className="flex items-center gap-1.5 pt-0.5 border-t border-gray-700/50 mt-1">
               <span className="inline-block w-2.5 h-2.5 rounded-full border-2" style={{ borderColor: "#a78bfa", background: "transparent" }} />
               <span>Absentee · pin size = score · bubbles cluster</span>
