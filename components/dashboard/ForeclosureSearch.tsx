@@ -9,6 +9,7 @@ import PropertyModal from "@/components/dashboard/PropertyModal"
 import BuyersModal from "@/components/dashboard/BuyersModal"
 import { CRM_STAGES, loadCrm, persistCrm, loadReminders, setReminder, reminderStatus, CRM_EVENT, type CrmStage } from "@/lib/crm"
 import { fillComps } from "@/lib/comp-engine"
+import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -458,25 +459,34 @@ function AuctionBadge({ days }: { days: number | null | undefined }) {
 function printDealSheet(lead: ForeclosureLead) {
   const row = (l: string, v: string | number | null | undefined) =>
     v == null || v === "" ? "" : `<tr><td style="color:#666;padding:3px 16px 3px 0">${l}</td><td style="font-weight:600">${v}</td></tr>`
-  const dc = lead.dealCalc
+  const a = analyzeDeal(lead)
   const liens = (lead.juniorLiens ?? []).map(j => `<li>${j.label}${j.amount ? ` — $${j.amount.toLocaleString()}` : ""}</li>`).join("")
-  const html = `<!doctype html><html><head><title>Deal Sheet — ${lead.address}</title>
+  const why = a.whyGood.map(w => `<li>${w}</li>`).join("")
+  const comps = (lead.comps ?? []).slice(0, 5).map(c => `<tr><td>${c.address}</td><td style="text-align:right">$${c.price.toLocaleString()}${c.sqft ? ` · ${c.sqft} sqft` : ""}</td></tr>`).join("")
+  const risks = a.risks.map(r => `<li${r.severity === "high" ? ' class="warn"' : ""}>${r.label}</li>`).join("")
+  const html = `<!doctype html><html><head><title>Deal Report — ${lead.address}</title>
   <style>body{font-family:Georgia,serif;max-width:720px;margin:40px auto;color:#111;line-height:1.5}
-  h1{font-size:20px;margin:0}h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#888;margin:24px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}
-  table{border-collapse:collapse;font-size:13px}.badge{display:inline-block;padding:2px 8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-weight:700}
-  .warn{color:#b00}</style></head><body>
+  h1{font-size:22px;margin:0}h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#888;margin:22px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}
+  table{border-collapse:collapse;font-size:13px;width:100%}td{padding:2px 0}.badge{display:inline-block;padding:2px 8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-weight:700;margin-right:4px}
+  .big{display:flex;gap:18px;margin:14px 0}.big div{flex:1;background:#f5f5f5;border-radius:8px;padding:10px 12px}.big .n{font-size:20px;font-weight:800}.big .l{font-size:11px;color:#777}
+  .warn{color:#b00}ul{margin:4px 0;padding-left:20px}</style></head><body>
   <h1>${lead.address}</h1><p style="color:#666;margin:2px 0 0">${lead.city}, ${lead.state} ${lead.zip}</p>
-  <p><span class="badge">${lead.priority} · Score ${lead.score}</span> ${dc ? `<span class="badge">Deal Grade ${dc.dealGrade}</span>` : ""}</p>
-  <p style="font-style:italic;color:#444">${lead.scoreReason}</p>
+  <p><span class="badge">${lead.priority} · Score ${lead.score}/100</span><span class="badge">Grade ${a.grade}</span>${a.distressed ? `<span class="badge">${a.distressType}</span>` : ""}</p>
+  <div class="big">
+    <div><div class="l">After-Repair Value</div><div class="n">${a.hasValue ? fmtMoney(a.arv) : "—"}</div></div>
+    <div><div class="l">Max Offer (MAO)</div><div class="n">${a.hasValue ? fmtMoney(a.mao) : "—"}</div></div>
+    <div><div class="l">${a.headlineLabel}${a.headlineLabel === "Flip profit" ? ` · ${a.roiPct}% ROI` : ""}</div><div class="n">${a.hasValue ? fmtMoney(a.headlineProfit) : "—"}</div></div>
+  </div>
+  ${why ? `<h2>Why this is a deal</h2><ul>${why}</ul>` : ""}
+  <h2>Numbers</h2><table>
+  ${row("After-repair value", a.hasValue ? fmtMoney(a.arv) : null)}${row("Estimated repairs", a.hasValue ? fmtMoney(a.repairCost) : null)}${row("Total debt", fmtMoney(a.totalDebt))}${row("Equity", a.hasValue ? `${a.equityPercent}% (${fmtMoney(a.equityAvailable)})` : null)}${row("Max offer (70% rule)", a.hasValue ? fmtMoney(a.mao) : null)}${row("Recommended exit", a.exit.strategy)}${row("Value source", lead.avmValue ? "Live AVM" : (lead.valuationSource || "estimate"))}</table>
   <h2>Foreclosure</h2><table>
-  ${row("Stage", STAGE_LABEL[lead.foreclosureStage])}${row("Filed", lead.recordingDate)}${row("Days on file", `${lead.daysOnFile}d`)}
-  ${row("Auction date", lead.auctionDate)}${row("Days until auction", lead.daysUntilAuction)}${row("Default amount", lead.defaultAmount ? `$${lead.defaultAmount.toLocaleString()}` : null)}${row("Lender", lead.lender)}</table>
-  <h2>Owner</h2><table>${row("Name", lead.ownerName)}${row("Occupancy", lead.occupancy ?? null)}${row("Phone", lead.phone)}${row("Email", lead.email)}</table>
-  <h2>Valuation & Deal</h2><table>
-  ${row("Est. value", lead.estimatedValue ? `$${lead.estimatedValue.toLocaleString()}` : null)}${row("Valuation source", lead.valuationSource)}${row("Rent estimate", lead.rentEstimate ? `$${lead.rentEstimate.toLocaleString()}/mo` : null)}
-  ${dc ? row("ARV", `$${dc.arv.toLocaleString()}`) + row("Est. repairs", `$${dc.estimatedRepairs.toLocaleString()}`) + row("Max offer (70%)", `$${dc.maxOffer.toLocaleString()}`) + row("Total debt", `$${dc.totalDebt.toLocaleString()}`) + row("Est. profit", `$${dc.potentialProfit.toLocaleString()}`) : ""}</table>
+  ${row("Stage", STAGE_LABEL[lead.foreclosureStage])}${row("Filed", lead.recordingDate)}${row("Auction date", lead.auctionDate)}${row("Days until auction", lead.daysUntilAuction)}${row("Default amount", lead.defaultAmount ? `$${lead.defaultAmount.toLocaleString()}` : null)}${row("Lender", lead.lender)}</table>
+  <h2>Owner</h2><table>${row("Name", lead.ownerName)}${row("Absentee", lead.isAbsentee ? "Yes" : "No")}${row("Occupancy", lead.occupancy ?? null)}${row("Phone", lead.phone)}${row("Email", lead.email)}</table>
+  ${comps ? `<h2>Comparable properties</h2><table>${comps}</table>` : ""}
+  ${risks ? `<h2>Risks to verify</h2><ul>${risks}</ul>` : ""}
   ${liens ? `<h2 class="warn">⚠ Junior liens behind the first</h2><ul class="warn">${liens}</ul>` : ""}
-  <p style="margin-top:30px;color:#999;font-size:11px">Generated by AutoPilot · ${new Date().toLocaleDateString()}</p>
+  <p style="margin-top:30px;color:#999;font-size:11px">Generated by AutoPilot · ${new Date().toLocaleDateString()} · Estimates only — verify before contracting.</p>
   </body></html>`
   const w = window.open("", "_blank", "width=800,height=900")
   if (!w) return
@@ -595,7 +605,7 @@ function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead;
       {enrichState === "note" && <p className={`text-[10px] ${enrichNote.startsWith("✓") ? "text-emerald-400" : "text-gray-500"}`}>{enrichNote}</p>}
       <div className="flex flex-wrap gap-1.5">
         <button onClick={() => setShowProperty(true)} className={`${btn} bg-indigo-600/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30`}>🔎 Property & Records</button>
-        <button onClick={() => printDealSheet(lead)} className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>🖨 Deal Sheet</button>
+        <button onClick={() => printDealSheet(lead)} className={`${btn} bg-gray-800/60 border-gray-700/40 text-gray-300 hover:text-white`}>📄 Client Report</button>
       </div>
       {showProperty && <PropertyModal lead={lead} apiHeaders={apiHeaders} onClose={() => setShowProperty(false)} onEnrich={onEnrich} />}
 
