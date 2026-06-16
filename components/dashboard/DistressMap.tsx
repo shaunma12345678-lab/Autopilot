@@ -182,6 +182,14 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
 }
 
 type Mode = "explore" | "draw" | "route"
+
+// Result of analyzing ANY address (good-deal check beyond foreclosure).
+interface AnalyzeResp {
+  found: boolean
+  property: { beds: number | null; baths: number | null; sqft: number | null; yearBuilt: number | null; owner: string | null; type: string | null }
+  value: number
+  analysis: { hasValue: boolean; arv: number; mao: number; profit: number; label: string; roi: number; equityPercent: number; grade: string; verdict: { call: string; reason: string }; profitRange: { low: number; likely: number; high: number }; whyGood: string[] }
+}
 type HeatMetric = "score" | "equity" | "profit"
 
 const HEAT_LABEL: Record<HeatMetric, string> = { score: "Score", equity: "Equity $", profit: "Profit $" }
@@ -300,7 +308,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [geoProgress, setGeoProgress] = useState<{ done: number; total: number } | null>(null)
   const [addrInput, setAddrInput]   = useState("")
   const [assessing, setAssessing]   = useState(false)
-  const [assessment, setAssessment] = useState<null | { kind: "deal" | "none" | "notfound"; title: string; lead?: ForeclosureLead; note?: string }>(null)
+  const [assessment, setAssessment] = useState<null | { kind: "deal" | "none" | "notfound" | "analyzing" | "analyze"; title: string; lead?: ForeclosureLead; note?: string; data?: AnalyzeResp }>(null)
   const [mode, setMode]             = useState<Mode>("explore")
   const [zoneCount, setZoneCount]   = useState<number | null>(null)
   const [route, setRoute]           = useState<ForeclosureLead[]>([])
@@ -913,11 +921,20 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       if (hit) {
         setAssessment({ kind: "deal", title: `Live deal — score ${hit.score}/100 (${hit.priority})`, lead: hit })
         markerById.current.get(hit.attomId)?.openPopup()
-      } else {
-        setAssessment({ kind: "none", title: "Not currently flagged as a distressed deal.", note: "This address isn't in the current results — no active foreclosure, tax, or lien signal was found for it. Re-run the area search to refresh; it may simply not be in distress yet." })
+        return
+      }
+      // Not a flagged distressed lead → analyze ANY property for a good deal.
+      setAssessment({ kind: "analyzing", title: "Analyzing this property…" })
+      try {
+        const res = await fetch("/api/leads/analyze-address", { method: "POST", headers: { "Content-Type": "application/json", ...(apiHeaders ?? {}) }, body: JSON.stringify({ address: q }) })
+        const d = await res.json() as AnalyzeResp & { error?: string }
+        if (d && d.analysis && (d.found || d.analysis.hasValue)) setAssessment({ kind: "analyze", title: q, data: d })
+        else setAssessment({ kind: "none", title: "Not a distressed deal, and not enough public data to underwrite it.", note: "Try a more complete address, or add a free TAVILY_API_KEY for richer web data." })
+      } catch {
+        setAssessment({ kind: "none", title: "Couldn't analyze that address.", note: "" })
       }
     } finally { setAssessing(false) }
-  }, [addrInput, leads])
+  }, [addrInput, leads, apiHeaders])
 
   const pinCount = Object.keys(coords).length
   const toolBtn = (active: boolean) =>
@@ -953,8 +970,28 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
               <button onClick={assess} disabled={assessing || !addrInput.trim()} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold px-3 rounded-lg shadow-lg">{assessing ? "…" : "Check"}</button>
             </div>
             {assessment && (
-              <div className={`rounded-lg px-3 py-2 text-xs shadow-lg border ${assessment.kind === "deal" ? "bg-emerald-950/95 border-emerald-500/40 text-emerald-100" : assessment.kind === "none" ? "bg-amber-950/95 border-amber-500/40 text-amber-100" : "bg-gray-900/95 border-gray-600/50 text-gray-200"}`}>
-                <div className="font-semibold flex items-center gap-1">{assessment.kind === "deal" ? "✅" : assessment.kind === "none" ? "⚠️" : "❓"} {assessment.title}</div>
+              <div className={`rounded-lg px-3 py-2 text-xs shadow-lg border ${assessment.kind === "deal" ? "bg-emerald-950/95 border-emerald-500/40 text-emerald-100" : assessment.kind === "analyze" ? "bg-sky-950/95 border-sky-500/40 text-sky-100" : assessment.kind === "none" ? "bg-amber-950/95 border-amber-500/40 text-amber-100" : "bg-gray-900/95 border-gray-600/50 text-gray-200"}`}>
+                <div className="font-semibold flex items-center gap-1">{assessment.kind === "deal" ? "✅" : assessment.kind === "analyze" ? "📊" : assessment.kind === "analyzing" ? "⏳" : assessment.kind === "none" ? "⚠️" : "❓"} {assessment.title}</div>
+                {assessment.kind === "analyze" && assessment.data && (() => {
+                  const { property: pr, value, analysis: an } = assessment.data
+                  const VC: Record<string, string> = { Pursue: "text-emerald-300", Negotiate: "text-amber-300", Pass: "text-red-300", Underwrite: "text-sky-300" }
+                  return (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="text-sky-200/80">General deal analysis (not a distressed lead)</div>
+                      <div className="text-sky-100">{pr.beds ?? "—"}bd/{pr.baths ?? "—"}ba · {pr.sqft ? `${pr.sqft} sqft` : "— sqft"}{pr.yearBuilt ? ` · ${pr.yearBuilt}` : ""}{pr.owner ? ` · ${pr.owner}` : ""}</div>
+                      <div className={`font-bold ${VC[an.verdict.call] ?? "text-sky-200"}`}>{an.verdict.call === "Pursue" ? "✅" : an.verdict.call === "Negotiate" ? "🤝" : an.verdict.call === "Pass" ? "🛑" : "🔎"} {an.verdict.call} — {an.verdict.reason}</div>
+                      {an.hasValue && (
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 bg-sky-900/40 rounded px-2 py-1">
+                          <span className="text-sky-200/70">Value</span><span className="text-right">{fmtMoney(value)}</span>
+                          <span className="text-sky-200/70">MAO</span><span className="text-right font-semibold">{fmtMoney(an.mao)}</span>
+                          <span className="text-sky-200/70">{an.label}{an.label === "Flip profit" ? ` · ${an.roi}% ROI` : ""}</span><span className={`text-right font-bold ${an.profit > 0 ? "text-emerald-300" : "text-red-300"}`}>{fmtMoney(an.profit)}</span>
+                          <span className="text-sky-200/70">Equity</span><span className="text-right">{an.equityPercent}%</span>
+                        </div>
+                      )}
+                      {!an.hasValue && <div className="text-amber-200/80">Couldn&apos;t find a value — try a more complete address.</div>}
+                    </div>
+                  )
+                })()}
                 {assessment.lead && (() => {
                   const da = analyzeDeal(assessment.lead!)
                   return (
