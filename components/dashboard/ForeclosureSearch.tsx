@@ -8,6 +8,7 @@ import DealAnalysis from "@/components/dashboard/DealAnalysis"
 import PropertyModal from "@/components/dashboard/PropertyModal"
 import BuyersModal from "@/components/dashboard/BuyersModal"
 import { CRM_STAGES, loadCrm, persistCrm, loadReminders, setReminder, reminderStatus, CRM_EVENT, type CrmStage } from "@/lib/crm"
+import { fillComps } from "@/lib/comp-engine"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1277,10 +1278,19 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
         }
 
         const data = await res.json()
-        setResult({ leads: data.leads ?? [], total: data.total ?? 0, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
+        // Auto-fill thin addresses from the searched area, then run our own comp
+        // engine so every lead gets a computed value + comps with no external call.
+        const rawLeads: ForeclosureLead[] = (data.leads ?? []).map((l: ForeclosureLead) => ({
+          ...l,
+          city:  l.city  || p.city || "",
+          state: l.state || p.state || "",
+          zip:   l.zip   || (p.searchType === "zip" ? p.zipCode : "") || "",
+        }))
+        const finalLeads = fillComps(rawLeads)
+        setResult({ leads: finalLeads, total: data.total ?? 0, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
         setSourceSummary(data.sourceCounts ?? null)
         setNewCount(data.newTotal ?? null)
-        autoEnrichTopLeads(data.leads ?? [], seq) // background: fill the best HOT leads
+        autoEnrichTopLeads(finalLeads, seq) // background: refine the best HOT leads
       } catch (e) {
         stopProgressTimer()
         setError(e instanceof Error ? e.message : "Deep search failed — please try again")

@@ -83,6 +83,15 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
           : <span className="text-gray-400">not flagged</span>}
       </div>
 
+      {/* Value provenance — be transparent about where the number came from */}
+      <div className="flex items-center gap-1.5 text-[10px]">
+        <span className="text-gray-600">Value source:</span>
+        <span className={lead.avmValue ? "text-emerald-300" : a.valueEstimated ? "text-sky-300" : "text-gray-400"}>
+          {lead.avmValue ? "Live AVM" : (lead.valuationSource || (a.valueEstimated ? "Computed estimate" : "Search estimate"))}
+        </span>
+        {lead.avmConfidence ? <span className="text-gray-600">· {lead.avmConfidence}% conf</span> : a.valueEstimated ? <span className="text-gray-600">· ~est</span> : null}
+      </div>
+
       {(a.chronic || a.debtEstimated) && (
         <div className="flex flex-wrap gap-1.5">
           {a.chronic && <span className="text-[10px] px-2 py-0.5 rounded-lg bg-fuchsia-500/15 border border-fuchsia-500/30 text-fuchsia-300">🔁 Repeat/chronic distress — highly motivated</span>}
@@ -190,6 +199,21 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
               <span key={i} className={`text-[10px] px-2 py-0.5 rounded-lg border ${r.severity === "high" ? "bg-red-500/15 border-red-500/30 text-red-300" : "bg-amber-500/15 border-amber-500/30 text-amber-300"}`}>
                 {r.label}
               </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Comparable properties (our own comp engine) */}
+      {lead.comps && lead.comps.length > 0 && (
+        <div>
+          <div className="text-[11px] text-gray-500 mb-1">📊 Comparable properties ({lead.comps.length})</div>
+          <div className="space-y-0.5">
+            {lead.comps.slice(0, 5).map((c, i) => (
+              <div key={i} className="flex justify-between text-[11px]">
+                <span className="text-gray-400 truncate max-w-[200px]">{c.address}</span>
+                <span className="text-gray-300">{fmtMoney(c.price)}{c.sqft ? ` · ${c.sqft} sqft` : ""}</span>
+              </div>
             ))}
           </div>
         </div>
