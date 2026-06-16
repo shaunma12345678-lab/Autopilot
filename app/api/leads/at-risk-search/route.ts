@@ -6,6 +6,38 @@
 import { NextRequest } from "next/server"
 import { webSearchAny, webSearchDeepOrAny, extractPageContent } from "@/lib/search"
 import { runAgent } from "@/lib/claude"
+import { deepSearch } from "@/lib/deep-search-engine"
+import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
+import { predictPreForeclosure, isConfirmedForeclosure } from "@/lib/predictive"
+import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
+
+// Convert a scored lead into the at-risk (pre-NOD) shape.
+function toAtRisk(l: ForeclosureLead): AtRiskLead {
+  const pred = predictPreForeclosure(l)
+  const f = pred.factors.join(" ").toLowerCase()
+  const signalType: AtRiskLead["signalType"] =
+    pred.factors.length >= 2 ? "multiple_signals"
+    : /tax/.test(f) ? "tax_delinquent"
+    : /code|vacant|abandon/.test(f) ? (/code/.test(f) ? "code_violation" : "vacant_distressed")
+    : /hoa/.test(f) ? "hoa_lien"
+    : /judgment|lien/.test(f) ? "judgment_lien"
+    : /probate|divorce|eviction/.test(f) ? "court_filing"
+    : "tax_delinquent"
+  return {
+    id: String(l.attomId),
+    address: l.address, city: l.city, state: l.state, zip: l.zip,
+    ownerName: l.ownerName || "Owner Unknown",
+    signalType,
+    signalSummary: pred.factors.join(", ") || (l.distressSignals?.[0] ?? "Early distress signal"),
+    riskScore: pred.probability,
+    riskLevel: pred.probability >= 60 ? "CRITICAL" : pred.probability >= 40 ? "HIGH" : "MODERATE",
+    sourceUrl: "",
+    estimatedValue: l.estimatedValue, estimatedEquity: l.estimatedEquity, equityPercent: l.equityPercent,
+    beds: l.beds, yearBuilt: l.yearBuilt, isAbsentee: l.isAbsentee,
+    phone: l.phone, email: l.email,
+    actionNote: `Predicted foreclosure ${pred.timeframe} — reach the owner before the notice files`,
+  }
+}
 export interface AtRiskLead {
   id: string
   address: string
@@ -117,6 +149,21 @@ export async function POST(request: NextRequest) {
       county?: string
       maxLeads?: number
     }
+
+    // ── Primary source: our robust deepSearch engine (direct sources + pre-NOD
+    //    tiers), filtered to PREDICTED pre-foreclosures (no notice filed yet).
+    //    Works without a search key, where the web-only path returned nothing.
+    try {
+      const ds = await deepSearch({ searchType: searchType as "zip" | "city" | "county", zipCode, city, state, county, maxLeads: Math.max(100, maxLeads * 2) })
+      const preNod = ds.leads
+        .map(freeLeadToForeclosureLead)
+        .filter(l => !isConfirmedForeclosure(l) && predictPreForeclosure(l).predicted)
+        .sort((a, b) => predictPreForeclosure(b).probability - predictPreForeclosure(a).probability)
+      if (preNod.length) {
+        const leads = preNod.slice(0, maxLeads).map(toAtRisk)
+        return Response.json({ leads, total: leads.length, source: "deep-search" })
+      }
+    } catch { /* fall through to the web-extraction path below */ }
 
     const queries     = buildQueries({ searchType, zipCode, city, state, county })
     const deepQueries = buildDeepAtRiskQueries({ searchType, zipCode, city, state, county })
