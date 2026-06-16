@@ -1158,7 +1158,26 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [askAnswer, setAskAnswer]     = useState<string | null>(null)
   const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
   const [showBuyers, setShowBuyers]   = useState(false)
+  const [autopilotRunning, setAutopilotRunning] = useState(false)
+  const [autopilotResult, setAutopilotResult]   = useState<string | null>(null)
   const resultsRef = useRef<HTMLDivElement | null>(null)
+
+  const runAutopilot = async () => {
+    setAutopilotRunning(true); setAutopilotResult(null)
+    try {
+      const res = await fetch("/api/cron/autopilot", { method: "GET", headers: apiHeaders })
+      const d = await res.json()
+      if (d.error) { setAutopilotResult(`⚠ ${d.error}`) }
+      else {
+        const notif = [d.notified?.email && "emailed", d.notified?.sms && "texted"].filter(Boolean).join(" + ")
+        const dest = (d.notified?.emailConfigured || d.notified?.smsConfigured)
+          ? (notif ? `Digest ${notif}.` : "No digest sent (check AUTOPILOT_NOTIFY_* env).")
+          : "Add AUTOPILOT_NOTIFY_EMAIL / AUTOPILOT_NOTIFY_PHONE in Vercel to receive the digest."
+        setAutopilotResult(`✓ Found ${d.found}, ${d.qualified} qualified (${d.newCount} new). ${dest}`)
+      }
+    } catch { setAutopilotResult("⚠ AutoPilot run failed.") }
+    finally { setAutopilotRunning(false) }
+  }
   const focusLeadFromMap = useCallback((attomId: number) => {
     setSelected(prev => { const s = new Set(prev); s.add(attomId); return s })
     setMapHighlight(attomId)
@@ -1467,6 +1486,21 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
         </div>
 
         <AreaForm p={p} setP={setP} onSearch={search} loading={loading} />
+
+        {/* AutoPilot 24/7 — our own engine runs daily and digests the best deals */}
+        <div className="mt-4 bg-gradient-to-r from-emerald-950/50 to-teal-950/40 border border-emerald-500/25 rounded-xl px-4 py-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="text-sm font-semibold text-white flex items-center gap-2">⚡ AutoPilot 24/7</div>
+              <div className="text-[11px] text-gray-400">Our engine searches your areas daily, scores + values every deal, and digests the best to you. Runs ~6am daily on our servers.</div>
+            </div>
+            <button onClick={runAutopilot} disabled={autopilotRunning}
+              className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg shrink-0">
+              {autopilotRunning ? "Running…" : "Run AutoPilot now"}
+            </button>
+          </div>
+          {autopilotResult && <div className="text-[11px] text-emerald-200 mt-2">{autopilotResult}</div>}
+        </div>
 
         {/* Progress during Deep Search */}
         {loading && deepMode && (

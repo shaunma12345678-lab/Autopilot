@@ -7,6 +7,22 @@ const getResend = () => {
 }
 const FROM = process.env.FROM_EMAIL ?? "hello@autopilot.ai"
 
+export function isEmailConfigured(): boolean {
+  return Boolean(process.env.RESEND_API_KEY)
+}
+
+// Generic transactional send (used by the Autopilot digest). Graceful: returns
+// false when no provider is configured; never throws.
+export async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+  if (!process.env.RESEND_API_KEY || !to) return false
+  try {
+    await getResend().emails.send({ from: FROM, to, subject, html })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function sendContentReadyEmail(to: string, businessName: string, count: number) {
   await getResend().emails.send({
     from: FROM,
