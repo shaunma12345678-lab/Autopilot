@@ -5,12 +5,36 @@
 // position bar, the 5-factor score breakdown, exit strategy, and risk flags.
 // Pure presentation over lib/deal-analysis (no network).
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import {
   analyzeDeal, recommendedRepairLevel, REPAIR_LABEL, fmtMoney,
-  type RepairLevel,
+  type RepairLevel, type DealAnalysis as DealAnalysisType,
 } from "@/lib/deal-analysis"
+import { loadBuyers, matchBuyers, BUYERS_EVENT, type Buyer } from "@/lib/buyers"
+
+// Shows which of your saved cash buyers fit this deal — instant disposition.
+function BuyerMatch({ lead, a }: { lead: ForeclosureLead; a: DealAnalysisType }) {
+  const [buyers, setBuyers] = useState<Buyer[]>([])
+  useEffect(() => {
+    const sync = () => setBuyers(loadBuyers())
+    sync()
+    window.addEventListener(BUYERS_EVENT, sync)
+    return () => window.removeEventListener(BUYERS_EVENT, sync)
+  }, [])
+  if (!buyers.length) return null
+  const fits = matchBuyers(lead, a, buyers)
+  return (
+    <div className="bg-cyan-950/30 border border-cyan-500/25 rounded-lg px-3 py-2">
+      <div className="text-[10px] text-cyan-400 font-bold uppercase tracking-wide mb-1">💼 Cash buyers ({fits.length})</div>
+      {fits.length === 0
+        ? <div className="text-[11px] text-gray-500">No saved buyer fits this deal yet.</div>
+        : <div className="flex flex-wrap gap-1.5">
+            {fits.map((b) => <span key={b.id} className="text-[10px] px-2 py-0.5 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-cyan-200" title={b.contact}>{b.name}</span>)}
+          </div>}
+    </div>
+  )
+}
 
 const GRADE_COLOR: Record<string, string> = {
   A: "bg-emerald-500 text-emerald-950",
@@ -170,6 +194,9 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
           </div>
         </div>
       )}
+
+      {/* Cash-buyer matches */}
+      <BuyerMatch lead={lead} a={a} />
 
       {/* Narrative */}
       <p className="text-[11px] text-gray-300 italic bg-gray-900/50 rounded-lg px-3 py-2">{a.narrative}</p>

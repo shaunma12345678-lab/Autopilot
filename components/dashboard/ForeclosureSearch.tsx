@@ -6,6 +6,7 @@ import type { AtRiskLead } from "@/app/api/leads/at-risk-search/route"
 import DistressMap from "@/components/dashboard/DistressMap"
 import DealAnalysis from "@/components/dashboard/DealAnalysis"
 import PropertyModal from "@/components/dashboard/PropertyModal"
+import BuyersModal from "@/components/dashboard/BuyersModal"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1101,6 +1102,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [asking, setAsking]           = useState(false)
   const [askAnswer, setAskAnswer]     = useState<string | null>(null)
   const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
+  const [showBuyers, setShowBuyers]   = useState(false)
   const resultsRef = useRef<HTMLDivElement | null>(null)
   const focusLeadFromMap = useCallback((attomId: number) => {
     setSelected(prev => { const s = new Set(prev); s.add(attomId); return s })
@@ -1512,6 +1514,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
                 placeholder="Ask anything — e.g. “sub-300k with 30%+ equity, absentee owners”"
                 className="flex-1 bg-gray-900/80 border border-gray-700/50 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-violet-500" />
               <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg">{asking ? "Thinking…" : "Ask"}</button>
+              <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
             </div>
             {(askAnswer || assistantFilter) && (
               <div className="flex items-center justify-between gap-2 mt-2">
@@ -1520,6 +1523,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
               </div>
             )}
           </div>
+          {showBuyers && <BuyersModal onClose={() => setShowBuyers(false)} />}
 
           <p className="text-xs text-gray-600">
             {tableLeads.length.toLocaleString()} leads shown · click any row to expand score + deal + outreach
