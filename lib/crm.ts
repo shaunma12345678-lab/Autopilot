@@ -22,7 +22,7 @@ export function loadCrm(): CrmMap {
 
 export function persistCrm(map: CrmMap): void {
   if (typeof window === "undefined") return
-  try { window.localStorage.setItem(KEY, JSON.stringify(map)) } catch { /* quota */ }
+  try { window.localStorage.setItem(KEY, JSON.stringify(map)); window.dispatchEvent(new Event(CRM_EVENT)) } catch { /* quota */ }
 }
 
 export function crmColor(stage: CrmStage | undefined): string {
@@ -31,4 +31,35 @@ export function crmColor(stage: CrmStage | undefined): string {
 
 export function crmLabel(stage: CrmStage | undefined): string {
   return CRM_STAGES.find((s) => s.id === stage)?.label ?? "New"
+}
+
+// ── Follow-up reminders (next action + due date per lead) ─────────────────────
+export interface Reminder { note: string; due: string } // due = YYYY-MM-DD
+export type ReminderMap = Record<number, Reminder>
+const R_KEY = "ap_crm_reminders_v1"
+export const CRM_EVENT = "ap-crm-changed"
+
+export function loadReminders(): ReminderMap {
+  if (typeof window === "undefined") return {}
+  try { const raw = window.localStorage.getItem(R_KEY); const a = raw ? JSON.parse(raw) : {}; return a && typeof a === "object" ? a : {} } catch { return {} }
+}
+
+export function setReminder(id: number, reminder: Reminder | null): ReminderMap {
+  const map = loadReminders()
+  if (reminder && reminder.due) map[id] = reminder; else delete map[id]
+  if (typeof window !== "undefined") {
+    try { window.localStorage.setItem(R_KEY, JSON.stringify(map)); window.dispatchEvent(new Event(CRM_EVENT)) } catch { /* quota */ }
+  }
+  return map
+}
+
+// "overdue" | "today" | "upcoming" | null
+export function reminderStatus(due: string | undefined): "overdue" | "today" | "upcoming" | null {
+  if (!due) return null
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const d = new Date(due + "T00:00:00")
+  if (Number.isNaN(d.getTime())) return null
+  if (d < today) return "overdue"
+  if (d.getTime() === today.getTime()) return "today"
+  return "upcoming"
 }

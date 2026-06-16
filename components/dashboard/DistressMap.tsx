@@ -27,7 +27,7 @@ import { geocodeLeads, geocodePlace, geocodeAddress, reverseGeocode, type LatLng
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { marketSnapshot, type MarketSnapshot } from "@/lib/market-stats"
 import { loadBuyBox, saveBuyBox, matchesBuyBox, DEFAULT_BUYBOX, type BuyBox } from "@/lib/buy-box"
-import { CRM_STAGES, loadCrm, persistCrm, crmColor, type CrmStage, type CrmMap } from "@/lib/crm"
+import { CRM_STAGES, loadCrm, persistCrm, crmColor, CRM_EVENT, type CrmStage, type CrmMap } from "@/lib/crm"
 import { loadSeen, addSeen, newLeadIds, leadSignature } from "@/lib/seen-leads"
 import { learnProfile, fitsProfile, type LearnedProfile } from "@/lib/deal-learning"
 
@@ -359,6 +359,12 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     setCrm((prev) => { const next = { ...prev, [id]: stage }; persistCrm(next); return next })
   }, [])
   useEffect(() => { setCrmStageRef.current = setCrmStage }, [setCrmStage])
+  // Sync pin colors when a stage is changed elsewhere (e.g. the lead table).
+  useEffect(() => {
+    const sync = () => setCrm(loadCrm())
+    window.addEventListener(CRM_EVENT, sync)
+    return () => window.removeEventListener(CRM_EVENT, sync)
+  }, [])
 
   // ── Zone drawing (defined before the map init effect that references them) ──
   // Apply a polygon: draw it, count leads inside, filter the table.

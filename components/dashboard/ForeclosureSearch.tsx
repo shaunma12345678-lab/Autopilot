@@ -7,6 +7,7 @@ import DistressMap from "@/components/dashboard/DistressMap"
 import DealAnalysis from "@/components/dashboard/DealAnalysis"
 import PropertyModal from "@/components/dashboard/PropertyModal"
 import BuyersModal from "@/components/dashboard/BuyersModal"
+import { CRM_STAGES, loadCrm, persistCrm, loadReminders, setReminder, reminderStatus, CRM_EVENT, type CrmStage } from "@/lib/crm"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -483,6 +484,48 @@ function printDealSheet(lead: ForeclosureLead) {
 }
 
 // On-demand premium actions: live valuation, skip trace, direct mail.
+// Pipeline stage + follow-up reminder — manage the deal right from the table.
+function CrmControl({ lead }: { lead: ForeclosureLead }) {
+  const [stage, setStage] = useState<CrmStage | undefined>(() => loadCrm()[lead.attomId])
+  const init = loadReminders()[lead.attomId]
+  const [note, setNote] = useState(init?.note ?? "")
+  const [due, setDue]   = useState(init?.due ?? "")
+  const [saved, setSaved] = useState(false)
+
+  const pickStage = (s: CrmStage) => {
+    const map = loadCrm(); map[lead.attomId] = s; persistCrm(map); setStage(s)
+  }
+  const saveReminder = () => {
+    setReminder(lead.attomId, due ? { note, due } : null)
+    setSaved(true); setTimeout(() => setSaved(false), 1500)
+  }
+  const status = reminderStatus(due)
+  const statusColor = status === "overdue" ? "text-red-400" : status === "today" ? "text-amber-400" : "text-gray-500"
+
+  return (
+    <div className="bg-gray-900/40 border border-gray-700/40 rounded-lg p-2.5 space-y-2">
+      <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Pipeline & follow-up</div>
+      <div className="flex flex-wrap gap-1">
+        {CRM_STAGES.map(s => (
+          <button key={s.id} onClick={() => pickStage(s.id)}
+            className="text-[10px] px-2 py-0.5 rounded-md border font-semibold"
+            style={stage === s.id ? { background: s.color, color: "#111", borderColor: s.color } : { borderColor: s.color + "66", color: s.color }}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-1.5">
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Next action (e.g. call back)"
+          className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[11px] text-white placeholder-gray-600 focus:outline-none focus:border-indigo-500" />
+        <input type="date" value={due} onChange={e => setDue(e.target.value)}
+          className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-300 focus:outline-none focus:border-indigo-500" />
+        <button onClick={saveReminder} className="bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold px-2.5 rounded">{saved ? "✓" : "Set"}</button>
+      </div>
+      {status && <div className={`text-[10px] ${statusColor}`}>⏰ Follow-up {status === "overdue" ? "overdue" : status === "today" ? "due today" : `on ${due}`}{note ? ` — ${note}` : ""}</div>}
+    </div>
+  )
+}
+
 function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead; apiHeaders: Record<string, string>; onEnrich: (attomId: number, patch: Record<string, unknown>) => void }) {
   const [enrichState, setEnrichState] = useState<"idle"|"loading"|"note">("idle")
   const [enrichNote, setEnrichNote]   = useState("")
@@ -772,6 +815,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
                 )}
 
                 <div className="pt-3 mt-1 border-t border-gray-700/40">
+                  <CrmControl lead={lead} />
                   <PremiumActions lead={lead} apiHeaders={apiHeaders} onEnrich={onEnrich} />
                 </div>
               </div>
