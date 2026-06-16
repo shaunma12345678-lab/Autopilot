@@ -110,6 +110,13 @@ function buildDeepQuerySet(loc: SearchLocation, year: number): string[] {
     `${placeLoose} county recorder "notice of default" OR "trustee sale" ${year} document`,
     `${placeLoose} "for sale by owner" FSBO motivated ${year} address`,
     `${placeLoose} expired OR withdrawn listing distressed ${year} property address`,
+    // Tier 10 — OFF-MARKET: free-&-clear / tired landlords (no foreclosure list)
+    `${placeLoose} "free and clear" OR "no mortgage" owner property ${year} address sell`,
+    `${placeLoose} tired landlord OR "rental property" owner selling as-is ${year} address`,
+    `${placeLoose} long-time owner OR "owned since" absentee out-of-state property ${year} address`,
+    // Tier 11 — ZOMBIE / abandoned (owner gone, taxes unpaid)
+    `${placeLoose} abandoned OR "zombie property" OR boarded-up house ${year} address`,
+    `${placeLoose} "owner unknown" OR "owner deceased" vacant tax delinquent property ${year} address`,
   ]
 }
 

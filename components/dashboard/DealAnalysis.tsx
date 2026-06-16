@@ -60,9 +60,24 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
   const debtPct = a.arv > 0 ? Math.min(100, Math.round((a.totalDebt / a.arv) * 100)) : 100
 
   const pred = predictPreForeclosure(lead)
+  const VERDICT_CLR: Record<string, string> = {
+    Pursue: "bg-emerald-500/20 border-emerald-500/40 text-emerald-200",
+    Negotiate: "bg-amber-500/20 border-amber-500/40 text-amber-200",
+    Pass: "bg-red-500/15 border-red-500/40 text-red-300",
+    Underwrite: "bg-sky-500/15 border-sky-500/40 text-sky-300",
+  }
 
   return (
     <div className="space-y-3">
+      {/* The verdict — "would a pro buy this?" */}
+      <div className={`rounded-lg px-3 py-2 border ${VERDICT_CLR[a.verdict.call]}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-extrabold">{a.verdict.call === "Pursue" ? "✅" : a.verdict.call === "Negotiate" ? "🤝" : a.verdict.call === "Pass" ? "🛑" : "🔎"} {a.verdict.call}</span>
+          {a.hasValue && <span className="text-[11px]">Profit ~{fmtMoney(a.profitRange.likely)} <span className="opacity-70">({fmtMoney(a.profitRange.low)}–{fmtMoney(a.profitRange.high)})</span></span>}
+        </div>
+        <div className="text-[11px] opacity-90 mt-0.5">{a.verdict.reason}</div>
+      </div>
+
       {/* Predicted pre-foreclosure — clearly OUR forecast, not a filed case */}
       {pred.predicted && (
         <div className="bg-fuchsia-950/40 border border-fuchsia-500/30 rounded-lg px-3 py-2">

@@ -126,6 +126,8 @@ export interface DealAnalysis {
   whyGood:         string[]        // specific reasons this is (or isn't) a deal
   valueEstimated:  boolean         // ARV came from a fallback, not a real estimate
   rental:          RentalAnalysis | null  // buy-&-hold numbers
+  profitRange:     { low: number; likely: number; high: number }  // best/likely/worst
+  verdict:         { call: "Pursue" | "Negotiate" | "Pass" | "Underwrite"; reason: string }
 }
 
 export interface RentalAnalysis {
@@ -323,13 +325,31 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?
 
   const rental = hasValue ? rentalAnalysis(arv, mao, lead.rentEstimate) : null
 
+  // Profit confidence range — wider when the value is only an estimate.
+  const unc = valueEstimated ? 0.35 : 0.18
+  const profitRange = {
+    low:    Math.round(headlineProfit * (1 - unc) - repairCost * 0.15),
+    likely: Math.round(headlineProfit),
+    high:   Math.round(headlineProfit * (1 + unc)),
+  }
+
+  // Plain-English verdict — the "would a pro buy this?" call.
+  let verdict: DealAnalysis["verdict"]
+  const highRisk = risks.some((r) => r.severity === "high")
+  if (!hasValue) verdict = { call: "Underwrite", reason: "No reliable value yet — Enrich or run Live Valuation to judge it." }
+  else if (equityAvailable <= 0) verdict = { call: "Pass", reason: "Underwater — debt meets or exceeds value." }
+  else if (grade === "A" && headlineProfit >= 25_000 && !highRisk) verdict = { call: "Pursue", reason: `Strong margin (${money(headlineProfit)}) with real equity${motivation >= 65 ? " and a motivated owner" : ""}.` }
+  else if (headlineProfit >= 10_000 && (grade === "A" || grade === "B" || grade === "C")) verdict = { call: "Negotiate", reason: `Pencils at a discount — push the price to widen the ${money(headlineProfit)} spread.` }
+  else if (highRisk) verdict = { call: "Pass", reason: "High-severity risk outweighs a thin margin." }
+  else verdict = { call: "Pass", reason: "Margin too thin at current numbers." }
+
   return {
     hasValue, arv, repairLevel, repairCost, totalDebt, mao,
     equityAvailable, equityPercent, wholesaleSpread, flipProfit,
     grade, motivation, exit, risks, scoreParts, narrative,
     debtEstimated, estimatedPayoff: payoff?.balance ?? null, bankruptcy, chronic,
     distressed, distressType, cashIn, roiPct, headlineProfit, headlineLabel, whyGood,
-    valueEstimated, rental,
+    valueEstimated, rental, profitRange, verdict,
   }
 }
 
