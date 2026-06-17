@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
       countyIds:  body.countyIds,
       maxLeads:   Math.max(150, maxLeads * 2),
       daysBack:   body.daysBack,
+      mode:       "predictive",   // lead with PRE-filing early-distress signals
     })
 
     // Forecasts only: early distress, NOT already in the foreclosure pipeline.

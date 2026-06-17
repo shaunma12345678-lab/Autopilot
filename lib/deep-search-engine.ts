@@ -51,7 +51,11 @@ function isValidPropertyAddress(address: string | undefined): boolean {
 }
 
 // ── Query builder — works for any location ───────────────────────────────────
-function buildDeepQuerySet(loc: SearchLocation, year: number): string[] {
+// `mode` controls ordering: "filings" (default) leads with foreclosure legal
+// notices that reliably carry a property address — best for the normal
+// pre-foreclosure search. "predictive" leads with PRE-filing early-distress
+// signals — best for the forecast layer, which wants owners NOT yet in court.
+function buildDeepQuerySet(loc: SearchLocation, year: number, mode: "filings" | "predictive" = "filings"): string[] {
   const st = loc.state || "United States"
   // Primary place phrase used across queries
   const place =
@@ -63,61 +67,61 @@ function buildDeepQuerySet(loc: SearchLocation, year: number): string[] {
     loc.searchType === "city" ? `"${loc.city}" ${loc.state}` :
     `"${loc.county} County" ${loc.state}`
 
-  return [
-    // Tier 0 — PRE-NOD early-distress signals (reach owners before the NOD is even
-    // public — zero competition, maximum negotiation window). These surface tax
-    // delinquency, probate, divorce, code violations & vacancy ahead of foreclosure.
-    `${placeLoose} property tax delinquent OR "tax defaulted" ${year} owner list`,
-    `${placeLoose} probate "real property" estate ${year} address sale`,
-    `${placeLoose} code violation OR "vacant property" registry ${year} address`,
-    // Tier 1 — trustee-sale / foreclosure legal notices (these carry the property address)
+  // Foreclosure FILINGS — already in the pipeline, carry a recorded address.
+  const filings = [
+    // Trustee-sale / foreclosure legal notices (these carry the property address)
     `${place} "NOTICE OF TRUSTEE'S SALE" ${year} "property address"`,
     `${place} "notice of trustee sale" ${year} property address APN`,
     `${placeLoose} "notice of default" ${year} "deed of trust" property`,
     `${place} foreclosure auction ${year} "property address" trustee`,
     `${placeLoose} "T.S. No" trustee sale ${year} street address`,
-    // Tier 2 — verified high-yield legal-notice publishers
+    // Verified high-yield legal-notice publishers
     `site:capublicnotice.com ${placeLoose} trustee sale ${year}`,
     `site:citynewsgroup.com ${placeLoose} trustee sale ${year}`,
     `site:publicnoticeads.com ${placeLoose} foreclosure OR trustee ${year}`,
     `site:legalnewsonline.com ${placeLoose} foreclosure ${year}`,
-    // Tier 3 — sheriff sale / lis pendens (judicial-foreclosure states)
+    // Sheriff sale / lis pendens (judicial-foreclosure states)
     `${placeLoose} "sheriff's sale" ${year} property address foreclosure`,
     `${placeLoose} "lis pendens" ${year} foreclosure property`,
-    // Tier 4 — government & auction inventory
+    // Government & auction inventory
     `${placeLoose} "tax defaulted" OR "tax sale" property auction ${year} address`,
     `site:auction.com ${placeLoose} foreclosure`,
     `site:hubzu.com ${placeLoose} bank owned`,
-    // Tier 5 — pre-foreclosure / motivated sellers
+    // Pre-foreclosure / motivated sellers
     `${placeLoose} pre-foreclosure ${year} "notice of default" owner property`,
     `${placeLoose} distressed property foreclosure ${year} for sale`,
-    // Tier 6 — probate / bank REO
-    `${placeLoose} probate estate "real property" sale ${year} address`,
+    // Bank REO / government
     `${placeLoose} bank-owned REO foreclosure ${year} listing address`,
     `${placeLoose} HUD home OR "Fannie Mae" foreclosure ${year} address`,
     `${st} ${placeLoose} foreclosure homes ${year} owner address`,
-    // Tier 7 — court & public records (probate, divorce, eviction, bankruptcy)
+    `${placeLoose} county recorder "notice of default" OR "trustee sale" ${year} document`,
+  ]
+
+  // EARLY-DISTRESS signals — owners showing trouble BEFORE any foreclosure
+  // filing. These power the predictive/forecast layer.
+  const early = [
+    `${placeLoose} property tax delinquent OR "tax defaulted" ${year} owner list`,
+    `${placeLoose} probate "real property" estate ${year} address sale`,
+    `${placeLoose} code violation OR "vacant property" registry ${year} address`,
+    `${placeLoose} probate estate "real property" sale ${year} address`,
     `${placeLoose} divorce "real property" OR marital home ${year} address sale`,
     `${placeLoose} eviction OR "unlawful detainer" landlord property ${year} address`,
     `${placeLoose} bankruptcy "chapter 13" OR "chapter 7" real property ${year} address`,
     `${placeLoose} inherited OR estate sale "as-is" house ${year} address`,
-    // Tier 8 — vacancy & motivated-seller signals
     `${placeLoose} vacant OR abandoned house ${year} owner address for sale`,
     `${placeLoose} "must sell" OR "as-is" OR "cash only" distressed home ${year} address`,
     `${placeLoose} absentee owner OR out-of-state landlord tired ${year} property address`,
     `${placeLoose} fire OR water damage OR fixer-upper house ${year} address`,
-    // Tier 9 — county recorder, FSBO & expired listings
-    `${placeLoose} county recorder "notice of default" OR "trustee sale" ${year} document`,
     `${placeLoose} "for sale by owner" FSBO motivated ${year} address`,
     `${placeLoose} expired OR withdrawn listing distressed ${year} property address`,
-    // Tier 10 — OFF-MARKET: free-&-clear / tired landlords (no foreclosure list)
     `${placeLoose} "free and clear" OR "no mortgage" owner property ${year} address sell`,
     `${placeLoose} tired landlord OR "rental property" owner selling as-is ${year} address`,
     `${placeLoose} long-time owner OR "owned since" absentee out-of-state property ${year} address`,
-    // Tier 11 — ZOMBIE / abandoned (owner gone, taxes unpaid)
     `${placeLoose} abandoned OR "zombie property" OR boarded-up house ${year} address`,
     `${placeLoose} "owner unknown" OR "owner deceased" vacant tax delinquent property ${year} address`,
   ]
+
+  return mode === "predictive" ? [...early, ...filings] : [...filings, ...early]
 }
 
 // AI extraction — secondary pass over capped content for any location.
@@ -177,10 +181,11 @@ JSON array only:`
 // Returns ALL extracted leads tagged for relevance — caller filters/prioritizes.
 async function runWebSearchPhase(
   loc: SearchLocation,
-  maxLeads: number
+  maxLeads: number,
+  mode: "filings" | "predictive" = "filings"
 ): Promise<{ regex: ExtractResult[]; ai: FreeLead[] }> {
   const year    = new Date().getFullYear()
-  const queries = buildDeepQuerySet(loc, year)
+  const queries = buildDeepQuerySet(loc, year, mode)
   const isCA    = (loc.state || "").toUpperCase() === "CA"
 
   const noticeQuery =
@@ -188,8 +193,10 @@ async function runWebSearchPhase(
     loc.searchType === "city" ? `${loc.city} ${loc.state} notice of default trustee sale ${year}` :
     `${loc.county} County ${loc.state} notice of trustee sale ${year}`
 
-  // Fire official + public-notice fetchers and a few free web searches in parallel.
-  const queryCount = maxLeads <= 100 ? 8 : maxLeads <= 200 ? 12 : 16
+  // Fire official + public-notice fetchers and free web searches in parallel.
+  // Wider net than before so a small-city search still works toward the
+  // requested volume instead of stopping at a handful of leads.
+  const queryCount = maxLeads <= 100 ? 12 : maxLeads <= 200 ? 18 : 24
   const selectedQueries = queries.slice(0, queryCount)
 
   const [caDoj, publicNotices, webBatches] = await Promise.all([
@@ -244,6 +251,7 @@ export interface DeepSearchParams {
   maxLeads:          number     // 100 | 200 | 300 | 400 | 500
   daysBack?:         number
   existingAddresses?: Set<string>  // already in DB — used for new-lead detection
+  mode?:             "filings" | "predictive"  // query bias; "filings" = normal search
   onProgress?:       (msg: string, count: number) => void
 }
 
@@ -329,7 +337,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   )
 
   const webWork = withDeadline(
-    Promise.allSettled(locations.map(loc => runWebSearchPhase(loc, maxLeads))),
+    Promise.allSettled(locations.map(loc => runWebSearchPhase(loc, maxLeads, params.mode ?? "filings"))),
     38000,
     [] as PromiseSettledResult<Awaited<ReturnType<typeof runWebSearchPhase>>>[]
   )
@@ -354,16 +362,15 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     allAiLeads.push(...phase.value.ai)
   }
 
-  // Filter regex leads to the searched location; if too few match (e.g. the
-  // local publisher wasn't in results), widen the net — but never cross into a
-  // different state when the user specified one (no CA leads in a Phoenix search).
-  const matched = allRegex.filter(r => leadMatchesTarget(r, target))
+  // Geographic pool — include the whole searched STATE so a small-city search
+  // still works toward the requested volume instead of stopping at a handful of
+  // exact-city matches. We never cross into another state when the user
+  // specified one (no CA leads in a Phoenix search); with no state given,
+  // anything is fair game. Locality ordering is preserved by `localityRank` in
+  // the final sort below, so the user's exact city/zip always floats to the top.
   const targetState = (target.state || "").toUpperCase()
-  const fallbackPool = targetState
-    ? allRegex.filter(r => r.state === targetState)
-    : allRegex
-  const chosen = matched.length >= 8 ? matched : (fallbackPool.length > 0 ? fallbackPool : matched)
-  const regexLeads = chosen.map(r => r.lead)
+  const statePool   = targetState ? allRegex.filter(r => r.state === targetState) : allRegex
+  const regexLeads  = (statePool.length > 0 ? statePool : allRegex).map(r => r.lead)
 
   const allWebLeads = [...regexLeads, ...allAiLeads]
   if (allWebLeads.length > 0) {
@@ -384,7 +391,23 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     deduped.push(lead)
   }
 
-  // Sort: AUCTION (most urgent) first, then NOTICE_OF_SALE, NOTICE_OF_DEFAULT, etc.
+  // Locality rank — the user's exact city/zip first, then same-region, then the
+  // rest of the state. Primary sort key so when we slice to maxLeads the leads
+  // closest to what was searched are never dropped in favor of far-away ones.
+  const tCity  = (target.city || "").toLowerCase()
+  const tZip3  = target.zipCode?.slice(0, 3)
+  const localityRank = (l: FreeLead): number => {
+    if (target.searchType === "zip" && target.zipCode) {
+      if (l.zip === target.zipCode) return 0
+      if (tZip3 && l.zip?.slice(0, 3) === tZip3) return 1
+    } else if (target.searchType === "city" && tCity) {
+      const c = (l.city || "").toLowerCase()
+      if (c === tCity || c.includes(tCity)) return 0
+    }
+    return 2   // elsewhere in the searched state (region-correct fill)
+  }
+
+  // Sort: locality first, then AUCTION (most urgent) → NOTICE_OF_SALE → NOD, etc.
   const STAGE_ORDER: Record<string, number> = {
     AUCTION:          0,
     NOTICE_OF_SALE:   1,
@@ -393,7 +416,8 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     PRE_FORECLOSURE:  4,
   }
   deduped.sort((a, b) =>
-    (STAGE_ORDER[a.foreclosureStage] ?? 5) - (STAGE_ORDER[b.foreclosureStage] ?? 5)
+    (localityRank(a) - localityRank(b)) ||
+    ((STAGE_ORDER[a.foreclosureStage] ?? 5) - (STAGE_ORDER[b.foreclosureStage] ?? 5))
   )
 
   const leads    = deduped.slice(0, maxLeads)

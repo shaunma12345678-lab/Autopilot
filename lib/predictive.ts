@@ -23,10 +23,14 @@ export interface Prediction {
 // prediction. Predictions are properties NOT yet in the pipeline (below).
 export function isConfirmedForeclosure(lead: ForeclosureLead): boolean {
   const stage = lead.foreclosureStage
-  if (stage === "PRE_FORECLOSURE" || stage === "NOTICE_OF_DEFAULT" || stage === "LIS_PENDENS" || stage === "NOTICE_OF_SALE" || stage === "AUCTION") return true
+  // Hard pipeline markers — unambiguously already in the foreclosure process.
+  if (stage === "NOTICE_OF_DEFAULT" || stage === "LIS_PENDENS" || stage === "NOTICE_OF_SALE" || stage === "AUCTION") return true
   if (lead.auctionDate) return true
   if (typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0) return true
   if ((lead.defaultAmount ?? 0) > 0) return true
+  // NOTE: bare PRE_FORECLOSURE is the extractor's catch-all default, NOT a
+  // verified filing. Without a default amount or sale date it stays a forecast
+  // candidate — the early-distress signals below decide whether we predict it.
   return false
 }
 
@@ -48,9 +52,10 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   const vacant  = lead.occupancy === "vacant" || /vacant|abandoned|boarded/.test(text)
   const code    = /code violation|condemn|nuisance|unsafe/.test(text)
   const evict   = /eviction|unlawful detainer/.test(text)
-  const liens   = (lead.juniorLiens?.length ?? 0) >= 1 || /\blien\b|judgment|heloc/.test(text)
-  const thinEq  = (lead.equityPercent ?? 100) < 12 && (lead.equityPercent ?? 100) >= 0
-  const tiredLL = (lead.isAbsentee || lead.occupancy === "absentee") && (lead.yearsOwned ?? 0) >= 12
+  const liens    = (lead.juniorLiens?.length ?? 0) >= 1 || /\blien\b|judgment|heloc/.test(text)
+  const thinEq   = (lead.equityPercent ?? 100) < 12 && (lead.equityPercent ?? 100) >= 0
+  const absentee = lead.isAbsentee || lead.occupancy === "absentee" || /absentee|out-of-state|out of state|non[- ]owner/.test(text)
+  const tiredLL  = absentee && (lead.yearsOwned ?? 0) >= 12
 
   if (taxDelq) add(30, "Property-tax delinquent")
   if (probate) add(26, "Probate / inherited estate")
@@ -60,6 +65,7 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   if (evict)   add(16, "Eviction filing (landlord stress)")
   if (liens)   add(14, "Liens / judgments stacking")
   if (tiredLL) add(14, "Long-held absentee (tired landlord)")
+  else if (absentee) add(10, "Absentee / out-of-area owner")
   if (thinEq)  add(12, "Equity eroding")
 
   // Compounding: multiple independent distress vectors sharply raise risk.
