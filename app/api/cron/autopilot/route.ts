@@ -18,6 +18,7 @@ import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
+import { huntDiscoveredSources } from "@/lib/source-discovery"
 import { sendEmail } from "@/lib/email"
 import { sendSms } from "@/lib/sms"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
@@ -69,6 +70,20 @@ export async function GET(request: NextRequest) {
 
     // Our own systems: adapt → comp-engine values → full underwrite.
     let leads: ForeclosureLead[] = result.leads.map(freeLeadToForeclosureLead)
+
+    // Keep finding MORE: hunt AI-discovered data sources for extra leads.
+    let discovered = 0
+    try {
+      const place = `${(counties[0] ?? "").replace(/-/g, " ")} county`.trim()
+      const extra = await huntDiscoveredSources(place, 25)
+      if (extra.length) {
+        const have = new Set(leads.map((l) => l.address.toLowerCase().replace(/[^a-z0-9]/g, "")))
+        const fresh = extra.filter((e) => !have.has(e.address.toLowerCase().replace(/[^a-z0-9]/g, "")))
+        leads = leads.concat(fresh.map(freeLeadToForeclosureLead))
+        discovered = fresh.length
+      }
+    } catch { /* discovery is best-effort */ }
+
     leads = fillComps(leads)
     const newKeys = new Set(result.newLeads.map((l) => l.address.toLowerCase().replace(/[\s,#.-]/g, "")))
 
@@ -109,6 +124,7 @@ export async function GET(request: NextRequest) {
       ok: true,
       counties,
       found: leads.length,
+      discovered,
       qualified: ranked.length,
       newCount,
       notified: { email: emailed, sms: texted, emailConfigured: Boolean(notifyEmail), smsConfigured: Boolean(notifyPhone) },

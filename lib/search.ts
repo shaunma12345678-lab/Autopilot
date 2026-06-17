@@ -104,8 +104,9 @@ export async function webSearchDeep(query: string, maxResults = 5): Promise<Sear
 
 // Extract full content from specific URLs via Tavily extract endpoint.
 export async function extractPageContent(urls: string[]): Promise<Array<{ url: string; content: string }>> {
+  if (urls.length === 0) return []
   const apiKey = process.env.TAVILY_API_KEY
-  if (!apiKey || urls.length === 0) return []
+  if (!apiKey) return extractPageContentFree(urls) // our own, no-key extractor
 
   try {
     const res = await fetch("https://api.tavily.com/extract", {
@@ -113,15 +114,43 @@ export async function extractPageContent(urls: string[]): Promise<Array<{ url: s
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ api_key: apiKey, urls }),
     })
-    if (!res.ok) return []
+    if (!res.ok) return extractPageContentFree(urls)
     const data = await res.json()
     return (data.results ?? []).map((r: Record<string, unknown>) => ({
       url:     r.url as string,
       content: ((r.raw_content ?? r.content ?? "") as string).slice(0, 8000),
     }))
   } catch {
-    return []
+    return extractPageContentFree(urls)
   }
+}
+
+// OUR OWN page extractor — fetch each URL and pull the readable text, no key.
+// Strips scripts/styles/nav/markup. Runs in parallel, fully guarded.
+export async function extractPageContentFree(urls: string[]): Promise<Array<{ url: string; content: string }>> {
+  return Promise.all(urls.slice(0, 6).map(async (url) => {
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": BROWSER_UA, "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9" },
+        signal:  AbortSignal.timeout(10000),
+      })
+      if (!res.ok) return { url, content: "" }
+      let html = await res.text()
+      html = html
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<(nav|header|footer|aside)[\s\S]*?<\/\1>/gi, " ")
+        .replace(/<!--[\s\S]*?-->/g, " ")
+      const text = html
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+        .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ").trim()
+      return { url, content: text.slice(0, 8000) }
+    } catch {
+      return { url, content: "" }
+    }
+  }))
 }
 
 // Google Custom Search JSON API — own your Google search directly, no middlemen.
@@ -296,10 +325,20 @@ async function _mojeekHtml(query: string, maxResults: number): Promise<SearchRes
   return { query, results }
 }
 
+// Self-building cache — every query we run is kept warm, so repeat searches are
+// instant and free. Over a warm instance this is our own growing index that no
+// external search API can hand us.
+const META_CACHE = new Map<string, { at: number; resp: SearchResponse }>()
+const META_TTL = 1000 * 60 * 60 * 6 // 6h
+
 // OUR OWN metasearch — runs several free engines in PARALLEL, dedups by URL, and
 // ranks by CONSENSUS (results multiple engines surface rank higher) + position.
 // No single provider to depend on; resilient if any one engine is blocked.
 export async function webSearchMeta(query: string, maxResults = 8): Promise<SearchResponse> {
+  const ck = `${query.toLowerCase().trim()}|${maxResults}`
+  const cached = META_CACHE.get(ck)
+  if (cached && Date.now() - cached.at < META_TTL) return cached.resp
+
   const engines = await Promise.allSettled([
     _ddgHtml(query, maxResults),
     _bingHtml(query, maxResults),
@@ -326,7 +365,12 @@ export async function webSearchMeta(query: string, maxResults = 8): Promise<Sear
     .sort((a, b) => (b.hits - a.hits) || (b.weight - a.weight)) // consensus first
     .slice(0, maxResults)
     .map((m) => m.r)
-  return { query, results: ranked }
+  const resp = { query, results: ranked }
+  if (ranked.length) {
+    META_CACHE.set(ck, { at: Date.now(), resp })
+    if (META_CACHE.size > 2000) META_CACHE.delete(META_CACHE.keys().next().value!) // bound memory
+  }
+  return resp
 }
 
 // Free fallback — now powered by our own multi-engine metasearch.
