@@ -1977,6 +1977,13 @@ function AdminDistressMap({ password }: { password: string }) {
   const [leads, setLeads]       = useState<ForeclosureLead[]>([])
   const [flyTo, setFlyTo]       = useState<string | undefined>(undefined)
   const [searched, setSearched] = useState(false)
+  const [businessId, setBusinessId] = useState<string | undefined>(undefined)
+
+  // Resolve a businessId so the map's persistent "new leads" index works here too.
+  useEffect(() => {
+    fetch("/api/admin/foreclosure", { headers: { "x-admin-password": password } })
+      .then(r => r.json()).then(d => setBusinessId(d.businessId ?? "admin")).catch(() => setBusinessId("admin"))
+  }, [password])
 
   const run = useCallback(async () => {
     const a = area.trim()
@@ -2088,7 +2095,7 @@ function AdminDistressMap({ password }: { password: string }) {
         </div>
       )}
       {!loading && leads.length > 0 && (
-        <DistressMap leads={leads} flyToQuery={flyTo} apiHeaders={{ "x-admin-password": password }} onRefresh={run} />
+        <DistressMap leads={leads} flyToQuery={flyTo} apiHeaders={{ "x-admin-password": password }} onRefresh={run} businessId={businessId} />
       )}
       {!loading && searched && leads.length === 0 && !error && (
         <div className="text-center py-12 text-gray-600 text-sm">No deals found for that area. Try a larger city or a wider date range.</div>

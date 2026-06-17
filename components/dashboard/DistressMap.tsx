@@ -255,9 +255,11 @@ interface Props {
   apiHeaders?: Record<string, string>
   /** Re-runs the parent search (powers auto-refresh / per-farm auto-crawl). */
   onRefresh?: () => void
+  /** Business id for the persistent (cross-device) "new leads" index. */
+  businessId?: string
 }
 
-export default function DistressMap({ leads, flyToQuery, onSelectLead, highlightId, onZoneFilter, apiHeaders, onRefresh }: Props) {
+export default function DistressMap({ leads, flyToQuery, onSelectLead, highlightId, onZoneFilter, apiHeaders, onRefresh, businessId }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef       = useRef<LeafletMap | null>(null)
   const layerRef     = useRef<LayerGroup | null>(null)   // pins + clusters
@@ -335,12 +337,14 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [toolsOpen, setToolsOpen]   = useState(true)
   const snapshot: MarketSnapshot = useMemo(() => marketSnapshot(leads), [leads])
-  // #2 New leads = those not seen in a prior search (read seen BEFORE we record
-  // this batch, which happens in an effect below). Derived — no effect setState.
-  const newIds: Set<number> = useMemo(
+  // #2 New leads — from the PERSISTENT server index when a businessId is
+  // available (cross-device, forever), else the per-browser localStorage index.
+  const [serverNewIds, setServerNewIds] = useState<Set<number> | null>(null)
+  const localNewIds: Set<number> = useMemo(
     () => (typeof window === "undefined" || !leads.length ? new Set<number>() : newLeadIds(leads, loadSeen())),
     [leads],
   )
+  const newIds = serverNewIds ?? localNewIds
   const newCount = newIds.size
   const profile: LearnedProfile | null = useMemo(
     () => learnProfile(leads, crm, (l) => analyzeDeal(l, undefined, snapshot.medianPsf ? { fallbackPsf: snapshot.medianPsf } : undefined)),
@@ -590,10 +594,37 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   // restart geocoding. This is the "only 2 mapped" fix.
   const leadsKey = useMemo(() => leads.map((l) => `${l.attomId}~${l.address ?? ""}~${l.zip ?? ""}`).join("|"), [leads])
 
-  // Reset mapped coordinates only when the actual address set changes.
+  // Persistent "new leads" — record this batch in our own DB index and learn
+  // which are genuinely new (across sessions & devices). Falls back to the
+  // per-browser index when there's no businessId.
+  useEffect(() => {
+    if (!businessId || !leads.length) return
+    let cancelled = false
+    const sigToId = new Map<string, number>()
+    for (const l of leads) sigToId.set(leadSignature(l), l.attomId)
+    ;(async () => {
+      try {
+        const res = await fetch("/api/leads/seen", {
+          method: "POST", headers: { "Content-Type": "application/json", ...(apiHeaders ?? {}) },
+          body: JSON.stringify({ businessId, signatures: [...sigToId.keys()], record: true }),
+        })
+        const d = await res.json()
+        if (cancelled || !Array.isArray(d.new)) return
+        const ids = new Set<number>()
+        for (const s of d.new) { const id = sigToId.get(s); if (id != null) ids.add(id) }
+        setServerNewIds(ids)
+      } catch { /* keep the localStorage fallback */ }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadsKey, businessId])
+
+  // Reset mapped coordinates (and the server-new set) only when the actual
+  // address set changes — during render (React's adjust-on-prop-change pattern).
   const [coordsKey, setCoordsKey] = useState(leadsKey)
   if (leadsKey !== coordsKey) {
     setCoordsKey(leadsKey)
+    setServerNewIds(null) // fall back to local until the persistent fetch returns
     setCoords({})
     setGeoProgress(leads.length ? { done: 0, total: leads.length } : null)
   }

@@ -1597,6 +1597,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
             onZoneFilter={(ids) => setZoneIds(ids ? new Set(ids) : null)}
             apiHeaders={apiHeaders}
             onRefresh={search}
+            businessId={businessId}
           />
 
           {/* Data source badge */}
