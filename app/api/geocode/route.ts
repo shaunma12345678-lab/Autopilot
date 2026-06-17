@@ -21,6 +21,7 @@ interface LatLng { lat: number; lng: number }
 
 const CENSUS = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
 const NOMINATIM = "https://nominatim.openstreetmap.org/search"
+const PHOTON = "https://photon.komoot.io/api"
 const UA = "AutoPilot-RealEstate/1.0 (foreclosure deal mapping)"
 
 // Warm-lambda memoization so repeat searches don't re-hit the geocoders.
@@ -62,7 +63,16 @@ async function nominatimAddress(oneLine: string): Promise<LatLng | null> {
   return isValid(lat, lng) ? { lat, lng } : null
 }
 
-async function censusGeocode(oneLine: string, allowFallback = false): Promise<LatLng | null> {
+// Photon (komoot) — free OSM geocoder, broad coverage, generous rate limits,
+// no key. Covers many addresses Census (US-parcel-only) misses.
+async function photonGeocode(oneLine: string): Promise<LatLng | null> {
+  const data = await fetchJson(`${PHOTON}/?q=${encodeURIComponent(oneLine)}&limit=1`, 8000) as { features?: Array<{ geometry?: { coordinates?: [number, number] } }> } | null
+  const c = data?.features?.[0]?.geometry?.coordinates
+  return c && isValid(c[1], c[0]) ? { lat: c[1], lng: c[0] } : null
+}
+
+// Census (precise US parcels) → Photon (broad OSM) → Nominatim. Whichever hits.
+async function censusGeocode(oneLine: string, allowFallback = true): Promise<LatLng | null> {
   const key = "addr:" + oneLine.toLowerCase()
   if (SERVER_CACHE.has(key)) return SERVER_CACHE.get(key) ?? null
 
@@ -70,11 +80,20 @@ async function censusGeocode(oneLine: string, allowFallback = false): Promise<La
   const data = await fetchJson(url, 8000) as { result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number } }> } } | null
   const m = data?.result?.addressMatches?.[0]?.coordinates
   let ll = m && isValid(m.y, m.x) ? { lat: m.y, lng: m.x } : null
-  // Census is precise but US-parcel-only; fall back to Nominatim on a miss so we
-  // don't drop pins for valid addresses Census simply doesn't have.
+  if (!ll && allowFallback) ll = await photonGeocode(oneLine)
   if (!ll && allowFallback) ll = await nominatimAddress(oneLine)
   SERVER_CACHE.set(key, ll)
   return ll
+}
+
+// Deterministic small offset so many pins sharing a ZIP centroid spread out a
+// little (and stay stable across re-renders).
+function jitter(base: LatLng, seed: string): LatLng {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
+  const dx = ((h % 1000) / 1000 - 0.5) * 0.012
+  const dy = (((h >>> 10) % 1000) / 1000 - 0.5) * 0.012
+  return { lat: base.lat + dy, lng: base.lng + dx }
 }
 
 // ── A place/city/ZIP → lat/lng via Nominatim (ZIP-aware) ──────────────────────
@@ -167,11 +186,22 @@ export async function POST(request: NextRequest) {
 
     if (Array.isArray(body.addresses)) {
       const addresses = body.addresses.slice(0, 400).map((a) => (typeof a === "string" ? a.trim() : ""))
-      // Small batches (the "check this address" box / single lookups) get the
-      // Nominatim fallback for max accuracy; bulk pin geocoding stays Census-only
-      // to respect Nominatim's rate limits.
-      const allowFallback = addresses.length <= 3
-      const results = await mapWithConcurrency(addresses, 12, (a) => (a ? censusGeocode(a, allowFallback) : Promise.resolve(null)))
+      // Census → Photon → Nominatim for every address (Photon's generous limits
+      // make this safe in bulk).
+      const results = await mapWithConcurrency(addresses, 10, (a) => (a ? censusGeocode(a, true) : Promise.resolve(null)))
+
+      // Last resort: any address that STILL didn't resolve but has a ZIP gets
+      // an approximate (jittered) ZIP-centroid pin — so a lead is never dropped
+      // off the map just because its exact address isn't in a geocoder.
+      const zipCache = new Map<string, LatLng | null>()
+      for (let i = 0; i < addresses.length; i++) {
+        if (results[i] || !addresses[i]) continue
+        const zip = (addresses[i].match(/\b(\d{5})\b/) ?? [])[1]
+        if (!zip) continue
+        if (!zipCache.has(zip)) zipCache.set(zip, await placeGeocode(zip))
+        const c = zipCache.get(zip)
+        if (c) results[i] = jitter(c, addresses[i])
+      }
       return Response.json({ results })
     }
 
