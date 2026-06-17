@@ -278,13 +278,62 @@ async function _bingHtml(query: string, maxResults: number): Promise<SearchRespo
   return { query, results }
 }
 
-// DuckDuckGo HTML with Bing automatic fallback.
-// If DDG returns 0 results (e.g. blocked from cloud IPs), Bing is tried immediately.
-// No API key required for either engine.
+async function _mojeekHtml(query: string, maxResults: number): Promise<SearchResponse> {
+  const res = await fetch(`https://www.mojeek.com/search?${new URLSearchParams({ q: query })}`, {
+    headers: { "User-Agent": BROWSER_UA, "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9" },
+    signal: AbortSignal.timeout(12000),
+  })
+  if (!res.ok) return { query, results: [] }
+  const html = await res.text()
+  const clean = (s: string) => s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim()
+  const titleM = [...html.matchAll(/<a[^>]+href="(https?:\/\/[^"]+)"[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/a>/gi)]
+  const snips  = [...html.matchAll(/<p[^>]*class="s"[^>]*>([\s\S]*?)<\/p>/gi)]
+  const results: SearchResult[] = []
+  for (let i = 0; i < Math.min(titleM.length, maxResults); i++) {
+    const url = titleM[i][1], title = clean(titleM[i][2]), snip = clean(snips[i]?.[1] ?? "")
+    if (url && title) results.push({ title, url, content: snip, score: 1 - i * 0.1 })
+  }
+  return { query, results }
+}
+
+// OUR OWN metasearch — runs several free engines in PARALLEL, dedups by URL, and
+// ranks by CONSENSUS (results multiple engines surface rank higher) + position.
+// No single provider to depend on; resilient if any one engine is blocked.
+export async function webSearchMeta(query: string, maxResults = 8): Promise<SearchResponse> {
+  const engines = await Promise.allSettled([
+    _ddgHtml(query, maxResults),
+    _bingHtml(query, maxResults),
+    _mojeekHtml(query, maxResults),
+  ])
+  const norm = (u: string) => u.replace(/^https?:\/\/(www\.)?/, "").replace(/\/+$/, "").toLowerCase()
+  const merged = new Map<string, { r: SearchResult; weight: number; hits: number }>()
+  for (const e of engines) {
+    if (e.status !== "fulfilled") continue
+    for (const r of e.value.results) {
+      if (!r.url) continue
+      const key = norm(r.url)
+      const prev = merged.get(key)
+      const w = r.score ?? 0.5
+      if (prev) {
+        prev.weight += w; prev.hits += 1
+        if ((r.content?.length ?? 0) > (prev.r.content?.length ?? 0)) prev.r = r // keep richest snippet
+      } else {
+        merged.set(key, { r: { ...r }, weight: w, hits: 1 })
+      }
+    }
+  }
+  const ranked = [...merged.values()]
+    .sort((a, b) => (b.hits - a.hits) || (b.weight - a.weight)) // consensus first
+    .slice(0, maxResults)
+    .map((m) => m.r)
+  return { query, results: ranked }
+}
+
+// Free fallback — now powered by our own multi-engine metasearch.
 export async function webSearchDDG(query: string, maxResults = 8): Promise<SearchResponse> {
   try {
-    const ddg = await _ddgHtml(query, maxResults)
-    if (ddg.results.length > 0) return ddg
+    const meta = await webSearchMeta(query, maxResults)
+    if (meta.results.length > 0) return meta
     return await _bingHtml(query, maxResults)
   } catch {
     try { return await _bingHtml(query, maxResults) } catch { return { query, results: [] } }
