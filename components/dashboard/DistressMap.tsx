@@ -106,7 +106,7 @@ function pointInPolygon(lat: number, lng: number, poly: LatLng[]): boolean {
 }
 
 // Popup deal card with an optional "View in list" button and a Street View link.
-function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, fallbackPsf?: number | null, crmStage?: CrmStage, fits?: boolean, isNew?: boolean, portfolioCount?: number): string {
+function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, fallbackPsf?: number | null, crmStage?: CrmStage, fits?: boolean, isNew?: boolean, portfolioCount?: number, accel?: { accelerating: boolean; signalDelta: number; days: number; sightings: number }): string {
   const u = leadUrgency(lead)
   const countdown =
     typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0
@@ -121,6 +121,8 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
     ? `<div style="font-size:10px;margin-top:4px;color:${fusion.corroborated ? "#86efac" : "#fcd34d"}">🧬 Signal confidence ${fusion.confidence}% · ${fusion.count} source${fusion.count === 1 ? "" : "s"}${fusion.corroborated ? " (corroborated)" : ""}</div>` : ""
   const portfolioLine = (portfolioCount && portfolioCount > 1)
     ? `<div style="font-size:10px;margin-top:3px;color:#7dd3fc">👤 Owner has ${portfolioCount} distressed properties — bulk seller</div>` : ""
+  const accelLine = accel?.accelerating
+    ? `<div style="font-size:10px;margin-top:3px;color:#fb923c;font-weight:700">⏫ ACCELERATING — distress stacking faster (+${accel.signalDelta} signal${accel.signalDelta === 1 ? "" : "s"} over ${accel.days}d, ${accel.sightings} sightings). About to pop.</div>` : ""
   const pred = predictPreForeclosure(lead)
   const predBanner = pred.predicted
     ? `<div style="margin-top:5px;background:#3b0764;border:1px solid #d946ef66;border-radius:8px;padding:6px 8px">
@@ -171,7 +173,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
       <div style="font-size:11px;color:#9ca3af">${escapeHtml([lead.city, lead.state, lead.zip].filter(Boolean).join(", "))}</div>
       <div style="font-size:12px;font-weight:800;margin-top:3px;color:${verdict.color}">${verdict.text}</div>
       ${(isNew || fits) ? `<div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${isNew ? '<span style="font-size:9.5px;font-weight:700;background:#0ea5e9;color:#04293a;border-radius:5px;padding:1px 5px">🆕 NEW</span>' : ""}${fits ? '<span style="font-size:9.5px;font-weight:700;background:#16a34a33;color:#86efac;border:1px solid #16a34a66;border-radius:5px;padding:1px 5px">📈 Matches your deals</span>' : ""}</div>` : ""}
-      ${predBanner}${fusionLine}${portfolioLine}
+      ${predBanner}${fusionLine}${portfolioLine}${accelLine}
       ${distressLine}${countdown}${liens}
       ${moneyBox}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;margin-top:6px">
@@ -294,6 +296,8 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const newIdsRef     = useRef<Set<number>>(new Set())
   const newOnlyRef    = useRef(false)
   const predOnlyRef   = useRef(false)
+  const accelOnlyRef  = useRef(false)
+  const accelRef      = useRef<Record<string, { accelerating: boolean; signalDelta: number; days: number; sightings: number }>>({})
   const profileRef    = useRef<LearnedProfile | null>(null)
   const onRefreshRef  = useRef(onRefresh)
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -341,6 +345,8 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [showMarket, setShowMarket] = useState(false)
   const [newOnly, setNewOnly]       = useState(false)
   const [predOnly, setPredOnly]     = useState(false)
+  const [accelOnly, setAccelOnly]   = useState(false)
+  const [accelVersion, setAccelVersion] = useState(0)
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [toolsOpen, setToolsOpen]   = useState(true)
   const snapshot: MarketSnapshot = useMemo(() => marketSnapshot(leads), [leads])
@@ -371,6 +377,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { psfRef.current = snapshot.medianPsf }, [snapshot])
   useEffect(() => { newOnlyRef.current = newOnly }, [newOnly])
   useEffect(() => { predOnlyRef.current = predOnly }, [predOnly])
+  useEffect(() => { accelOnlyRef.current = accelOnly }, [accelOnly])
   useEffect(() => { profileRef.current = profile }, [profile])
   useEffect(() => { onRefreshRef.current = onRefresh }, [onRefresh])
   useEffect(() => { newIdsRef.current = newIds }, [newIds])
@@ -380,7 +387,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { if (leads.length) addSeen(leads.map((l) => leadSignature(l))) }, [leads])
 
   // Re-draw pins when filters / pipeline / CRM / market / new-set change.
-  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, newOnly, predOnly, newIds, profile, ready])
+  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, newOnly, predOnly, accelOnly, accelVersion, newIds, profile, ready])
 
   // #1 Auto-refresh / per-farm auto-crawl: periodically re-run the search so new
   // deals surface (and zone alerts fire) while the map is open.
@@ -626,6 +633,32 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadsKey, businessId])
 
+  // Temporal acceleration — record each property's signal strength over time and
+  // learn which are STACKING FASTER (about to pop). Persistent in our own DB.
+  useEffect(() => {
+    if (!businessId || !leads.length) { accelRef.current = {}; return }
+    let cancelled = false
+    const sigOf = new Map<number, string>()
+    const items = leads.map((l) => {
+      const sig = leadSignature(l); sigOf.set(l.attomId, sig)
+      return { signature: sig, signalCount: fuseSignals(l).count, score: l.score ?? 0 }
+    })
+    ;(async () => {
+      try {
+        const res = await fetch("/api/leads/history", {
+          method: "POST", headers: { "Content-Type": "application/json", ...(apiHeaders ?? {}) },
+          body: JSON.stringify({ businessId, items, record: true }),
+        })
+        const d = await res.json()
+        if (cancelled || !d?.results) return
+        accelRef.current = d.results
+        setAccelVersion((v) => v + 1) // trigger a marker re-render with accel data
+      } catch { /* best-effort */ }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadsKey, businessId])
+
   // Reset mapped coordinates (and the server-new set) only when the actual
   // address set changes — during render (React's adjust-on-prop-change pattern).
   const [coordsKey, setCoordsKey] = useState(leadsKey)
@@ -677,14 +710,16 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     // the rest fade to faint grey dots so your matches pop.
     const newOnly = newOnlyRef.current
     const predOnly = predOnlyRef.current
+    const accelOnly = accelOnlyRef.current
     let clusterPts = pts
-    if (box.enabled || newOnly || predOnly) {
+    if (box.enabled || newOnly || predOnly || accelOnly) {
       clusterPts = []
       for (const p of pts) {
         const passBox = !box.enabled || matchesBuyBox(p.l, analysisOf(p.l), box)
         const passNew = !newOnly || newIdsRef.current.has(p.l.attomId)
         const passPred = !predOnly || predictPreForeclosure(p.l).predicted
-        if (passBox && passNew && passPred) clusterPts.push(p)
+        const passAccel = !accelOnly || Boolean(accelRef.current[leadSignature(p.l)]?.accelerating)
+        if (passBox && passNew && passPred && passAccel) clusterPts.push(p)
         else L.circleMarker([p.ll.lat, p.ll.lng], { radius: 3, stroke: false, fillColor: "#475569", fillOpacity: 0.35, bubblingMouseEvents: false }).addTo(layer)
       }
     }
@@ -721,7 +756,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         const isNew = newIdsRef.current.has(l.attomId)
         // autoPan:false prevents an edge-popup from panning the map, which would
         // fire moveend → rebuild → close. Persistent until the user hits X.
-        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage, fits, isNew, ownerCounts.get(normOwner(l.ownerName))), { maxWidth: 268, autoClose: false, closeOnClick: false, autoPan: false })
+        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage, fits, isNew, ownerCounts.get(normOwner(l.ownerName)), accelRef.current[leadSignature(l)]), { maxWidth: 268, autoClose: false, closeOnClick: false, autoPan: false })
         // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
         // hover tooltip with score + address (keeps the view uncluttered).
         const zoomedIn = zoom >= 15
@@ -1073,6 +1108,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
                   <button onClick={() => setShowBuyBox((v) => !v)} className={toolBtn(buyBox.enabled || showBuyBox)} title="My buy-box filter">🎯{buyBox.enabled ? "✓" : ""}</button>
                   <button onClick={() => setNewOnly((v) => !v)} className={toolBtn(newOnly)} title="New leads only">🆕{newCount ? newCount : ""}</button>
                   <button onClick={() => setPredOnly((v) => !v)} className={toolBtn(predOnly)} title="Predicted pre-foreclosures only (our forecast)">🔮</button>
+                  <button onClick={() => setAccelOnly((v) => !v)} className={toolBtn(accelOnly)} title="Accelerating only — distress stacking faster (about to pop)">⏫</button>
                   <button onClick={() => setPipelineView((v) => !v)} className={toolBtn(pipelineView)} title="Pipeline view (color by CRM stage)">🗂</button>
                   <button onClick={() => setShowMarket((v) => !v)} className={toolBtn(showMarket)} title="Area market snapshot">📊</button>
                   {onRefresh && <button onClick={() => setAutoRefresh((v) => !v)} className={toolBtn(autoRefresh)} title="Auto-refresh every 15 min">🔄{autoRefresh ? "✓" : ""}</button>}
