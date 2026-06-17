@@ -18,11 +18,12 @@ export interface Prediction {
   factors:     string[]           // explainable drivers (what we detected)
 }
 
-// A FILED foreclosure (a formal notice exists) — NOT a prediction. PRE_FORECLOSURE
-// is the early stage with NO notice yet, so it counts as a prediction below.
+// Is this property already in the foreclosure pipeline (pre-foreclosure through
+// auction)? If so it's a "pre-foreclosure" lead, NOT a forward-looking
+// prediction. Predictions are properties NOT yet in the pipeline (below).
 export function isConfirmedForeclosure(lead: ForeclosureLead): boolean {
   const stage = lead.foreclosureStage
-  if (stage === "NOTICE_OF_DEFAULT" || stage === "LIS_PENDENS" || stage === "NOTICE_OF_SALE" || stage === "AUCTION") return true
+  if (stage === "PRE_FORECLOSURE" || stage === "NOTICE_OF_DEFAULT" || stage === "LIS_PENDENS" || stage === "NOTICE_OF_SALE" || stage === "AUCTION") return true
   if (lead.auctionDate) return true
   if (typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0) return true
   if ((lead.defaultAmount ?? 0) > 0) return true
@@ -40,12 +41,6 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   let p = 0
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
-
-  // The pre-foreclosure stage (no notice filed yet) IS a forecast — it counts as
-  // predicted, so the 🔮 filter always has the pre-foreclosure leads to show.
-  // Filed foreclosures (NOD/NOS/auction) return early above as confirmed/normal,
-  // so the predictive set is a real subset whenever results are mixed.
-  if (lead.foreclosureStage === "PRE_FORECLOSURE") add(28, "Pre-foreclosure stage (no notice filed yet)")
 
   const taxDelq = lead.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(text)
   const probate = /probate|deceased|estate|inherited|obituary/.test(text)

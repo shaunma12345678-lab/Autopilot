@@ -13,7 +13,6 @@ import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { learnProfile, fitsProfile } from "@/lib/deal-learning"
 import { rankZones } from "@/lib/opportunity-zones"
 import { detectPortfolios } from "@/lib/owner-portfolio"
-import { predictPreForeclosure } from "@/lib/predictive"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1163,6 +1162,8 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
   const [forYou, setForYou]           = useState(false)
   const [predictiveOnly, setPredictiveOnly] = useState(false)
+  const [predictiveResult, setPredictiveResult] = useState<{ leads: ForeclosureLead[]; note?: string } | null>(null)
+  const [predictiveLoading, setPredictiveLoading] = useState(false)
   const [showZoneRank, setShowZoneRank] = useState(false)
   const [showPortfolios, setShowPortfolios] = useState(false)
   const [showBuyers, setShowBuyers]   = useState(false)
@@ -1282,6 +1283,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
     setProgressPct(0); setProgressMsg(""); setSourceSummary(null); setNewCount(null)
     setMapHighlight(null); setAutoEnrichBusy(false)
+    setPredictiveOnly(false); setPredictiveResult(null)
     const seq = ++searchSeqRef.current
     setSearchedArea(
       p.searchType === "zip"    ? (p.zipCode || undefined)
@@ -1439,7 +1441,6 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   }, [forYou, learned, result])
   const zones = useMemo(() => (result ? rankZones(result.leads).slice(0, 8) : []), [result])
   const portfolios = useMemo(() => (result ? detectPortfolios(result.leads).slice(0, 8) : []), [result])
-  const predictiveCount = useMemo(() => (result ? result.leads.filter(l => predictPreForeclosure(l).predicted).length : 0), [result])
 
   const searchZone = (zoneKey: string, state: string) => {
     const isZip = /^\d{5}$/.test(zoneKey.split(" ")[0])
@@ -1450,13 +1451,33 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
 
   // Table narrows to the drawn map zone and/or the AI assistant's filter.
   const tableLeads = useMemo(() => {
+    // 🔮 Predictive shows a DIFFERENT, fetched set (forecasts, not pre-foreclosure).
+    if (predictiveOnly) return predictiveResult?.leads ?? []
     let ls = sorted
     if (zoneIds) ls = ls.filter(l => zoneIds.has(l.attomId))
     if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
-    if (predictiveOnly) ls = [...ls].filter(l => predictPreForeclosure(l).predicted).sort((a, b) => predictPreForeclosure(b).probability - predictPreForeclosure(a).probability)
     if (fitIds) ls = [...ls].sort((a, b) => (fitIds.has(b.attomId) ? 1 : 0) - (fitIds.has(a.attomId) ? 1 : 0) || (b.score ?? 0) - (a.score ?? 0))
     return ls
-  }, [sorted, zoneIds, assistantFilter, predictiveOnly, fitIds])
+  }, [predictiveOnly, predictiveResult, sorted, zoneIds, assistantFilter, fitIds])
+
+  // Toggle predictive: fetch the forecast leads with our own engine on first open.
+  const togglePredictive = async () => {
+    const next = !predictiveOnly
+    setPredictiveOnly(next)
+    if (next && !predictiveResult && result) {
+      setPredictiveLoading(true)
+      try {
+        const res = await fetch("/api/leads/predictive", {
+          method: "POST", headers: apiHeaders,
+          body: JSON.stringify({ searchType: p.searchType, zipCode: p.zipCode || undefined, city: p.city || undefined, state: p.state || undefined, county: p.county || undefined, maxLeads: p.maxLeads, daysBack: p.daysBack }),
+        })
+        const d = await res.json()
+        const filled = fillComps((d.leads ?? []).map((l: ForeclosureLead) => ({ ...l, city: l.city || p.city || "", state: l.state || p.state || "", zip: l.zip || (p.searchType === "zip" ? p.zipCode : "") || "" })))
+        setPredictiveResult({ leads: filled, note: d.note })
+      } catch { setPredictiveResult({ leads: [], note: "Predictive search failed — try again." }) }
+      finally { setPredictiveLoading(false) }
+    }
+  }
 
   const ask = async () => {
     const q = askQ.trim(); if (!q) return
@@ -1689,7 +1710,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
               <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg" title="Filter the current results">{asking ? "…" : "Ask"}</button>
               <button onClick={searchFromAI} disabled={asking || !askQ.trim()} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold px-3 rounded-lg" title="Run this as a new search (e.g. 'vacant absentee homes in Phoenix under 250k')">🔎 Search</button>
               <button onClick={() => setForYou(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${forYou ? "bg-violet-600 border-violet-500 text-white" : "bg-violet-700/30 border-violet-500/40 text-violet-200 hover:bg-violet-700/50"}`} title={learned ? "Rank deals like the ones you pursue in your CRM" : "Move deals to Offer/Contract/Closed in your CRM to teach this"}>🎯 For you</button>
-              <button onClick={() => setPredictiveOnly(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${predictiveOnly ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`} title="Show only predicted pre-foreclosures — our forecast of properties not yet filed">🔮 Predictive{predictiveCount ? ` ${predictiveCount}` : ""}</button>
+              <button onClick={togglePredictive} disabled={predictiveLoading} className={`border text-xs font-semibold px-3 rounded-lg disabled:opacity-60 ${predictiveOnly ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`} title="Our forecast — properties showing early distress that aren't in foreclosure yet (found with our own engine, no key)">{predictiveLoading ? "🔮 Forecasting…" : `🔮 Predictive${predictiveResult ? ` ${predictiveResult.leads.length}` : ""}`}</button>
               <button onClick={() => setShowZoneRank(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showZoneRank ? "bg-teal-600 border-teal-500 text-white" : "bg-teal-700/30 border-teal-500/40 text-teal-200 hover:bg-teal-700/50"}`} title="Rank the best ZIPs in these results">📍 Best zones</button>
               <button onClick={() => setShowPortfolios(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showPortfolios ? "bg-sky-600 border-sky-500 text-white" : "bg-sky-700/30 border-sky-500/40 text-sky-200 hover:bg-sky-700/50"}`} title="Owners with multiple distressed properties (bulk sellers)">👤 Portfolios{portfolios.length ? ` ${portfolios.length}` : ""}</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
@@ -1756,8 +1777,11 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
             )}
             {predictiveOnly && (
               <span className="ml-2 text-fuchsia-300">
-                🔮 showing predicted pre-foreclosures{tableLeads.length === 0 ? " — none in these results yet; try a wider search" : ""} ·{" "}
-                <button onClick={() => setPredictiveOnly(false)} className="text-fuchsia-400 hover:text-fuchsia-300 underline">clear</button>
+                {predictiveLoading
+                  ? "🔮 forecasting — running our own engine to find early-distress leads not yet in foreclosure…"
+                  : <>🔮 predictive forecast — {tableLeads.length} {tableLeads.length === 1 ? "property" : "properties"} showing early distress before any filing{predictiveResult?.note ? ` · ${predictiveResult.note}` : ""}</>}
+                {" · "}
+                <button onClick={() => setPredictiveOnly(false)} className="text-fuchsia-400 hover:text-fuchsia-300 underline">back to pre-foreclosure</button>
               </span>
             )}
           </p>
