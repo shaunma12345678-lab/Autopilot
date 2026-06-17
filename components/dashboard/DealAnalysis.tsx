@@ -13,6 +13,7 @@ import {
 } from "@/lib/deal-analysis"
 import { loadBuyers, matchBuyers, BUYERS_EVENT, type Buyer } from "@/lib/buyers"
 import { predictPreForeclosure } from "@/lib/predictive"
+import { fuseSignals } from "@/lib/signal-fusion"
 
 // Shows which of your saved cash buyers fit this deal — instant disposition.
 function BuyerMatch({ lead, a }: { lead: ForeclosureLead; a: DealAnalysisType }) {
@@ -60,6 +61,13 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
   const debtPct = a.arv > 0 ? Math.min(100, Math.round((a.totalDebt / a.arv) * 100)) : 100
 
   const pred = predictPreForeclosure(lead)
+  const fusion = fuseSignals(lead)
+  const FUSION_CLR: Record<string, string> = {
+    verified: "bg-emerald-500/15 border-emerald-500/40 text-emerald-200",
+    strong:   "bg-lime-500/15 border-lime-500/40 text-lime-200",
+    single:   "bg-amber-500/10 border-amber-500/30 text-amber-200",
+    thin:     "bg-gray-700/30 border-gray-600/40 text-gray-300",
+  }
   const VERDICT_CLR: Record<string, string> = {
     Pursue: "bg-emerald-500/20 border-emerald-500/40 text-emerald-200",
     Negotiate: "bg-amber-500/20 border-amber-500/40 text-amber-200",
@@ -110,6 +118,18 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
           ? <span className="text-red-300 font-semibold">✓ Yes — {a.distressType}</span>
           : <span className="text-gray-400">not flagged</span>}
       </div>
+
+      {/* Signal-fusion confidence — cross-source corroboration */}
+      {fusion.count > 0 && (
+        <div className={`rounded-lg px-3 py-2 border ${FUSION_CLR[fusion.level]}`}>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold">🧬 Signal confidence: {fusion.confidence}%{fusion.corroborated ? " · corroborated" : ""}</span>
+            <span className="text-[10px] opacity-80">{fusion.count} independent signal{fusion.count === 1 ? "" : "s"}</span>
+          </div>
+          <div className="text-[10px] opacity-90 mt-0.5">{fusion.categories.join(" · ")}</div>
+          {fusion.corroborated && <div className="text-[9.5px] opacity-70 mt-0.5">Multiple independent sources agree — far more certain than a single list.</div>}
+        </div>
+      )}
 
       {/* Value provenance — be transparent about where the number came from */}
       <div className="flex items-center gap-1.5 text-[10px]">

@@ -26,6 +26,8 @@ import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import { geocodeLeads, geocodePlace, geocodeAddress, reverseGeocode, type LatLng } from "@/lib/geocode"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { predictPreForeclosure } from "@/lib/predictive"
+import { fuseSignals } from "@/lib/signal-fusion"
+import { normOwner } from "@/lib/owner-portfolio"
 import { marketSnapshot, type MarketSnapshot } from "@/lib/market-stats"
 import { loadBuyBox, saveBuyBox, matchesBuyBox, DEFAULT_BUYBOX, type BuyBox } from "@/lib/buy-box"
 import { CRM_STAGES, loadCrm, persistCrm, crmColor, CRM_EVENT, type CrmStage, type CrmMap } from "@/lib/crm"
@@ -104,7 +106,7 @@ function pointInPolygon(lat: number, lng: number, poly: LatLng[]): boolean {
 }
 
 // Popup deal card with an optional "View in list" button and a Street View link.
-function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, fallbackPsf?: number | null, crmStage?: CrmStage, fits?: boolean, isNew?: boolean): string {
+function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, fallbackPsf?: number | null, crmStage?: CrmStage, fits?: boolean, isNew?: boolean, portfolioCount?: number): string {
   const u = leadUrgency(lead)
   const countdown =
     typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0
@@ -114,6 +116,11 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
   const sv = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat},${ll.lng}`
   const a = analyzeDeal(lead, undefined, fallbackPsf ? { fallbackPsf } : undefined)
   const verdict = dealVerdict(a.grade, lead.score ?? 0)
+  const fusion = fuseSignals(lead)
+  const fusionLine = fusion.count > 0
+    ? `<div style="font-size:10px;margin-top:4px;color:${fusion.corroborated ? "#86efac" : "#fcd34d"}">🧬 Signal confidence ${fusion.confidence}% · ${fusion.count} source${fusion.count === 1 ? "" : "s"}${fusion.corroborated ? " (corroborated)" : ""}</div>` : ""
+  const portfolioLine = (portfolioCount && portfolioCount > 1)
+    ? `<div style="font-size:10px;margin-top:3px;color:#7dd3fc">👤 Owner has ${portfolioCount} distressed properties — bulk seller</div>` : ""
   const pred = predictPreForeclosure(lead)
   const predBanner = pred.predicted
     ? `<div style="margin-top:5px;background:#3b0764;border:1px solid #d946ef66;border-radius:8px;padding:6px 8px">
@@ -164,7 +171,7 @@ function popupHtml(lead: ForeclosureLead, ll: LatLng, withListButton: boolean, f
       <div style="font-size:11px;color:#9ca3af">${escapeHtml([lead.city, lead.state, lead.zip].filter(Boolean).join(", "))}</div>
       <div style="font-size:12px;font-weight:800;margin-top:3px;color:${verdict.color}">${verdict.text}</div>
       ${(isNew || fits) ? `<div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${isNew ? '<span style="font-size:9.5px;font-weight:700;background:#0ea5e9;color:#04293a;border-radius:5px;padding:1px 5px">🆕 NEW</span>' : ""}${fits ? '<span style="font-size:9.5px;font-weight:700;background:#16a34a33;color:#86efac;border:1px solid #16a34a66;border-radius:5px;padding:1px 5px">📈 Matches your deals</span>' : ""}</div>` : ""}
-      ${predBanner}
+      ${predBanner}${fusionLine}${portfolioLine}
       ${distressLine}${countdown}${liens}
       ${moneyBox}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;margin-top:6px">
@@ -661,6 +668,9 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     const psf = psfRef.current
     const box = buyBoxRef.current
     const analysisOf = (l: ForeclosureLead) => analyzeDeal(l, undefined, psf ? { fallbackPsf: psf } : undefined)
+    // Owner-portfolio counts (bulk-seller detection) for this result set.
+    const ownerCounts = new Map<string, number>()
+    for (const l of leadsRef.current) { const k = normOwner(l.ownerName); if (k) ownerCounts.set(k, (ownerCounts.get(k) ?? 0) + 1) }
     const pts = leadsRef.current.map((l) => ({ l, ll: coordsRef.current[l.attomId] })).filter((x): x is { l: ForeclosureLead; ll: LatLng } => Boolean(x.ll))
 
     // Buy-box (#1), New (#2) and Predicted filters: matching deals cluster/pin;
@@ -711,7 +721,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         const isNew = newIdsRef.current.has(l.attomId)
         // autoPan:false prevents an edge-popup from panning the map, which would
         // fire moveend → rebuild → close. Persistent until the user hits X.
-        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage, fits, isNew), { maxWidth: 268, autoClose: false, closeOnClick: false, autoPan: false })
+        m.bindPopup(popupHtml(l, ll, hasSelect, psf, stage, fits, isNew, ownerCounts.get(normOwner(l.ownerName))), { maxWidth: 268, autoClose: false, closeOnClick: false, autoPan: false })
         // Zoomed in: show a permanent score chip on each lead. Zoomed out: a
         // hover tooltip with score + address (keeps the view uncluttered).
         const zoomedIn = zoom >= 15

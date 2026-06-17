@@ -12,6 +12,7 @@ import { fillComps } from "@/lib/comp-engine"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { learnProfile, fitsProfile } from "@/lib/deal-learning"
 import { rankZones } from "@/lib/opportunity-zones"
+import { detectPortfolios } from "@/lib/owner-portfolio"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1161,6 +1162,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
   const [forYou, setForYou]           = useState(false)
   const [showZoneRank, setShowZoneRank] = useState(false)
+  const [showPortfolios, setShowPortfolios] = useState(false)
   const [showBuyers, setShowBuyers]   = useState(false)
   const [autopilotRunning, setAutopilotRunning] = useState(false)
   const [autopilotResult, setAutopilotResult]   = useState<string | null>(null)
@@ -1434,6 +1436,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     return s
   }, [forYou, learned, result])
   const zones = useMemo(() => (result ? rankZones(result.leads).slice(0, 8) : []), [result])
+  const portfolios = useMemo(() => (result ? detectPortfolios(result.leads).slice(0, 8) : []), [result])
 
   const searchZone = (zoneKey: string, state: string) => {
     const isZip = /^\d{5}$/.test(zoneKey.split(" ")[0])
@@ -1683,6 +1686,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
               <button onClick={searchFromAI} disabled={asking || !askQ.trim()} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold px-3 rounded-lg" title="Run this as a new search (e.g. 'vacant absentee homes in Phoenix under 250k')">🔎 Search</button>
               <button onClick={() => setForYou(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${forYou ? "bg-violet-600 border-violet-500 text-white" : "bg-violet-700/30 border-violet-500/40 text-violet-200 hover:bg-violet-700/50"}`} title={learned ? "Rank deals like the ones you pursue in your CRM" : "Move deals to Offer/Contract/Closed in your CRM to teach this"}>🎯 For you</button>
               <button onClick={() => setShowZoneRank(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showZoneRank ? "bg-teal-600 border-teal-500 text-white" : "bg-teal-700/30 border-teal-500/40 text-teal-200 hover:bg-teal-700/50"}`} title="Rank the best ZIPs in these results">📍 Best zones</button>
+              <button onClick={() => setShowPortfolios(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showPortfolios ? "bg-sky-600 border-sky-500 text-white" : "bg-sky-700/30 border-sky-500/40 text-sky-200 hover:bg-sky-700/50"}`} title="Owners with multiple distressed properties (bulk sellers)">👤 Portfolios{portfolios.length ? ` ${portfolios.length}` : ""}</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
             </div>
@@ -1699,6 +1703,24 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
                         <span className="text-gray-200 font-semibold truncate flex-1">{z.label}{z.state ? `, ${z.state}` : ""}</span>
                         <span className="text-gray-500 shrink-0">{z.count} deals · {z.topGrade} A/B · ~${(z.medianProfit / 1000).toFixed(0)}k{z.predicted ? ` · 🔮${z.predicted}` : ""}</span>
                         <button onClick={() => searchZone(z.key, z.state)} className="text-teal-300 hover:text-teal-200 font-semibold shrink-0">Search →</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {showPortfolios && (
+              <div className="mt-2 bg-gray-900/60 border border-sky-500/20 rounded-lg p-2">
+                <div className="text-[10px] text-gray-500 mb-1 px-1">👤 Owner portfolios — owners with multiple distressed properties (skip-trace once, land several)</div>
+                {portfolios.length === 0 ? (
+                  <div className="text-[11px] text-gray-600 px-1 py-2">No multi-property owners in these results (or owners are unknown — Enrich to reveal them).</div>
+                ) : (
+                  <div className="space-y-0.5">
+                    {portfolios.map(pf => (
+                      <div key={pf.owner} className="flex items-center justify-between gap-2 px-1 py-1 hover:bg-white/5 rounded text-[11px]">
+                        <span className="text-sky-100 font-semibold truncate flex-1">{pf.owner}</span>
+                        <span className="text-gray-500 shrink-0">{pf.count} properties · ~${(pf.totalValue / 1000).toFixed(0)}k total</span>
+                        <button onClick={() => { setAskAnswer(null); setAssistantFilter(null); setForYou(false); setSelected(new Set(pf.leads.map(l => l.attomId))); resultsRef.current?.scrollIntoView({ behavior: "smooth" }) }} className="text-sky-300 hover:text-sky-200 font-semibold shrink-0">Select →</button>
                       </div>
                     ))}
                   </div>
