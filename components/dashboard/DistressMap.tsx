@@ -797,10 +797,8 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
       for (const it of b.items) allLatLng.push([it.ll.lat, it.ll.lng])
     }
 
-    if (allLatLng.length && !flyToQuery && !didFitRef.current) {
-      didFitRef.current = true
-      try { map.fitBounds(allLatLng, { padding: [40, 40], maxZoom: 13 }) } catch {}
-    }
+    // Framing is handled by the dedicated auto-frame effect below (it waits for
+    // geocoding to finish, then fits to the searched area's pins).
 
     // Re-open the popup that was open before this rebuild (if its pin still
     // exists at this zoom), so clicking, filtering, or CRM updates never make
@@ -812,13 +810,45 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { renderRef.current = renderMarkers }, [renderMarkers])
   useEffect(() => { if (ready) renderMarkers() }, [coords, leads, ready, renderMarkers])
 
-  // ── Fly to the searched area ────────────────────────────────────────────────
+  // ── Fly to the searched area (immediate feedback while geocoding) ───────────
   useEffect(() => {
     if (!ready || !flyToQuery) return
     let cancelled = false
     ;(async () => { const ll = await geocodePlace(flyToQuery); if (!cancelled && ll && mapRef.current) mapRef.current.flyTo([ll.lat, ll.lng], 12, { duration: 0.8 }) })()
     return () => { cancelled = true }
   }, [flyToQuery, ready])
+
+  // ── Auto-frame the pins once geocoding finishes ─────────────────────────────
+  // After a search the map should land on the deal pins automatically so EVERY
+  // colored circle is visible without panning/zooming. We prefer the searched
+  // area: if there's a healthy cluster of pins near the searched place we frame
+  // those (the wider list can still be statewide); otherwise we frame them all.
+  useEffect(() => {
+    if (!ready || geoProgress !== null || didFitRef.current) return
+    const map = mapRef.current
+    if (!map) return
+    const allPins = leads
+      .map((l) => coords[l.attomId])
+      .filter((ll): ll is LatLng => Boolean(ll))
+    if (allPins.length === 0) return
+    didFitRef.current = true
+    let cancelled = false
+    ;(async () => {
+      let pins = allPins
+      if (flyToQuery) {
+        const center = await geocodePlace(flyToQuery)
+        if (center) {
+          const near = allPins.filter((p) => distanceMeters(center, p) < 60000) // ~37 mi
+          if (near.length >= 3) pins = near
+        }
+      }
+      if (cancelled || !mapRef.current) return
+      try {
+        mapRef.current.fitBounds(pins.map((p) => [p.lat, p.lng]) as [number, number][], { padding: [40, 40], maxZoom: 14 })
+      } catch { /* fitBounds can throw on a single identical point — ignore */ }
+    })()
+    return () => { cancelled = true }
+  }, [geoProgress, ready, leads, coords, flyToQuery])
 
   // ── Emphasize a hovered/selected lead ───────────────────────────────────────
   useEffect(() => {
