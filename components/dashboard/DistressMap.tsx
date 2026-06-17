@@ -612,10 +612,10 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         setCoords((prev) => (prev[id] ? prev : { ...prev, [id]: ll }))
         setGeoProgress((g) => (g ? { done: g.done + 1, total: g.total } : g))
       },
-      { signal: ctrl.signal },
+      { signal: ctrl.signal, fallbackPlace: flyToQuery },
     ).catch(() => {}).finally(() => { if (!ctrl.signal.aborted) setGeoProgress(null) })
     return () => { ctrl.abort() }
-  }, [leadsKey])
+  }, [leadsKey, flyToQuery])
 
   // ── Cluster + render pins (grid-clustering by screen pixels) ────────────────
   const hasSelect = Boolean(onSelectLead)

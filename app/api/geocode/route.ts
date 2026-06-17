@@ -168,7 +168,7 @@ async function mapWithConcurrency<I, O>(items: I[], limit: number, fn: (item: I)
 }
 
 export async function POST(request: NextRequest) {
-  let body: { addresses?: unknown; place?: unknown; reverse?: unknown }
+  let body: { addresses?: unknown; place?: unknown; reverse?: unknown; fallback?: unknown }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
 
   try {
@@ -190,16 +190,18 @@ export async function POST(request: NextRequest) {
       // make this safe in bulk).
       const results = await mapWithConcurrency(addresses, 10, (a) => (a ? censusGeocode(a, true) : Promise.resolve(null)))
 
-      // Last resort: any address that STILL didn't resolve but has a ZIP gets
-      // an approximate (jittered) ZIP-centroid pin — so a lead is never dropped
-      // off the map just because its exact address isn't in a geocoder.
+      // Fallback chain so a lead is NEVER dropped: ZIP centroid (from the
+      // address) → searched-area centroid (passed by the client). Both jittered
+      // and cached, so every lead gets at least an approximate pin.
+      const fallback = typeof body.fallback === "string" ? body.fallback.trim() : ""
+      const areaCentroid = fallback ? await placeGeocode(fallback) : null
       const zipCache = new Map<string, LatLng | null>()
       for (let i = 0; i < addresses.length; i++) {
         if (results[i] || !addresses[i]) continue
         const zip = (addresses[i].match(/\b(\d{5})\b/) ?? [])[1]
-        if (!zip) continue
-        if (!zipCache.has(zip)) zipCache.set(zip, await placeGeocode(zip))
-        const c = zipCache.get(zip)
+        let c: LatLng | null = null
+        if (zip) { if (!zipCache.has(zip)) zipCache.set(zip, await placeGeocode(zip)); c = zipCache.get(zip) ?? null }
+        if (!c) c = areaCentroid
         if (c) results[i] = jitter(c, addresses[i])
       }
       return Response.json({ results })

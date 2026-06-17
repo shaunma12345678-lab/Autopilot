@@ -123,31 +123,34 @@ export async function reverseGeocode(lat: number, lng: number): Promise<ReverseR
 export async function geocodeLeads<T extends { address: string; city?: string; state?: string; zip?: string }>(
   leads: T[],
   onResult: (index: number, coords: LatLng) => void,
-  opts?: { signal?: AbortSignal; chunkSize?: number },
+  opts?: { signal?: AbortSignal; chunkSize?: number; fallbackPlace?: string },
 ): Promise<void> {
   const chunkSize = opts?.chunkSize ?? 40
+  const fallback = opts?.fallbackPlace || undefined
 
-  // 1) Serve anything already cached immediately (no network).
+  // 1) Serve anything already cached immediately (no network). Note: we do NOT
+  //    short-circuit cached "null" (miss) — the server can now place it at the
+  //    area centroid, so we re-send misses to give every lead a pin.
   const pending: { index: number; line: string }[] = []
   for (let i = 0; i < leads.length; i++) {
     const line = oneLine(leads[i])
     if (!line) continue
     const cached = readCache(line)
-    if (cached === undefined) { pending.push({ index: i, line }); continue }
-    if (cached) onResult(i, cached)
+    if (cached) { onResult(i, cached); continue }
+    pending.push({ index: i, line })
   }
 
-  // 2) Geocode the rest in chunks via the proxy.
+  // 2) Geocode the rest in chunks via the proxy (with an area-centroid fallback
+  //    so a lead is never dropped — at worst it lands in the searched area).
   for (let c = 0; c < pending.length; c += chunkSize) {
     if (opts?.signal?.aborted) return
     const slice = pending.slice(c, c + chunkSize)
-    const data = await postJson({ addresses: slice.map((s) => s.line) }, 30000) as { results?: (LatLng | null)[] } | null
+    const data = await postJson({ addresses: slice.map((s) => s.line), fallback }, 30000) as { results?: (LatLng | null)[] } | null
     if (opts?.signal?.aborted) return
     const results = data?.results ?? []
     slice.forEach((s, k) => {
       const ll = results[k]
       if (isValid(ll)) { writeCache(s.line, ll); onResult(s.index, ll) }
-      else if (data) { writeCache(s.line, null) } // real miss
     })
   }
 }
