@@ -48,14 +48,21 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
 
-  // Early foreclosure stage (no sale scheduled) is itself the core forecast
-  // signal — we predict these will reach the auction block. This guarantees the
-  // predictive bucket is populated whenever distressed leads exist at all.
+  // A REAL early foreclosure filing (notice of default / lis pendens) is itself
+  // a strong forecast — these are recorded court/recorder events, not listings,
+  // so they qualify on their own. A bare PRE_FORECLOSURE is just the listing
+  // default and does NOT auto-qualify — it needs a genuine distress/motivation
+  // signal below. This keeps "predicted" a DISTINCT subset (purple) instead of
+  // turning every ordinary listing purple.
   const stage = lead.foreclosureStage
-  if (stage === "NOTICE_OF_DEFAULT")   add(36, "Notice of default filed — no sale scheduled yet")
+  if (stage === "NOTICE_OF_DEFAULT")   add(36, "Notice of default filed — early in the foreclosure timeline")
   else if (stage === "LIS_PENDENS")    add(34, "Lis pendens filed — pre-sale stage")
-  else if (stage === "PRE_FORECLOSURE") add(30, "Pre-foreclosure — distress on file, no sale scheduled")
-  if ((lead.defaultAmount ?? 0) > 0)   add(10, "Amount in default recorded")
+
+  // Motivated-seller / stale-listing signals (from listing data like Redfin):
+  // long days-on-market, price cuts, as-is / must-sell language forecast a
+  // distressed sale before any filing.
+  const motivated = /motivated seller|price (?:cut|reduced|drop|reduction)|must sell|\bas[- ]is\b|cash only|fixer|distressed listing|short sale/.test(text)
+  if (motivated) add(16, "Motivated-seller signals (long days-on-market / price cuts / as-is)")
 
   const taxDelq = lead.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(text)
   const probate = /probate|deceased|estate|inherited|obituary/.test(text)
