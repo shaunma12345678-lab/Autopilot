@@ -362,15 +362,32 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     allAiLeads.push(...phase.value.ai)
   }
 
-  // Geographic pool — include the whole searched STATE so a small-city search
-  // still works toward the requested volume instead of stopping at a handful of
-  // exact-city matches. We never cross into another state when the user
-  // specified one (no CA leads in a Phoenix search); with no state given,
-  // anything is fair game. Locality ordering is preserved by `localityRank` in
-  // the final sort below, so the user's exact city/zip always floats to the top.
+  // Geographic pool — keep results in the SEARCHED AREA so the leads are
+  // actually where you searched, not scattered across the state. We define the
+  // local region by ZIP-3 prefix, derived from: the searched ZIP, the exact
+  // city matches, and the bbox-based direct-source leads (which are already
+  // local). We only widen to the rest of the state if that local pool is too
+  // thin to be useful, and never cross into another state.
   const targetState = (target.state || "").toUpperCase()
   const statePool   = targetState ? allRegex.filter(r => r.state === targetState) : allRegex
-  const regexLeads  = (statePool.length > 0 ? statePool : allRegex).map(r => r.lead)
+
+  const localZip3 = new Set<string>()
+  if (target.zipCode) localZip3.add(target.zipCode.slice(0, 3))
+  for (const r of allRegex)        if (leadMatchesTarget(r, target) && r.zip) localZip3.add(r.zip.slice(0, 3))
+  for (const l of allDirectLeads)  if (l.zip) localZip3.add(l.zip.slice(0, 3))
+
+  const inRegion = (r: ExtractResult) => leadMatchesTarget(r, target) || (!!r.zip && localZip3.has(r.zip.slice(0, 3)))
+  const regionPool = localZip3.size > 0 ? statePool.filter(inRegion) : []
+
+  // Prefer the local region. Fill from the wider state only to reach a usable
+  // floor, so a thin small-city search still returns volume without going
+  // statewide when the area itself has plenty.
+  const LOCAL_FLOOR = Math.min(maxLeads, 50)
+  const chosenRegex =
+    regionPool.length >= LOCAL_FLOOR ? regionPool :
+    regionPool.length > 0            ? [...regionPool, ...statePool.filter(r => !inRegion(r))] :
+    (statePool.length > 0 ? statePool : allRegex)
+  const regexLeads = chosenRegex.map(r => r.lead)
 
   const allWebLeads = [...regexLeads, ...allAiLeads]
   if (allWebLeads.length > 0) {
@@ -404,7 +421,11 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
       const c = (l.city || "").toLowerCase()
       if (c === tCity || c.includes(tCity)) return 0
     }
-    return 2   // elsewhere in the searched state (region-correct fill)
+    // Immediate region (same ZIP-3 as the searched area) ranks above the rest
+    // of the state, so statewide fill (incl. statewide direct sources) is the
+    // last to survive the slice — the map stays on the area you searched.
+    if (localZip3.size > 0 && l.zip && localZip3.has(l.zip.slice(0, 3))) return 1
+    return 2
   }
 
   // Sort: locality first, then AUCTION (most urgent) → NOTICE_OF_SALE → NOD, etc.

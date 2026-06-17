@@ -13,6 +13,7 @@ import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { learnProfile, fitsProfile } from "@/lib/deal-learning"
 import { rankZones } from "@/lib/opportunity-zones"
 import { detectPortfolios } from "@/lib/owner-portfolio"
+import { predictPreForeclosure } from "@/lib/predictive"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -663,6 +664,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
   const [detailTab, setDetailTab] = useState<"score"|"deal"|"outreach">("score")
   const p = PRI[lead.priority]
   const liens = lead.juniorLiens ?? []
+  const pred = predictPreForeclosure(lead)
 
   return (
     <>
@@ -703,6 +705,13 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
           <span className={`px-2 py-1 rounded-lg text-[11px] font-medium border ${STAGE_CLR[lead.foreclosureStage] ?? "bg-gray-700/30 text-gray-400 border-gray-700"}`}>
             {STAGE_LABEL[lead.foreclosureStage]}
           </span>
+          {pred.predicted && (
+            <div className="mt-1">
+              <span className="inline-block text-[9px] font-bold bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30 px-1.5 py-0.5 rounded" title={`Forecast to reach foreclosure (${pred.timeframe}). Why: ${pred.factors.join("; ")}`}>
+                🔮 Predicted {pred.probability}%
+              </span>
+            </div>
+          )}
           <p className="text-[10px] text-gray-600 mt-0.5">{lead.daysOnFile}d ago</p>
           {lead.daysUntilAuction != null && lead.daysUntilAuction >= 0 && <div className="mt-1"><AuctionBadge days={lead.daysUntilAuction} /></div>}
         </td>
@@ -750,6 +759,19 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
                 </div>
                 {detailTab === "score" && (
                   <div className="space-y-3">
+                    {pred.predicted && (
+                      <div className="bg-fuchsia-950/30 border border-fuchsia-500/30 rounded-lg p-2.5">
+                        <p className="text-[10px] font-bold text-fuchsia-300 uppercase tracking-wider mb-1">🔮 Why we predict pre-foreclosure</p>
+                        <p className="text-[11px] text-fuchsia-100 leading-relaxed mb-1.5">
+                          <span className="font-bold">{pred.probability}%</span> likely to reach foreclosure · {pred.timeframe} · {pred.confidence} confidence
+                        </p>
+                        <div className="space-y-0.5">
+                          {pred.factors.map((f, i) => (
+                            <p key={i} className="text-[11px] text-gray-300 flex gap-2"><span className="text-fuchsia-400 shrink-0">▸</span>{f}</p>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="bg-gray-800/40 border border-gray-700/40 rounded-lg p-2.5">
                       <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Why this score</p>
                       <p className="text-[11px] text-gray-300 leading-relaxed">{lead.scoreReason}</p>

@@ -834,17 +834,34 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     didFitRef.current = true
     let cancelled = false
     ;(async () => {
-      let pins = allPins
+      let map = mapRef.current
+      if (cancelled || !map) return
+      // Center on the SEARCHED place and frame just its local pins so the deals
+      // shown are the ones in the area you searched — not the wider statewide
+      // fill. Tiers widen only if the immediate area is thin, and we always at
+      // least center on the searched city so it's never an empty far-off view.
       if (flyToQuery) {
         const center = await geocodePlace(flyToQuery)
+        map = mapRef.current
+        if (cancelled || !map) return
         if (center) {
-          const near = allPins.filter((p) => distanceMeters(center, p) < 60000) // ~37 mi
-          if (near.length >= 3) pins = near
+          const within = (mi: number) => allPins.filter((p) => distanceMeters(center, p) < mi * 1609)
+          const local = within(12)            // immediate city + bordering towns
+          const near  = local.length >= 3 ? local : within(25)
+          try {
+            if (near.length >= 3) {
+              map.fitBounds(near.map((p) => [p.lat, p.lng]) as [number, number][], { padding: [40, 40], maxZoom: 14 })
+            } else {
+              // Few/no local leads — still land on the searched city so it's
+              // clear we centered where you asked (honest empty-ish view).
+              map.setView([center.lat, center.lng], 12)
+            }
+          } catch { /* identical points — ignore */ }
+          return
         }
       }
-      if (cancelled || !mapRef.current) return
       try {
-        mapRef.current.fitBounds(pins.map((p) => [p.lat, p.lng]) as [number, number][], { padding: [40, 40], maxZoom: 14 })
+        map.fitBounds(allPins.map((p) => [p.lat, p.lng]) as [number, number][], { padding: [40, 40], maxZoom: 14 })
       } catch { /* fitBounds can throw on a single identical point — ignore */ }
     })()
     return () => { cancelled = true }
