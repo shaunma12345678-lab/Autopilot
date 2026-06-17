@@ -41,7 +41,10 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
 
-  // The pre-foreclosure stage itself (early, no notice filed) IS the forecast.
+  // The pre-foreclosure stage (no notice filed yet) IS a forecast — it counts as
+  // predicted, so the 🔮 filter always has the pre-foreclosure leads to show.
+  // Filed foreclosures (NOD/NOS/auction) return early above as confirmed/normal,
+  // so the predictive set is a real subset whenever results are mixed.
   if (lead.foreclosureStage === "PRE_FORECLOSURE") add(28, "Pre-foreclosure stage (no notice filed yet)")
 
   const taxDelq = lead.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(text)

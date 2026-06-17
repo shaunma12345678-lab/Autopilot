@@ -1453,7 +1453,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     let ls = sorted
     if (zoneIds) ls = ls.filter(l => zoneIds.has(l.attomId))
     if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
-    if (predictiveOnly) ls = ls.filter(l => predictPreForeclosure(l).predicted)
+    if (predictiveOnly) ls = [...ls].filter(l => predictPreForeclosure(l).predicted).sort((a, b) => predictPreForeclosure(b).probability - predictPreForeclosure(a).probability)
     if (fitIds) ls = [...ls].sort((a, b) => (fitIds.has(b.attomId) ? 1 : 0) - (fitIds.has(a.attomId) ? 1 : 0) || (b.score ?? 0) - (a.score ?? 0))
     return ls
   }, [sorted, zoneIds, assistantFilter, predictiveOnly, fitIds])
