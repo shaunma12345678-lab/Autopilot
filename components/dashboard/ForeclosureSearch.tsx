@@ -13,6 +13,7 @@ import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { learnProfile, fitsProfile } from "@/lib/deal-learning"
 import { rankZones } from "@/lib/opportunity-zones"
 import { detectPortfolios } from "@/lib/owner-portfolio"
+import { predictPreForeclosure } from "@/lib/predictive"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1161,6 +1162,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
   const [askAnswer, setAskAnswer]     = useState<string | null>(null)
   const [assistantFilter, setAssistantFilter] = useState<AssistantFilter | null>(null)
   const [forYou, setForYou]           = useState(false)
+  const [predictiveOnly, setPredictiveOnly] = useState(false)
   const [showZoneRank, setShowZoneRank] = useState(false)
   const [showPortfolios, setShowPortfolios] = useState(false)
   const [showBuyers, setShowBuyers]   = useState(false)
@@ -1450,9 +1452,10 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
     let ls = sorted
     if (zoneIds) ls = ls.filter(l => zoneIds.has(l.attomId))
     if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
+    if (predictiveOnly) ls = ls.filter(l => predictPreForeclosure(l).predicted)
     if (fitIds) ls = [...ls].sort((a, b) => (fitIds.has(b.attomId) ? 1 : 0) - (fitIds.has(a.attomId) ? 1 : 0) || (b.score ?? 0) - (a.score ?? 0))
     return ls
-  }, [sorted, zoneIds, assistantFilter, fitIds])
+  }, [sorted, zoneIds, assistantFilter, predictiveOnly, fitIds])
 
   const ask = async () => {
     const q = askQ.trim(); if (!q) return
@@ -1685,6 +1688,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
               <button onClick={ask} disabled={asking || !askQ.trim()} className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-4 rounded-lg" title="Filter the current results">{asking ? "…" : "Ask"}</button>
               <button onClick={searchFromAI} disabled={asking || !askQ.trim()} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold px-3 rounded-lg" title="Run this as a new search (e.g. 'vacant absentee homes in Phoenix under 250k')">🔎 Search</button>
               <button onClick={() => setForYou(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${forYou ? "bg-violet-600 border-violet-500 text-white" : "bg-violet-700/30 border-violet-500/40 text-violet-200 hover:bg-violet-700/50"}`} title={learned ? "Rank deals like the ones you pursue in your CRM" : "Move deals to Offer/Contract/Closed in your CRM to teach this"}>🎯 For you</button>
+              <button onClick={() => setPredictiveOnly(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${predictiveOnly ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`} title="Show only predicted pre-foreclosures — our forecast of properties not yet filed">🔮 Predictive</button>
               <button onClick={() => setShowZoneRank(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showZoneRank ? "bg-teal-600 border-teal-500 text-white" : "bg-teal-700/30 border-teal-500/40 text-teal-200 hover:bg-teal-700/50"}`} title="Rank the best ZIPs in these results">📍 Best zones</button>
               <button onClick={() => setShowPortfolios(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showPortfolios ? "bg-sky-600 border-sky-500 text-white" : "bg-sky-700/30 border-sky-500/40 text-sky-200 hover:bg-sky-700/50"}`} title="Owners with multiple distressed properties (bulk sellers)">👤 Portfolios{portfolios.length ? ` ${portfolios.length}` : ""}</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
