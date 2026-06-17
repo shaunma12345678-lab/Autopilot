@@ -18,11 +18,11 @@ export interface Prediction {
   factors:     string[]           // explainable drivers (what we detected)
 }
 
-// A real foreclosure listing (including the pre-foreclosure pipeline) — NOT a
-// prediction. These are the "normal listings" shown by default.
+// A FILED foreclosure (a formal notice exists) — NOT a prediction. PRE_FORECLOSURE
+// is the early stage with NO notice yet, so it counts as a prediction below.
 export function isConfirmedForeclosure(lead: ForeclosureLead): boolean {
   const stage = lead.foreclosureStage
-  if (stage === "NOTICE_OF_DEFAULT" || stage === "LIS_PENDENS" || stage === "NOTICE_OF_SALE" || stage === "AUCTION" || stage === "PRE_FORECLOSURE") return true
+  if (stage === "NOTICE_OF_DEFAULT" || stage === "LIS_PENDENS" || stage === "NOTICE_OF_SALE" || stage === "AUCTION") return true
   if (lead.auctionDate) return true
   if (typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0) return true
   if ((lead.defaultAmount ?? 0) > 0) return true
@@ -40,6 +40,9 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   let p = 0
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
+
+  // The pre-foreclosure stage itself (early, no notice filed) IS the forecast.
+  if (lead.foreclosureStage === "PRE_FORECLOSURE") add(28, "Pre-foreclosure stage (no notice filed yet)")
 
   const taxDelq = lead.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(text)
   const probate = /probate|deceased|estate|inherited|obituary/.test(text)
