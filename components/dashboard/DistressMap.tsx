@@ -295,7 +295,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const psfRef        = useRef<number | null>(null)
   const newIdsRef     = useRef<Set<number>>(new Set())
   const newOnlyRef    = useRef(false)
-  const predOnlyRef   = useRef(false)
+  const showPredRef   = useRef(false)
   const accelOnlyRef  = useRef(false)
   const accelRef      = useRef<Record<string, { accelerating: boolean; signalDelta: number; days: number; sightings: number }>>({})
   const profileRef    = useRef<LearnedProfile | null>(null)
@@ -344,7 +344,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   const [pipelineView, setPipelineView] = useState(false)
   const [showMarket, setShowMarket] = useState(false)
   const [newOnly, setNewOnly]       = useState(false)
-  const [predOnly, setPredOnly]     = useState(false)
+  const [showPred, setShowPred]     = useState(false) // predicted hidden by default — normal listings only
   const [accelOnly, setAccelOnly]   = useState(false)
   const [accelVersion, setAccelVersion] = useState(0)
   const [autoRefresh, setAutoRefresh] = useState(false)
@@ -376,7 +376,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { pipelineRef.current = pipelineView }, [pipelineView])
   useEffect(() => { psfRef.current = snapshot.medianPsf }, [snapshot])
   useEffect(() => { newOnlyRef.current = newOnly }, [newOnly])
-  useEffect(() => { predOnlyRef.current = predOnly }, [predOnly])
+  useEffect(() => { showPredRef.current = showPred }, [showPred])
   useEffect(() => { accelOnlyRef.current = accelOnly }, [accelOnly])
   useEffect(() => { profileRef.current = profile }, [profile])
   useEffect(() => { onRefreshRef.current = onRefresh }, [onRefresh])
@@ -387,7 +387,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
   useEffect(() => { if (leads.length) addSeen(leads.map((l) => leadSignature(l))) }, [leads])
 
   // Re-draw pins when filters / pipeline / CRM / market / new-set change.
-  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, newOnly, predOnly, accelOnly, accelVersion, newIds, profile, ready])
+  useEffect(() => { if (ready) renderRef.current() }, [buyBox, pipelineView, crm, snapshot, newOnly, showPred, accelOnly, accelVersion, newIds, profile, ready])
 
   // #1 Auto-refresh / per-farm auto-crawl: periodically re-run the search so new
   // deals surface (and zone alerts fire) while the map is open.
@@ -709,19 +709,19 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
     // Buy-box (#1), New (#2) and Predicted filters: matching deals cluster/pin;
     // the rest fade to faint grey dots so your matches pop.
     const newOnly = newOnlyRef.current
-    const predOnly = predOnlyRef.current
+    const showPred = showPredRef.current
     const accelOnly = accelOnlyRef.current
-    let clusterPts = pts
-    if (box.enabled || newOnly || predOnly || accelOnly) {
-      clusterPts = []
-      for (const p of pts) {
-        const passBox = !box.enabled || matchesBuyBox(p.l, analysisOf(p.l), box)
-        const passNew = !newOnly || newIdsRef.current.has(p.l.attomId)
-        const passPred = !predOnly || predictPreForeclosure(p.l).predicted
-        const passAccel = !accelOnly || Boolean(accelRef.current[leadSignature(p.l)]?.accelerating)
-        if (passBox && passNew && passPred && passAccel) clusterPts.push(p)
-        else L.circleMarker([p.ll.lat, p.ll.lng], { radius: 3, stroke: false, fillColor: "#475569", fillOpacity: 0.35, bubblingMouseEvents: false }).addTo(layer)
-      }
+    // ALWAYS run the filter: predicted pre-foreclosures are hidden by default
+    // (normal listings only) and only appear when 🔮 is toggled on.
+    const clusterPts: typeof pts = []
+    for (const p of pts) {
+      // Predicted are fully hidden (not even a grey dot) unless 🔮 is on.
+      if (predictPreForeclosure(p.l).predicted && !showPred) continue
+      const passBox = !box.enabled || matchesBuyBox(p.l, analysisOf(p.l), box)
+      const passNew = !newOnly || newIdsRef.current.has(p.l.attomId)
+      const passAccel = !accelOnly || Boolean(accelRef.current[leadSignature(p.l)]?.accelerating)
+      if (passBox && passNew && passAccel) clusterPts.push(p)
+      else L.circleMarker([p.ll.lat, p.ll.lng], { radius: 3, stroke: false, fillColor: "#475569", fillOpacity: 0.35, bubblingMouseEvents: false }).addTo(layer)
     }
 
     const buckets = new Map<string, { items: { l: ForeclosureLead; ll: LatLng }[]; x: number; y: number }>()
@@ -1107,7 +1107,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
                   <button onClick={() => setShowDriveList((v) => !v)} className={toolBtn(showDriveList)} title="Logged houses">📋{driveLeads.length ? driveLeads.length : ""}</button>
                   <button onClick={() => setShowBuyBox((v) => !v)} className={toolBtn(buyBox.enabled || showBuyBox)} title="My buy-box filter">🎯{buyBox.enabled ? "✓" : ""}</button>
                   <button onClick={() => setNewOnly((v) => !v)} className={toolBtn(newOnly)} title="New leads only">🆕{newCount ? newCount : ""}</button>
-                  <button onClick={() => setPredOnly((v) => !v)} className={toolBtn(predOnly)} title="Predicted pre-foreclosures only (our forecast)">🔮</button>
+                  <button onClick={() => setShowPred((v) => !v)} className={toolBtn(showPred)} title="Show predicted pre-foreclosures (hidden by default — normal listings only)">🔮{showPred ? " on" : ""}</button>
                   <button onClick={() => setAccelOnly((v) => !v)} className={toolBtn(accelOnly)} title="Accelerating only — distress stacking faster (about to pop)">⏫</button>
                   <button onClick={() => setPipelineView((v) => !v)} className={toolBtn(pipelineView)} title="Pipeline view (color by CRM stage)">🗂</button>
                   <button onClick={() => setShowMarket((v) => !v)} className={toolBtn(showMarket)} title="Area market snapshot">📊</button>
@@ -1254,7 +1254,7 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
             ))}
             <div className="flex items-center gap-1.5">
               <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: PREDICT_COLOR, border: "1.5px dashed #fff" }} />
-              <span>🔮 Predicted pre-foreclosure (our forecast)</span>
+              <span>🔮 Predicted pre-foreclosure {showPred ? "(shown)" : "(hidden — tap 🔮)"}</span>
             </div>
             <div className="flex items-center gap-1.5 pt-0.5 border-t border-gray-700/50 mt-1">
               <span className="inline-block w-2.5 h-2.5 rounded-full border-2" style={{ borderColor: "#a78bfa", background: "transparent" }} />
