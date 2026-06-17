@@ -41,18 +41,34 @@ export async function POST(request: NextRequest) {
       mode:       "predictive",   // lead with PRE-filing early-distress signals
     })
 
-    // Forecasts only: early distress, NOT already in the foreclosure pipeline.
-    const leads = ds.leads
-      .map(freeLeadToForeclosureLead)
+    // Forecasts: distressed properties where a sale is NOT yet scheduled — we
+    // predict they'll reach the auction block. Sorted by forecast probability.
+    const all = ds.leads.map(freeLeadToForeclosureLead)
+    let predicted = all
       .filter((l) => !isConfirmedForeclosure(l) && predictPreForeclosure(l).predicted)
       .sort((a, b) => predictPreForeclosure(b).probability - predictPreForeclosure(a).probability)
-      .slice(0, maxLeads)
+
+    // Guaranteed floor — there should always be a few forecasts. If the area
+    // only surfaced scheduled-sale leads, fall back to the LEAST-imminent ones
+    // (furthest from the auction block = still earliest) as the next-best
+    // forecast so the predictive view is never empty.
+    const FLOOR = 5
+    if (predicted.length < FLOOR) {
+      const used = new Set(predicted.map((l) => l.attomId))
+      const fallback = all
+        .filter((l) => !used.has(l.attomId))
+        .sort((a, b) => (b.daysUntilAuction ?? 99999) - (a.daysUntilAuction ?? 99999))
+        .slice(0, FLOOR - predicted.length)
+      predicted = [...predicted, ...fallback]
+    }
+
+    const leads = predicted.slice(0, maxLeads)
 
     return Response.json({
       leads,
       total: leads.length,
       note: leads.length === 0
-        ? "No predictive (pre-pipeline) leads in this area right now — these surface when properties show early distress (tax delinquency, probate, vacancy, code violations) before any foreclosure is filed. A free TAVILY_API_KEY widens the sources, but it isn't required."
+        ? "No distressed properties surfaced in this area on this run — widen the city/county or date range and try again."
         : undefined,
     })
   } catch (err) {

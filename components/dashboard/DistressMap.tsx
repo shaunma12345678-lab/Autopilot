@@ -721,7 +721,13 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         const passPred = !showPred || predictPreForeclosure(p.l).predicted
         const passAccel = !accelOnly || Boolean(accelRef.current[leadSignature(p.l)]?.accelerating)
         if (passBox && passNew && passPred && passAccel) clusterPts.push(p)
-        else L.circleMarker([p.ll.lat, p.ll.lng], { radius: 3, stroke: false, fillColor: "#475569", fillOpacity: 0.35, bubblingMouseEvents: false }).addTo(layer)
+        // Non-matching leads stay visible in their distress color (just smaller
+        // and dimmer) so the OTHER pins never disappear when a filter is on.
+        else {
+          const du = leadUrgency(p.l)
+          const dPred = predictPreForeclosure(p.l).predicted
+          L.circleMarker([p.ll.lat, p.ll.lng], { radius: 4, weight: 1, color: "#0b0f17", fillColor: dPred ? PREDICT_COLOR : URGENCY_COLOR[du], fillOpacity: 0.5, bubblingMouseEvents: false }).addTo(layer)
+        }
       }
     }
 

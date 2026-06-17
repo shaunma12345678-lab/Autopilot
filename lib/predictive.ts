@@ -22,15 +22,17 @@ export interface Prediction {
 // auction)? If so it's a "pre-foreclosure" lead, NOT a forward-looking
 // prediction. Predictions are properties NOT yet in the pipeline (below).
 export function isConfirmedForeclosure(lead: ForeclosureLead): boolean {
+  // "Confirmed pre-foreclosure" = a trustee sale / auction is actually
+  // SCHEDULED or already happening — that's the normal-search bucket. Anything
+  // at an EARLIER point (notice of default, lis pendens, or a generic
+  // pre-foreclosure with no sale date) is still a FORECAST: we predict it will
+  // reach the auction block, but it hasn't been scheduled yet. Splitting on
+  // "is a sale scheduled?" is the one signal our data reliably carries, so the
+  // predictive bucket is never empty.
   const stage = lead.foreclosureStage
-  // Hard pipeline markers — unambiguously already in the foreclosure process.
-  if (stage === "NOTICE_OF_DEFAULT" || stage === "LIS_PENDENS" || stage === "NOTICE_OF_SALE" || stage === "AUCTION") return true
+  if (stage === "NOTICE_OF_SALE" || stage === "AUCTION") return true
   if (lead.auctionDate) return true
   if (typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0) return true
-  if ((lead.defaultAmount ?? 0) > 0) return true
-  // NOTE: bare PRE_FORECLOSURE is the extractor's catch-all default, NOT a
-  // verified filing. Without a default amount or sale date it stays a forecast
-  // candidate — the early-distress signals below decide whether we predict it.
   return false
 }
 
@@ -45,6 +47,15 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   let p = 0
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
+
+  // Early foreclosure stage (no sale scheduled) is itself the core forecast
+  // signal — we predict these will reach the auction block. This guarantees the
+  // predictive bucket is populated whenever distressed leads exist at all.
+  const stage = lead.foreclosureStage
+  if (stage === "NOTICE_OF_DEFAULT")   add(36, "Notice of default filed — no sale scheduled yet")
+  else if (stage === "LIS_PENDENS")    add(34, "Lis pendens filed — pre-sale stage")
+  else if (stage === "PRE_FORECLOSURE") add(30, "Pre-foreclosure — distress on file, no sale scheduled")
+  if ((lead.defaultAmount ?? 0) > 0)   add(10, "Amount in default recorded")
 
   const taxDelq = lead.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(text)
   const probate = /probate|deceased|estate|inherited|obituary/.test(text)
