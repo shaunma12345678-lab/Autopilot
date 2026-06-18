@@ -15,6 +15,7 @@ import { rankZones } from "@/lib/opportunity-zones"
 import { detectPortfolios } from "@/lib/owner-portfolio"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { openDealSheet } from "@/lib/deal-sheet"
+import { telHref, smsHref, mailtoHref, printLetter } from "@/lib/outreach-actions"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -395,7 +396,30 @@ function OutreachPanel({ lead, businessId }: { lead: ForeclosureLead; businessId
         </div>
       </div>
 
-      {/* Send buttons */}
+      {/* Quick actions — open on YOUR device, pre-filled, no provider needed */}
+      <div>
+        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">Act now — from your phone</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <a href={telHref(lead.phone)} onClick={e => { if (!lead.phone) e.preventDefault() }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg border transition-all ${lead.phone ? "bg-emerald-600/80 hover:bg-emerald-500 text-white border-emerald-400/40" : "bg-gray-800/40 text-gray-600 border-gray-700/40 cursor-not-allowed"}`}>
+            📞 Call
+          </a>
+          <a href={smsHref(lead.phone, getText("sms"))} onClick={e => { if (!lead.phone) e.preventDefault() }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg border transition-all ${lead.phone ? "bg-teal-600/80 hover:bg-teal-500 text-white border-teal-400/40" : "bg-gray-800/40 text-gray-600 border-gray-700/40 cursor-not-allowed"}`}>
+            💬 Text
+          </a>
+          <a href={mailtoHref(lead.email, `Regarding ${lead.address}`, getText("letter"))} onClick={e => { if (!lead.email) e.preventDefault() }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg border transition-all ${lead.email ? "bg-blue-600/80 hover:bg-blue-500 text-white border-blue-400/40" : "bg-gray-800/40 text-gray-600 border-gray-700/40 cursor-not-allowed"}`}>
+            ✉ Email
+          </a>
+          <button onClick={() => printLetter(lead, getText("letter"), fromName, fromPhone)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/80 hover:bg-amber-500 text-white text-[11px] font-semibold rounded-lg border border-amber-400/40 transition-all">
+            🖨 Print Letter
+          </button>
+        </div>
+      </div>
+
+      {/* Send buttons — via your configured SMS/email provider */}
       <div className="flex items-center gap-2 flex-wrap">
         <button onClick={() => send("email")} disabled={!lead.email || sending}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/80 hover:bg-blue-500/80 disabled:opacity-40 text-white text-[11px] font-semibold rounded-lg transition-all">
