@@ -457,7 +457,7 @@ async function scrapeHudReo(params: {
         })
       }
     }
-    return leads.slice(0, 80)
+    return leads.slice(0, 160)
   } catch {
     return []
   }
@@ -483,7 +483,7 @@ async function scrapeUsda(state: string): Promise<FreeLead[]> {
     const data = await res.json()
     const items: Record<string, unknown>[] = data?.data ?? data?.properties ?? (Array.isArray(data) ? data : [])
 
-    return items.slice(0, 80).flatMap((p) => {
+    return items.slice(0, 160).flatMap((p) => {
       const address = String(
         p.propertyAddress ?? p.address ?? p.streetAddress ?? p.street ?? ""
       ).trim()
@@ -565,7 +565,7 @@ async function scrapeForeclosureCom(countyName: string, state: string): Promise<
         sourceUrl:        `https://www.foreclosure.com/listing/results.html?st%5B%5D=${state.toLowerCase()}&county%5B%5D=${encodeURIComponent(countySlug)}`,
         rawSignals:       ["Foreclosure.com pre-foreclosure listing"],
       })
-      if (leads.length >= 60) break
+      if (leads.length >= 120) break
     }
 
     return leads
@@ -623,7 +623,7 @@ async function scrapeLegalNotices(countyName: string): Promise<FreeLead[]> {
           rawSignals:       ["Notice of Trustee Sale — California legal notice publication (legally required)"],
         })
         idx++
-        if (leads.length >= 40) break
+        if (leads.length >= 100) break
       }
     }
   } catch { /* non-fatal */ }
@@ -661,7 +661,7 @@ async function scrapeLegalNotices(countyName: string): Promise<FreeLead[]> {
           sourceUrl:        `https://legalnewsonline.com/`,
           rawSignals:       ["Notice of Trustee Sale — California legal newspaper (legally required publication)"],
         })
-        if (leads.length >= 60) break
+        if (leads.length >= 120) break
       }
     }
   } catch { /* non-fatal */ }
@@ -892,7 +892,7 @@ async function scrapeAuctionCom(params: {
         sourceUrl:        `https://www.auction.com/search/real-estate-foreclosure/?state=${state}`,
         rawSignals:       ["Foreclosure auction listing — auction.com"],
       })
-      if (leads.length >= 40) break
+      if (leads.length >= 100) break
     }
     return leads
   } catch {
@@ -928,7 +928,7 @@ async function scrapeBid4Assets(state: string): Promise<FreeLead[]> {
         const listings: Record<string, unknown>[] =
           data?.assets ?? data?.listings ?? data?.results ?? (Array.isArray(data) ? data : [])
         if (listings.length > 0) {
-          return listings.slice(0, 80).flatMap((l) => {
+          return listings.slice(0, 160).flatMap((l) => {
             const address = String(
               l.address ?? l.propertyAddress ?? l.streetAddress ?? ""
             ).trim()
@@ -971,7 +971,7 @@ async function scrapeBid4Assets(state: string): Promise<FreeLead[]> {
           sourceUrl:        url,
           rawSignals:       ["Bid4Assets government auction listing"],
         })
-        if (leads.length >= 40) break
+        if (leads.length >= 100) break
       }
       if (leads.length > 0) return leads
     } catch { continue }

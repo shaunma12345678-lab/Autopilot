@@ -897,7 +897,9 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
 
 function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead[]; businessId: string; apiHeaders: Record<string, string> }) {
   const withContact = leads.filter(l => l.email || l.phone)
-  const mailable    = leads.filter(l => l.address && l.ownerName)   // everyone with an address
+  // Direct mail = occupant mail: every property with a deliverable address, even
+  // when we don't have the owner's name (the letter addresses "Current Homeowner").
+  const mailable    = leads.filter(l => l.address && (l.city || l.zip))
   const [selected, setSelected]   = useState<Set<number>>(new Set())
   const [channel, setChannel]     = useState<"mail"|"email"|"sms"|"both">("mail")
   const [subject, setSubject]     = useState("A personal note about your property")
@@ -1068,7 +1070,7 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
             <div key={l.attomId} className={`flex items-center gap-3 px-4 py-3 transition-colors ${selected.has(l.attomId) ? "bg-indigo-950/30" : "hover:bg-gray-800/20"}`}>
               <input type="checkbox" checked={selected.has(l.attomId)} onChange={() => setSelected(prev => { const s = new Set(prev); s.has(l.attomId) ? s.delete(l.attomId) : s.add(l.attomId); return s })} className="accent-indigo-500 shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-white truncate">{l.ownerName}</p>
+                <p className="text-xs font-medium text-white truncate">{l.ownerName || (channel === "mail" ? "Current Homeowner" : "Owner unknown")}</p>
                 <p className="text-[11px] text-gray-500 truncate">{l.address}, {l.city}</p>
               </div>
               <div className="text-right shrink-0">
