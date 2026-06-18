@@ -17,6 +17,7 @@ import { predictPreForeclosure } from "@/lib/predictive"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { telHref, smsHref, mailtoHref, printLetter, printLetterBatch } from "@/lib/outreach-actions"
 import { featurize, leadArea, adaptiveScore, type LearnedModel } from "@/lib/learning-engine"
+import { LEAD_TYPES, classifyLead, leadHasType, typeCounts, leadTypeMeta } from "@/lib/lead-types"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -680,11 +681,12 @@ function PremiumActions({ lead, apiHeaders, onEnrich }: { lead: ForeclosureLead;
 
 // ─── Expandable lead row ──────────────────────────────────────────────────────
 
-function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHeaders, onEnrich }: {
+function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHeaders, onEnrich, onPursue }: {
   lead: ForeclosureLead; sel: boolean; onToggle: () => void
   saved: boolean; onSave: () => void; saving: boolean; businessId: string
   apiHeaders: Record<string, string>
   onEnrich: (attomId: number, patch: Record<string, unknown>) => void
+  onPursue?: (lead: ForeclosureLead) => void
 }) {
   const [expanded, setExpanded]   = useState(false)
   const [detailTab, setDetailTab] = useState<"score"|"deal"|"outreach">("score")
@@ -720,6 +722,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
             {lead.occupancy === "vacant" && <span className="text-[9px] bg-amber-500/15 text-amber-300 px-1 rounded">Vacant</span>}
             {liens.length > 0 && <span className="text-[9px] bg-red-600/20 text-red-300 px-1 rounded" title={liens.map(l => l.label).join(", ")}>⚠ {liens.length} lien{liens.length === 1 ? "" : "s"}</span>}
             {lead.ownerType === "corporate" && <span className="text-[9px] bg-gray-700/40 text-gray-400 px-1 rounded">LLC</span>}
+            {classifyLead(lead).filter(id => !["foreclosure","predicted","absentee","taxdelq","vacant","liens"].includes(id)).slice(0, 2).map(id => { const m = leadTypeMeta(id); return m ? <span key={id} className={`text-[9px] px-1 rounded border ${m.cls}`} title={m.label}>{m.emoji} {m.label.split(" ")[0]}</span> : null })}
           </div>
         </td>
         <td className="px-3 py-3">
@@ -773,7 +776,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
         <tr className="border-b border-gray-800/50 bg-gray-900/30">
           <td colSpan={13} className="px-6 py-5">
             <div className="flex justify-end mb-3">
-              <button onClick={() => openDealSheet(lead)} className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-400/40" title="Open a printable, shareable deal report to send to cash buyers">
+              <button onClick={() => { openDealSheet(lead); onPursue?.(lead) }} className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-400/40" title="Open a printable, shareable deal report to send to cash buyers">
                 📄 Deal Sheet
               </button>
             </div>
@@ -1313,6 +1316,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
   // Learns what you pursue and re-ranks future searches for you.
   const [learnModel, setLearnModel] = useState<LearnedModel | null>(null)
   const [smartRank, setSmartRank]   = useState(false)
+  const [typeFilter, setTypeFilter] = useState<string | null>(null)   // 🎯 Find Any Lead category
   // Load what the system has learned so far.
   useEffect(() => {
     if (!businessId) return
@@ -1407,7 +1411,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
     setProgressPct(0); setProgressMsg(""); setSourceSummary(null); setNewCount(null)
     setMapHighlight(null); setAutoEnrichBusy(false)
-    setPredictiveOnly(false); setPredictiveResult(null)
+    setPredictiveOnly(false); setPredictiveResult(null); setTypeFilter(null)
     const seq = ++searchSeqRef.current
     setSearchedArea(
       p.searchType === "zip"    ? (p.zipCode || undefined)
@@ -1583,11 +1587,15 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     let ls = sorted
     if (zoneIds) ls = ls.filter(l => zoneIds.has(l.attomId))
     if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
+    if (typeFilter) ls = ls.filter(l => leadHasType(l, typeFilter))   // 🎯 Find Any Lead
     if (fitIds) ls = [...ls].sort((a, b) => (fitIds.has(b.attomId) ? 1 : 0) - (fitIds.has(a.attomId) ? 1 : 0) || (b.score ?? 0) - (a.score ?? 0))
     // 🧠 Smart Rank — re-order by the learned model (what you actually pursue).
     if (smartRank && learnModel?.ready) ls = [...ls].sort((a, b) => adaptiveScore(b, learnModel) - adaptiveScore(a, learnModel))
     return ls
-  }, [predictiveOnly, predictiveResult, sorted, zoneIds, assistantFilter, fitIds, smartRank, learnModel])
+  }, [predictiveOnly, predictiveResult, sorted, zoneIds, assistantFilter, typeFilter, fitIds, smartRank, learnModel])
+
+  // 🎯 Find Any Lead — counts per motivated-seller category across the results.
+  const leadTypeCounts = useMemo(() => (result ? typeCounts(result.leads) : {}), [result])
 
   // Toggle predictive: fetch the forecast leads with our own engine on first open.
   const togglePredictive = async () => {
@@ -1867,7 +1875,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
               <button onClick={skipTraceAll} disabled={traceBusy} className="bg-indigo-700/40 border border-indigo-500/40 hover:bg-indigo-700/60 disabled:opacity-50 text-indigo-200 text-xs font-semibold px-3 rounded-lg" title="Find owner names + phones/emails for all shown leads (powers personalized mail & calling/texting)">{traceBusy ? "Tracing…" : traceDone != null ? `✓ ${traceDone} traced` : "👤 Skip-trace all"}</button>
-              <button onClick={() => setSmartRank(v => !v)} disabled={!learnModel?.ready} title={learnModel?.ready ? "Re-rank by what your system has learned you pursue" : `Learning… ${learnModel?.nPursued ?? 0}/5 outcomes recorded — save a few leads to unlock`} className={`text-xs font-semibold px-3 rounded-lg border disabled:opacity-50 ${smartRank && learnModel?.ready ? "bg-fuchsia-600 border-fuchsia-400 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`}>🧠 Smart Rank{learnModel?.ready ? "" : " 🔒"}</button>
+              <button onClick={() => setSmartRank(v => !v)} disabled={!learnModel?.ready} title={learnModel?.ready ? "Re-rank by what your system has learned you pursue" : `Learning… ${learnModel?.nPursued ?? 0}/3 — save or open a few deals you like to unlock`} className={`text-xs font-semibold px-3 rounded-lg border disabled:opacity-50 ${smartRank && learnModel?.ready ? "bg-fuchsia-600 border-fuchsia-400 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`}>🧠 Smart Rank{learnModel?.ready ? "" : " 🔒"}</button>
             </div>
             {forYou && !learned && <p className="text-[11px] text-violet-300/80 mt-2">Teaching mode: move 3+ deals to Offer/Contract/Closed in their CRM, then “For you” ranks new deals like those.</p>}
             {learnModel && (learnModel.insights.length > 0 || learnModel.topAreas.length > 0) && (
@@ -1955,6 +1963,20 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
             )}
           </p>
 
+          {/* 🎯 Find Any Lead — motivated-seller categories from this search */}
+          {!predictiveOnly && Object.keys(leadTypeCounts).length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-gray-500 mr-1">🎯 Find any lead:</span>
+              <button onClick={() => setTypeFilter(null)} className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border ${typeFilter === null ? "bg-indigo-600 border-indigo-400 text-white" : "bg-gray-800/60 border-gray-700/50 text-gray-300 hover:bg-gray-700/60"}`}>All {result?.leads.length ?? 0}</button>
+              {LEAD_TYPES.filter(t => (leadTypeCounts[t.id] ?? 0) > 0).map(t => (
+                <button key={t.id} onClick={() => setTypeFilter(f => f === t.id ? null : t.id)}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition-all ${typeFilter === t.id ? "bg-white/10 border-white/40 text-white" : t.cls + " hover:brightness-125"}`}>
+                  {t.emoji} {t.label} {leadTypeCounts[t.id]}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div ref={resultsRef} className="bg-gray-900/60 border border-gray-700/40 rounded-2xl overflow-hidden scroll-mt-4">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -1977,7 +1999,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
                 </thead>
                 <tbody>
                   {tableLeads.map(lead => (
-                    <LeadRow key={lead.attomId} lead={lead} sel={selected.has(lead.attomId)} onToggle={() => setSelected(prev => { const s = new Set(prev); s.has(lead.attomId) ? s.delete(lead.attomId) : s.add(lead.attomId); return s })} saved={savedIds.has(lead.attomId)} onSave={() => saveSingle(lead)} saving={saving} businessId={businessId} apiHeaders={apiHeaders} onEnrich={enrichLead} />
+                    <LeadRow key={lead.attomId} lead={lead} sel={selected.has(lead.attomId)} onToggle={() => setSelected(prev => { const s = new Set(prev); s.has(lead.attomId) ? s.delete(lead.attomId) : s.add(lead.attomId); return s })} saved={savedIds.has(lead.attomId)} onSave={() => saveSingle(lead)} saving={saving} businessId={businessId} apiHeaders={apiHeaders} onEnrich={enrichLead} onPursue={recordPursued} />
                   ))}
                 </tbody>
               </table>

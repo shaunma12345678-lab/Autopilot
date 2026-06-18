@@ -90,7 +90,7 @@ export interface LearnedModel {
   ready:     boolean                     // enough data to influence ranking
 }
 
-const READY_MIN = 5
+const READY_MIN = 3
 
 const LABELS: Record<string, (v: string) => string> = {
   stage:    (v) => `${v.replace(/_/g, " ").toLowerCase()} stage`,
