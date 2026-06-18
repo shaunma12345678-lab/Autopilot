@@ -8,42 +8,14 @@ export const maxDuration = 20
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
-import { prisma } from "@/lib/prisma"
-import { emptyTally, applySeen, applyPursued, computeModel, type Tally } from "@/lib/learning-engine"
+import { emptyTally, applySeen, applyPursued, computeModel } from "@/lib/learning-engine"
+import { loadLearningTally as loadTally, saveLearningTally as saveTally } from "@/lib/learning-store"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
-const SLUG = "re-learning"
-const KEY  = "tally"
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
   return request.headers.get("x-admin-password") === ADMIN_PASSWORD
-}
-
-async function loadTally(businessId: string): Promise<Tally> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mem = prisma.agentMemory as any
-    const row = await mem.findFirst({ where: { businessId, agentSlug: SLUG, key: KEY } })
-    if (row?.value) {
-      const parsed = JSON.parse(row.value) as Tally
-      if (parsed && typeof parsed.nSeen === "number") return { ...emptyTally(), ...parsed }
-    }
-  } catch { /* first run */ }
-  return emptyTally()
-}
-
-async function saveTally(businessId: string, tally: Tally): Promise<void> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mem = prisma.agentMemory as any
-    const value = JSON.stringify(tally)
-    await mem.upsert({
-      where:  { businessId, agentSlug: SLUG, key: KEY },
-      create: { id: crypto.randomUUID(), businessId, agentSlug: SLUG, key: KEY, value, updatedAt: new Date().toISOString() },
-      update: { value, updatedAt: new Date().toISOString() },
-    })
-  } catch { /* best-effort */ }
 }
 
 export async function GET(request: NextRequest) {

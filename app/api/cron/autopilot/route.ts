@@ -21,6 +21,8 @@ import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
 import { huntDiscoveredSources } from "@/lib/source-discovery"
 import { sendEmail } from "@/lib/email"
 import { sendSms } from "@/lib/sms"
+import { computeModel, adaptiveScore, applySeen, featurize, leadArea, emptyTally } from "@/lib/learning-engine"
+import { loadLearningTally, saveLearningTally, resolveLearningBusinessId } from "@/lib/learning-store"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
@@ -66,10 +68,36 @@ export async function GET(request: NextRequest) {
     const existing = await (prisma.lead as any).findMany({ select: { name: true }, take: 10000 }).catch(() => []) as { name: string }[]
     const existingAddresses = new Set(existing.map((l) => (l.name ?? "").toLowerCase().replace(/[\s,#.-]/g, "")))
 
-    const result = await deepSearch({ searchType: "county", countyIds: counties, maxLeads: 200, existingAddresses })
+    // Self-directing: load what the engine has learned about YOUR deals so it
+    // hunts your best areas and ranks by your pattern — not just static config.
+    const bizId = await resolveLearningBusinessId()
+    const tally = bizId ? await loadLearningTally(bizId) : emptyTally()
+    const model = computeModel(tally)
+    const learnedZips = model.ready
+      ? model.topAreas.map((a) => a.area).filter((a) => /^\d{5}$/.test(a)).slice(0, 3)
+      : []
 
-    // Our own systems: adapt → comp-engine values → full underwrite.
-    let leads: ForeclosureLead[] = result.leads.map(freeLeadToForeclosureLead)
+    // County sweep + the learned best ZIPs, all in parallel.
+    const searches = await Promise.all([
+      deepSearch({ searchType: "county", countyIds: counties, maxLeads: 200, existingAddresses }),
+      ...learnedZips.map((zip) =>
+        deepSearch({ searchType: "zip", zipCode: zip, maxLeads: 80, existingAddresses }).catch(() => null)),
+    ])
+    const results = searches.filter((r): r is Awaited<ReturnType<typeof deepSearch>> => r !== null)
+
+    // Merge + dedupe leads from every sweep; collect the genuinely-new keys.
+    const seenAddr = new Set<string>()
+    const newKeys  = new Set<string>()
+    let leads: ForeclosureLead[] = []
+    for (const r of results) {
+      for (const fl of r.leads) {
+        const key = fl.address.toLowerCase().replace(/[\s,#.-]/g, "")
+        if (seenAddr.has(key)) continue
+        seenAddr.add(key)
+        leads.push(freeLeadToForeclosureLead(fl))
+      }
+      for (const nl of r.newLeads) newKeys.add(nl.address.toLowerCase().replace(/[\s,#.-]/g, ""))
+    }
 
     // Keep finding MORE: hunt AI-discovered data sources for extra leads.
     let discovered = 0
@@ -85,11 +113,21 @@ export async function GET(request: NextRequest) {
     } catch { /* discovery is best-effort */ }
 
     leads = fillComps(leads)
-    const newKeys = new Set(result.newLeads.map((l) => l.address.toLowerCase().replace(/[\s,#.-]/g, "")))
 
+    // Record this sweep as "seen" so the engine keeps learning the baseline,
+    // even from autonomous runs (the loop improves itself over time).
+    if (bizId && leads.length) {
+      const sample = leads.slice(0, 120)
+      applySeen(tally, sample.map(featurize), sample.map(leadArea))
+      await saveLearningTally(bizId, tally).catch(() => {})
+    }
+
+    // Rank by the LEARNED model when it's ready (what you actually pursue),
+    // otherwise by base score. Quality floor lets a strong pattern-fit through.
+    const rankScore = (l: ForeclosureLead) => (model.ready ? adaptiveScore(l, model) : (l.score ?? 0))
     const ranked: Deal[] = leads
-      .filter((l) => (l.score ?? 0) >= minScore)
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .filter((l) => Math.max(l.score ?? 0, rankScore(l)) >= minScore)
+      .sort((a, b) => rankScore(b) - rankScore(a))
       .slice(0, 15)
       .map((lead) => {
         const a = analyzeDeal(lead)
@@ -127,6 +165,13 @@ export async function GET(request: NextRequest) {
       discovered,
       qualified: ranked.length,
       newCount,
+      learning: {
+        ready:       model.ready,
+        outcomes:    model.nPursued,
+        areasHunted: learnedZips,
+        rankedBy:    model.ready ? "adaptive (learned)" : "score",
+        insights:    model.insights.slice(0, 3),
+      },
       notified: { email: emailed, sms: texted, emailConfigured: Boolean(notifyEmail), smsConfigured: Boolean(notifyPhone) },
       durationMs: Date.now() - startedAt,
     })
