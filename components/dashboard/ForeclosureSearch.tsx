@@ -1331,6 +1331,8 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     if (searchSeqRef.current === seq) setAutoEnrichBusy(false)
   }, [apiHeaders, enrichLead])
   const [enrichAllDone, setEnrichAllDone] = useState(false)
+  const [traceBusy, setTraceBusy]         = useState(false)
+  const [traceDone, setTraceDone]         = useState<number | null>(null)
   // Deep Search mode state
   const [deepMode, setDeepMode]           = useState(true)
   const [progressPct, setProgressPct]     = useState(0)
@@ -1601,6 +1603,28 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     if (searchSeqRef.current === seq) { setAutoEnrichBusy(false); setEnrichAllDone(true); setTimeout(() => setEnrichAllDone(false), 2500) }
   }
 
+  // Bulk skip trace — resolve owner names + phones/emails for all shown leads so
+  // the whole area can be personalized (named mail) and reached digitally.
+  const skipTraceAll = async () => {
+    const seq = searchSeqRef.current
+    const targets = tableLeads.filter(l => !l.phone && !l.email).slice(0, 40)
+    if (!targets.length) return
+    setTraceBusy(true); setTraceDone(null)
+    try {
+      const res = await fetch("/api/leads/skip-trace-bulk", {
+        method: "POST", headers: apiHeaders,
+        body: JSON.stringify({ leads: targets.map(l => ({ attomId: l.attomId, address: l.address, city: l.city, state: l.state, zip: l.zip, ownerName: l.ownerName })) }),
+      })
+      const data = await res.json()
+      if (searchSeqRef.current === seq && Array.isArray(data.results)) {
+        for (const r of data.results) if (r?.attomId && r.patch) enrichLead(r.attomId, r.patch)
+        setTraceDone(data.traced ?? data.results.length)
+        setTimeout(() => setTraceDone(null), 3500)
+      }
+    } catch { /* best-effort */ }
+    if (searchSeqRef.current === seq) setTraceBusy(false)
+  }
+
   const counts = useMemo(() => result ? {
     hot: result.leads.filter(l => l.priority === "HOT").length,
     warm: result.leads.filter(l => l.priority === "WARM").length,
@@ -1805,6 +1829,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               <button onClick={() => setShowPortfolios(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showPortfolios ? "bg-sky-600 border-sky-500 text-white" : "bg-sky-700/30 border-sky-500/40 text-sky-200 hover:bg-sky-700/50"}`} title="Owners with multiple distressed properties (bulk sellers)">👤 Portfolios{portfolios.length ? ` ${portfolios.length}` : ""}</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
+              <button onClick={skipTraceAll} disabled={traceBusy} className="bg-indigo-700/40 border border-indigo-500/40 hover:bg-indigo-700/60 disabled:opacity-50 text-indigo-200 text-xs font-semibold px-3 rounded-lg" title="Find owner names + phones/emails for all shown leads (powers personalized mail & calling/texting)">{traceBusy ? "Tracing…" : traceDone != null ? `✓ ${traceDone} traced` : "👤 Skip-trace all"}</button>
             </div>
             {forYou && !learned && <p className="text-[11px] text-violet-300/80 mt-2">Teaching mode: move 3+ deals to Offer/Contract/Closed in their CRM, then “For you” ranks new deals like those.</p>}
             {showZoneRank && (
