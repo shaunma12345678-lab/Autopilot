@@ -52,6 +52,13 @@ export interface FreeLead {
   juniorLiens?:   JuniorLien[]      // secondary liens discovered in the notice
   occupancy?:     "owner_occupied" | "vacant" | "absentee" | null
   daysUntilAuction?: number | null  // computed countdown to the trustee sale
+  // ── Property facts (from listing payloads — power accurate ARV/comps) ────────
+  beds?:          number | null
+  baths?:         number | null
+  sqft?:          number | null
+  yearBuilt?:     number | null
+  lotSize?:       number | null
+  propertyType?:  string | null
 }
 
 const EXTRACT_SYSTEM = `You are a real estate data extraction specialist with deep knowledge of US foreclosure law.

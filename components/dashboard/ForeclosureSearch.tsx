@@ -14,6 +14,7 @@ import { learnProfile, fitsProfile } from "@/lib/deal-learning"
 import { rankZones } from "@/lib/opportunity-zones"
 import { detectPortfolios } from "@/lib/owner-portfolio"
 import { predictPreForeclosure } from "@/lib/predictive"
+import { openDealSheet } from "@/lib/deal-sheet"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -746,6 +747,11 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
       {expanded && (
         <tr className="border-b border-gray-800/50 bg-gray-900/30">
           <td colSpan={13} className="px-6 py-5">
+            <div className="flex justify-end mb-3">
+              <button onClick={() => openDealSheet(lead)} className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-400/40" title="Open a printable, shareable deal report to send to cash buyers">
+                📄 Deal Sheet
+              </button>
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               {/* Left: tabs */}
               <div className="lg:col-span-1 space-y-3">

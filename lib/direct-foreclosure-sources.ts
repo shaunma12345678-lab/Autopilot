@@ -86,6 +86,14 @@ async function fetchZillowTile(tile: GeoBox): Promise<FreeLead[]> {
       const zest  = Number(info?.zestimate ?? r.zestimate    ?? 0) || null
       const zpid  = String(r.zpid ?? "")
 
+      const posNum = (v: unknown): number | null => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null }
+      const beds      = posNum(info?.bedrooms  ?? r.beds)
+      const baths     = posNum(info?.bathrooms ?? r.baths)
+      const sqft      = posNum(info?.livingArea ?? info?.livingAreaValue ?? r.area)
+      const yearBuilt = posNum(info?.yearBuilt)
+      const lotSize   = posNum(info?.lotAreaValue)
+      const propType  = String(info?.homeType ?? "").replace(/_/g, " ").toLowerCase() || null
+
       return [{
         address,
         city,
@@ -102,6 +110,7 @@ async function fetchZillowTile(tile: GeoBox): Promise<FreeLead[]> {
           ? `https://www.zillow.com/homedetails/${zpid}_zpid/`
           : `https://www.zillow.com/homes/pre-foreclosure/`,
         rawSignals: ["Zillow pre-foreclosure listing"],
+        beds, baths, sqft, yearBuilt, lotSize, propertyType: propType,
       } as FreeLead]
     })
   } catch {
@@ -186,6 +195,18 @@ async function fetchRedfinTile(tile: GeoBox, fallbackState = "CA"): Promise<Free
       const price     = Number((h.price as Record<string, unknown>)?.value ?? 0) || null
       const url       = String(h.url ?? "")
 
+      // Property facts (Redfin GIS nests most values as { value: n }).
+      const numOf = (v: unknown): number | null => {
+        const n = Number((v as Record<string, unknown>)?.value ?? v)
+        return Number.isFinite(n) && n > 0 ? n : null
+      }
+      const beds      = numOf(h.beds)
+      const baths     = numOf(h.baths)
+      const sqft      = numOf(h.sqFt)
+      const yearBuilt = numOf(h.yearBuilt)
+      const lotSize   = numOf(h.lotSize)
+      const propType  = String((h.propertyType as Record<string, unknown>)?.value ?? h.propertyType ?? "") || null
+
       // Distress signals from the GIS payload → motivated-seller detection.
       const dom       = Number((h.dom as Record<string, unknown>)?.value ?? 0) || 0
       const mlsStatus = String(h.mlsStatus ?? "").toLowerCase()
@@ -217,6 +238,7 @@ async function fetchRedfinTile(tile: GeoBox, fallbackState = "CA"): Promise<Free
         estimatedValue:   price,
         sourceUrl:        url ? `https://www.redfin.com${url}` : "https://www.redfin.com/",
         rawSignals:       signals,
+        beds, baths, sqft, yearBuilt, lotSize, propertyType: propType,
       } as FreeLead]
     })
   } catch {
