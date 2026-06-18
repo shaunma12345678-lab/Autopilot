@@ -16,6 +16,7 @@ import { detectPortfolios } from "@/lib/owner-portfolio"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { telHref, smsHref, mailtoHref, printLetter, printLetterBatch } from "@/lib/outreach-actions"
+import { featurize, leadArea, adaptiveScore, type LearnedModel } from "@/lib/learning-engine"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1307,6 +1308,38 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
   const enrichLead = useCallback((attomId: number, patch: Record<string, unknown>) => {
     setResult(r => r ? { ...r, leads: r.leads.map(l => l.attomId === attomId ? ({ ...l, ...patch } as ForeclosureLead) : l) } : r)
   }, [])
+
+  // ── Self-Learning Adaptive Engine wiring ──────────────────────────────────
+  // Learns what you pursue and re-ranks future searches for you.
+  const [learnModel, setLearnModel] = useState<LearnedModel | null>(null)
+  const [smartRank, setSmartRank]   = useState(false)
+  // Load what the system has learned so far.
+  useEffect(() => {
+    if (!businessId) return
+    fetch(`/api/leads/learning?businessId=${encodeURIComponent(businessId)}`, { headers: apiHeaders })
+      .then(r => r.json()).then(d => { if (d?.model) setLearnModel(d.model) }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId])
+
+  const recordSeen = useCallback((leads: ForeclosureLead[]) => {
+    if (!businessId || leads.length === 0) return
+    const sample = leads.slice(0, 120)
+    fetch("/api/leads/learning", {
+      method: "POST", headers: apiHeaders,
+      body: JSON.stringify({ businessId, event: "seen", featureLists: sample.map(featurize), areas: sample.map(leadArea) }),
+    }).then(r => r.json()).then(d => { if (d?.model) setLearnModel(d.model) }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId])
+
+  const recordPursued = useCallback((lead: ForeclosureLead) => {
+    if (!businessId) return
+    fetch("/api/leads/learning", {
+      method: "POST", headers: apiHeaders,
+      body: JSON.stringify({ businessId, event: "pursued", features: featurize(lead), area: leadArea(lead) }),
+    }).then(r => r.json()).then(d => { if (d?.model) setLearnModel(d.model) }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId])
+
   const searchSeqRef = useRef(0)
   const [autoEnrichBusy, setAutoEnrichBusy] = useState(false)
   // After a search, quietly fill in the best (thin) HOT leads in the background.
@@ -1441,6 +1474,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
         }))
         const finalLeads = fillComps(rawLeads)
         setResult({ leads: finalLeads, total: data.total ?? 0, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
+        recordSeen(finalLeads)
         setSourceSummary(data.sourceCounts ?? null)
         setNewCount(data.newTotal ?? null)
         autoEnrichTopLeads(finalLeads, seq) // background: refine the best HOT leads
@@ -1467,7 +1501,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     setSaving(true)
     try {
       const res = await fetch(apiBase, { method: "PUT", headers: apiHeaders, body: JSON.stringify({ businessId, leads: [lead] }) })
-      if (res.ok) setSavedIds(prev => new Set([...prev, lead.attomId]))
+      if (res.ok) { setSavedIds(prev => new Set([...prev, lead.attomId])); recordPursued(lead) }
     } catch { /* silent */ }
     setSaving(false)
   }
@@ -1478,6 +1512,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     const leads = result.leads.filter(l => selected.has(l.attomId))
     try {
       const res = await fetch(apiBase, { method: "PUT", headers: apiHeaders, body: JSON.stringify({ businessId, leads }) })
+      if (res.ok) leads.forEach(recordPursued)
       if (res.ok) { setSavedIds(prev => new Set([...prev, ...leads.map(l => l.attomId)])); setSelected(new Set()) }
     } catch { /* silent */ }
     setSaving(false)
@@ -1549,8 +1584,10 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     if (zoneIds) ls = ls.filter(l => zoneIds.has(l.attomId))
     if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
     if (fitIds) ls = [...ls].sort((a, b) => (fitIds.has(b.attomId) ? 1 : 0) - (fitIds.has(a.attomId) ? 1 : 0) || (b.score ?? 0) - (a.score ?? 0))
+    // 🧠 Smart Rank — re-order by the learned model (what you actually pursue).
+    if (smartRank && learnModel?.ready) ls = [...ls].sort((a, b) => adaptiveScore(b, learnModel) - adaptiveScore(a, learnModel))
     return ls
-  }, [predictiveOnly, predictiveResult, sorted, zoneIds, assistantFilter, fitIds])
+  }, [predictiveOnly, predictiveResult, sorted, zoneIds, assistantFilter, fitIds, smartRank, learnModel])
 
   // Toggle predictive: fetch the forecast leads with our own engine on first open.
   const togglePredictive = async () => {
@@ -1830,8 +1867,25 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
               <button onClick={skipTraceAll} disabled={traceBusy} className="bg-indigo-700/40 border border-indigo-500/40 hover:bg-indigo-700/60 disabled:opacity-50 text-indigo-200 text-xs font-semibold px-3 rounded-lg" title="Find owner names + phones/emails for all shown leads (powers personalized mail & calling/texting)">{traceBusy ? "Tracing…" : traceDone != null ? `✓ ${traceDone} traced` : "👤 Skip-trace all"}</button>
+              <button onClick={() => setSmartRank(v => !v)} disabled={!learnModel?.ready} title={learnModel?.ready ? "Re-rank by what your system has learned you pursue" : `Learning… ${learnModel?.nPursued ?? 0}/5 outcomes recorded — save a few leads to unlock`} className={`text-xs font-semibold px-3 rounded-lg border disabled:opacity-50 ${smartRank && learnModel?.ready ? "bg-fuchsia-600 border-fuchsia-400 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`}>🧠 Smart Rank{learnModel?.ready ? "" : " 🔒"}</button>
             </div>
             {forYou && !learned && <p className="text-[11px] text-violet-300/80 mt-2">Teaching mode: move 3+ deals to Offer/Contract/Closed in their CRM, then “For you” ranks new deals like those.</p>}
+            {learnModel && (learnModel.insights.length > 0 || learnModel.topAreas.length > 0) && (
+              <div className="mt-2 bg-fuchsia-950/20 border border-fuchsia-500/20 rounded-lg p-2.5">
+                <p className="text-[10px] font-bold text-fuchsia-300 uppercase tracking-wider mb-1">🧠 What your system has learned · {learnModel.nPursued} outcomes</p>
+                {learnModel.insights.length > 0 ? (
+                  <ul className="space-y-0.5">
+                    {learnModel.insights.map((s, i) => <li key={i} className="text-[11px] text-gray-300 flex gap-2"><span className="text-fuchsia-400 shrink-0">▸</span>{s}</li>)}
+                  </ul>
+                ) : (
+                  <p className="text-[11px] text-gray-500">Still learning your pattern — keep saving the deals you like.</p>
+                )}
+                {learnModel.topAreas.length > 0 && (
+                  <p className="text-[11px] text-gray-400 mt-1.5">📍 Your best areas: {learnModel.topAreas.slice(0, 3).map(a => a.area).join(" · ")}</p>
+                )}
+                {learnModel.ready && !smartRank && <p className="text-[10px] text-fuchsia-300/70 mt-1">Turn on 🧠 Smart Rank to sort by this.</p>}
+              </div>
+            )}
             {showZoneRank && (
               <div className="mt-2 bg-gray-900/60 border border-teal-500/20 rounded-lg p-2">
                 <div className="text-[10px] text-gray-500 mb-1 px-1">📍 Best zones in these results — ranked by A/B-grade density × profit × score</div>
