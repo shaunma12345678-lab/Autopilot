@@ -15,14 +15,33 @@ const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 // ── California DOJ — official residential foreclosure-sale registry ───────────
 // Statewide, government-hosted (not IP-blocked). Lists completed/recent trustee
 // sales with county, address, city/zip, winning bidder, and sale dates.
+
+// In-module cache: the registry is one statewide dataset, identical for every CA
+// search, so we fetch it once and reuse it across rapid successive searches
+// (which is exactly when scrapers start rate-limiting). Warm-instance scoped.
+let CADOJ_CACHE: { at: number; rows: ExtractResult[] } | null = null
+const CADOJ_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
+
+async function fetchCaDojHtml(): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch("https://oag.ca.gov/residential-foreclosure-sales", {
+        headers: { "User-Agent": UA, "Accept": "text/html" },
+        signal: AbortSignal.timeout(9000),
+      })
+      if (res.ok) return await res.text()
+    } catch { /* retry once */ }
+  }
+  return null
+}
+
 export async function fetchCaDojForeclosures(): Promise<ExtractResult[]> {
+  if (CADOJ_CACHE && Date.now() - CADOJ_CACHE.at < CADOJ_TTL_MS && CADOJ_CACHE.rows.length > 0) {
+    return CADOJ_CACHE.rows
+  }
   try {
-    const res = await fetch("https://oag.ca.gov/residential-foreclosure-sales", {
-      headers: { "User-Agent": UA, "Accept": "text/html" },
-      signal: AbortSignal.timeout(9000),
-    })
-    if (!res.ok) return []
-    const html = await res.text()
+    const html = await fetchCaDojHtml()
+    if (!html) return CADOJ_CACHE?.rows ?? []
 
     const out: ExtractResult[] = []
     // Each data row: County | Address | City,Zip | Grantee | WinningBidder | SaleDate | Cat | Details
@@ -62,9 +81,10 @@ export async function fetchCaDojForeclosures(): Promise<ExtractResult[]> {
       }
       out.push({ lead, state: "CA", zip, city })
     }
-    return out
+    if (out.length > 0) CADOJ_CACHE = { at: Date.now(), rows: out }
+    return out.length > 0 ? out : (CADOJ_CACHE?.rows ?? [])
   } catch {
-    return []
+    return CADOJ_CACHE?.rows ?? []
   }
 }
 

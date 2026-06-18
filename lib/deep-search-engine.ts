@@ -409,14 +409,14 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     deduped.push(lead)
   }
 
-  // Merge the persistent per-area cache so a flaky run (sources blocked this
-  // time) never collapses the count — fresh leads win on dedupe, cached ones
-  // fill the rest. Best-effort; only when a businessId is provided and we're
-  // running a normal (not predictive) search.
-  const cacheable = !!params.businessId && (params.mode ?? "filings") !== "predictive"
+  // Merge the persistent per-area cache so a flaky run (sources rate-limited
+  // this time) never collapses the count — fresh leads win on dedupe, cached
+  // ones fill the rest. The cache resolves its own business id, so it works on
+  // every normal (not predictive) search. Best-effort.
+  const cacheable = (params.mode ?? "filings") !== "predictive"
   const cacheKey  = areaCacheKey({ searchType: primary.searchType, zipCode: primary.zipCode, city: primary.city, county: primary.county, state: primary.state })
   if (cacheable) {
-    const cached = await loadAreaCache(params.businessId!, cacheKey)
+    const cached = await loadAreaCache(cacheKey, params.businessId)
     for (const lead of cached) {
       if (!isValidPropertyAddress(lead.address)) continue
       const key = (lead.address + (lead.city ?? "")).toLowerCase().replace(/[\s,#.-]/g, "")
@@ -464,7 +464,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   // Persist the merged pool (fresh ∪ cached) so the area's lead count keeps
   // growing and never collapses on a later flaky run. Fire-and-forget.
   if (cacheable && deduped.length > 0) {
-    void saveAreaCache(params.businessId!, cacheKey, deduped)
+    void saveAreaCache(cacheKey, deduped, params.businessId)
   }
 
   // ── Intelligence pass — zero-cost, never-throws enrichment of every lead ──

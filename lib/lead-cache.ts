@@ -1,11 +1,14 @@
 // Persistent per-area lead cache (no migration — uses the generic AgentMemory
 // KV store). Free public-record scrapers are flaky from datacenter IPs: one run
-// returns 1600 leads, the next is blocked and returns 7. Caching every lead we
-// have ever found for an area and merging it into each search means the count
+// returns 1600 leads, the next is rate-limited and returns 7. Caching every lead
+// we have ever found for an area and merging it into each search means the count
 // never collapses — once we've surfaced leads for a place, they stay available.
 //
-// Keyed by (businessId, areaKey) so it's scoped per account and per searched
-// area. Best-effort throughout: a cache miss or store error never fails search.
+// The cache is effectively GLOBAL per area: it resolves a real business id once
+// (AgentMemory.businessId is a hard FK) and stores every area under it, keyed by
+// areaKey. Foreclosure data isn't user-specific, so sharing it is correct and
+// guarantees the cache works regardless of what the caller passes. Best-effort
+// throughout: a cache miss or store error never fails a search.
 
 import { prisma } from "@/lib/prisma"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
@@ -34,9 +37,30 @@ export function areaCacheKey(p: AreaKeyParts): string {
   return `area:${st || "unknown"}`
 }
 
-export async function loadAreaCache(businessId: string, key: string): Promise<FreeLead[]> {
-  if (!businessId) return []
+// Resolve a real business id to satisfy the AgentMemory FK. Cached per warm
+// instance so we only hit the DB once. `null` ⇒ no business exists ⇒ cache off.
+let resolvedBizId: string | null | undefined
+async function cacheBusinessId(hint?: string): Promise<string | null> {
+  if (resolvedBizId !== undefined) return resolvedBizId
+  let id: string | null = null
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const biz = prisma.business as any
+    // Prefer the caller's hint if it's a real row, else the first business.
+    let row = hint ? await biz.findFirst({ where: { id: hint } }) : null
+    if (!row) row = await biz.findFirst({ orderBy: { createdAt: "asc" } })
+    id = row?.id ?? null
+  } catch {
+    id = null
+  }
+  resolvedBizId = id
+  return id
+}
+
+export async function loadAreaCache(key: string, businessHint?: string): Promise<FreeLead[]> {
+  try {
+    const businessId = await cacheBusinessId(businessHint)
+    if (!businessId) return []
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mem = prisma.agentMemory as any
     const row = await mem.findFirst({ where: { businessId, agentSlug: SLUG, key } })
@@ -50,9 +74,11 @@ export async function loadAreaCache(businessId: string, key: string): Promise<Fr
   }
 }
 
-export async function saveAreaCache(businessId: string, key: string, leads: FreeLead[]): Promise<void> {
-  if (!businessId || leads.length === 0) return
+export async function saveAreaCache(key: string, leads: FreeLead[], businessHint?: string): Promise<void> {
+  if (leads.length === 0) return
   try {
+    const businessId = await cacheBusinessId(businessHint)
+    if (!businessId) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mem = prisma.agentMemory as any
     const value = JSON.stringify({ savedAt: new Date().toISOString(), leads: leads.slice(0, PER_AREA_CAP) })
