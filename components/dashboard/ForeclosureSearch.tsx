@@ -15,7 +15,7 @@ import { rankZones } from "@/lib/opportunity-zones"
 import { detectPortfolios } from "@/lib/owner-portfolio"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { openDealSheet } from "@/lib/deal-sheet"
-import { telHref, smsHref, mailtoHref, printLetter } from "@/lib/outreach-actions"
+import { telHref, smsHref, mailtoHref, printLetter, printLetterBatch } from "@/lib/outreach-actions"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -897,8 +897,9 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
 
 function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead[]; businessId: string; apiHeaders: Record<string, string> }) {
   const withContact = leads.filter(l => l.email || l.phone)
+  const mailable    = leads.filter(l => l.address && l.ownerName)   // everyone with an address
   const [selected, setSelected]   = useState<Set<number>>(new Set())
-  const [channel, setChannel]     = useState<"email"|"sms"|"both">("email")
+  const [channel, setChannel]     = useState<"mail"|"email"|"sms"|"both">("mail")
   const [subject, setSubject]     = useState("A personal note about your property")
   const [message, setMessage]     = useState("")
   const [smsText, setSmsText]     = useState("")
@@ -908,10 +909,20 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
   const [result, setResult]       = useState<{ sent: number; failed: number } | null>(null)
   const [generating, setGenerating] = useState(false)
 
+  // Direct mail reaches EVERYONE (every lead has an address); email/SMS only
+  // reach leads we have contact info for.
+  const recipients = channel === "mail" ? mailable : withContact
+
   const toggleAll = () => {
-    const ids = withContact.map(l => l.attomId)
-    const all = ids.every(id => selected.has(id))
+    const ids = recipients.map(l => l.attomId)
+    const all = ids.length > 0 && ids.every(id => selected.has(id))
     setSelected(all ? new Set() : new Set(ids))
+  }
+
+  const printBatch = () => {
+    const chosen = recipients.filter(l => selected.has(l.attomId))
+    if (chosen.length === 0) return
+    printLetterBatch(chosen, message, fromName, fromPhone)
   }
 
   const generateBulkTemplate = async () => {
@@ -952,10 +963,10 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
     setSending(false)
   }
 
-  if (withContact.length === 0) {
+  if (leads.length === 0) {
     return (
       <div className="text-center py-12 text-gray-500 text-sm">
-        No leads with contact information yet. Run a search with <strong className="text-white">AI Contact Discovery</strong> enabled to find phone numbers and emails.
+        No leads yet. Run a search first, then come back to mail or message the whole area.
       </div>
     )
   }
@@ -965,8 +976,12 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-white">Bulk Outreach Campaign</h3>
-            <p className="text-xs text-gray-500 mt-0.5">{withContact.length} leads with contact info · {selected.size} selected</p>
+            <h3 className="text-sm font-semibold text-white">Area Outreach Campaign</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {channel === "mail"
+                ? `${mailable.length} mailable (whole area) · ${selected.size} selected`
+                : `${withContact.length} with phone/email · ${selected.size} selected`}
+            </p>
           </div>
           <div className="flex gap-2">
             <button onClick={generateBulkTemplate} disabled={generating}
@@ -980,7 +995,8 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div>
             <label className="label">Channel</label>
-            <select value={channel} onChange={e => setChannel(e.target.value as typeof channel)} className={INPUT}>
+            <select value={channel} onChange={e => { setChannel(e.target.value as typeof channel); setSelected(new Set()) }} className={INPUT}>
+              <option value="mail">📬 Direct mail — reach everyone</option>
               <option value="email">Email only</option>
               <option value="sms">SMS only</option>
               <option value="both">Email + SMS</option>
@@ -996,9 +1012,9 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
           </div>
         </div>
 
-        {(channel === "email" || channel === "both") && (
+        {(channel === "mail" || channel === "email" || channel === "both") && (
           <div>
-            <label className="label">Email / Letter Body <span className="text-gray-600">(use [YOUR NAME] and [YOUR PHONE] as placeholders)</span></label>
+            <label className="label">{channel === "mail" ? "Letter Body" : "Email / Letter Body"} <span className="text-gray-600">(placeholders: [OWNER], [ADDRESS], [CITY], [YOUR NAME], [YOUR PHONE])</span></label>
             <textarea value={message} onChange={e => setMessage(e.target.value)} rows={8}
               placeholder="Write your message or click AI Draft above…"
               className="w-full bg-gray-800/60 border border-gray-700/50 rounded-xl px-3 py-2.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-indigo-500/70 resize-y" />
@@ -1014,12 +1030,23 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
           </div>
         )}
 
-        <button onClick={sendCampaign} disabled={sending || selected.size === 0 || (!message && !smsText)}
-          className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-all">
-          {sending
-            ? <span className="flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Sending…</span>
-            : `Send to ${selected.size} Lead${selected.size !== 1 ? "s" : ""}`}
-        </button>
+        {channel === "mail" ? (
+          <button onClick={printBatch} disabled={selected.size === 0 || !message}
+            className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-all">
+            🖨 Print {selected.size} Letter{selected.size !== 1 ? "s" : ""} to Mail
+          </button>
+        ) : (
+          <button onClick={sendCampaign} disabled={sending || selected.size === 0 || (!message && !smsText)}
+            className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-all">
+            {sending
+              ? <span className="flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Sending…</span>
+              : `Send to ${selected.size} Lead${selected.size !== 1 ? "s" : ""}`}
+          </button>
+        )}
+
+        {channel === "mail" && (
+          <p className="text-[11px] text-gray-500">Opens a print-ready batch — one personalized letter per page. Print on letterhead or save as PDF for a mail house.</p>
+        )}
 
         {result && (
           <p className={`text-sm font-semibold ${result.failed > 0 ? "text-yellow-300" : "text-emerald-400"}`}>
@@ -1031,11 +1058,13 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
       {/* Recipient list */}
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-700/40 flex items-center gap-3">
-          <input type="checkbox" checked={withContact.length > 0 && withContact.every(l => selected.has(l.attomId))} onChange={toggleAll} className="accent-indigo-500" />
-          <span className="text-xs text-gray-400">Select all {withContact.length} with contact info</span>
+          <input type="checkbox" checked={recipients.length > 0 && recipients.every(l => selected.has(l.attomId))} onChange={toggleAll} className="accent-indigo-500" />
+          <span className="text-xs text-gray-400">
+            Select all {recipients.length} {channel === "mail" ? "in the area (mailable)" : "with contact info"}
+          </span>
         </div>
-        <div className="divide-y divide-gray-800/50">
-          {withContact.map(l => (
+        <div className="divide-y divide-gray-800/50 max-h-[460px] overflow-y-auto">
+          {recipients.map(l => (
             <div key={l.attomId} className={`flex items-center gap-3 px-4 py-3 transition-colors ${selected.has(l.attomId) ? "bg-indigo-950/30" : "hover:bg-gray-800/20"}`}>
               <input type="checkbox" checked={selected.has(l.attomId)} onChange={() => setSelected(prev => { const s = new Set(prev); s.has(l.attomId) ? s.delete(l.attomId) : s.add(l.attomId); return s })} className="accent-indigo-500 shrink-0" />
               <div className="flex-1 min-w-0">
@@ -1043,8 +1072,12 @@ function CampaignTab({ leads, businessId, apiHeaders }: { leads: ForeclosureLead
                 <p className="text-[11px] text-gray-500 truncate">{l.address}, {l.city}</p>
               </div>
               <div className="text-right shrink-0">
-                {l.email  && <p className="text-[11px] text-blue-400 truncate max-w-[160px]">{l.email}</p>}
-                {l.phone  && <p className="text-[11px] text-emerald-400">{l.phone}</p>}
+                {channel === "mail"
+                  ? <p className="text-[11px] text-amber-400">✉ mailable</p>
+                  : <>
+                      {l.email && <p className="text-[11px] text-blue-400 truncate max-w-[160px]">{l.email}</p>}
+                      {l.phone && <p className="text-[11px] text-emerald-400">{l.phone}</p>}
+                    </>}
               </div>
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${PRI[l.priority].cls} shrink-0`}>{l.priority}</span>
             </div>
@@ -1185,12 +1218,14 @@ function AtRiskTab({ businessId }: { businessId: string }) {
 
 // ─── Main foreclosure search tab ──────────────────────────────────────────────
 
-function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: string; apiBase: string; apiHeaders: Record<string, string> }) {
+function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { businessId: string; apiBase: string; apiHeaders: Record<string, string>; onLeads?: (leads: ForeclosureLead[]) => void }) {
   const defaultP: AreaParams = { searchType: "zip", zipCode: "", city: "", state: "", county: "", daysBack: 90, maxLeads: 100, enrichContacts: false }
   const [p, setP]             = useState<AreaParams>(defaultP)
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState<{ leads: ForeclosureLead[]; total: number; fetched: number; dataSource?: string; dataNote?: string } | null>(null)
   const [error, setError]     = useState<string | null>(null)
+  // Share the current area's leads with the Campaign tab (mass outreach).
+  useEffect(() => { onLeads?.(result?.leads ?? []) }, [result, onLeads])
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [savedIds, setSavedIds] = useState<Set<number>>(new Set())
   const [saving, setSaving]   = useState(false)
@@ -1902,7 +1937,7 @@ export default function ForeclosureSearch({ businessId, adminPw }: { businessId:
   const TABS = [
     { id: "foreclosure", label: "🏚 Pre-Foreclosure", desc: "Active NOD / Lis Pendens / NOS" },
     { id: "atrisk",      label: "⚡ At Risk (Pre-NOD)", desc: "Tax delinquent, liens, court filings" },
-    { id: "campaign",    label: "📤 Send Campaign", desc: "Bulk email & SMS to leads" },
+    { id: "campaign",    label: "📤 Area Outreach", desc: "Mail / email / text the whole area" },
   ] as const
 
   return (
@@ -1918,7 +1953,7 @@ export default function ForeclosureSearch({ businessId, adminPw }: { businessId:
         ))}
       </div>
 
-      {tab === "foreclosure" && <ForeclosureTab businessId={businessId} apiBase={apiBase} apiHeaders={apiHeaders} />}
+      {tab === "foreclosure" && <ForeclosureTab businessId={businessId} apiBase={apiBase} apiHeaders={apiHeaders} onLeads={setCampaignLeads} />}
       {tab === "atrisk"      && <AtRiskTab businessId={businessId} />}
       {tab === "campaign"    && <CampaignTab leads={campaignLeads} businessId={businessId} apiHeaders={apiHeaders} />}
 
