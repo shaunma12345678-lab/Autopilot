@@ -18,6 +18,7 @@ import { enrichLeadsWithContact } from "@/lib/contact-enrichment"
 import { extractAddressesFromContent, leadMatchesTarget, type ExtractResult, type LocationTarget } from "@/lib/address-extractor"
 import { fetchCaDojForeclosures, fetchPublicNotices } from "@/lib/legal-notice-sources"
 import { enrichFreeLead } from "@/lib/lead-intelligence"
+import { loadAreaCache, saveAreaCache, areaCacheKey } from "@/lib/lead-cache"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
 // ── Search location ─────────────────────────────────────────────────────────
@@ -252,6 +253,7 @@ export interface DeepSearchParams {
   daysBack?:         number
   existingAddresses?: Set<string>  // already in DB — used for new-lead detection
   mode?:             "filings" | "predictive"  // query bias; "filings" = normal search
+  businessId?:       string        // when set, merge/persist a per-area lead cache
   onProgress?:       (msg: string, count: number) => void
 }
 
@@ -379,14 +381,13 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   const inRegion = (r: ExtractResult) => leadMatchesTarget(r, target) || (!!r.zip && localZip3.has(r.zip.slice(0, 3)))
   const regionPool = localZip3.size > 0 ? statePool.filter(inRegion) : []
 
-  // Prefer the local region. Fill from the wider state only to reach a usable
-  // floor, so a thin small-city search still returns volume without going
-  // statewide when the area itself has plenty.
-  const LOCAL_FLOOR = Math.min(maxLeads, 50)
-  const chosenRegex =
-    regionPool.length >= LOCAL_FLOOR ? regionPool :
-    regionPool.length > 0            ? [...regionPool, ...statePool.filter(r => !inRegion(r))] :
-    (statePool.length > 0 ? statePool : allRegex)
+  // Always provide region-first, then the rest of the state, so we can fill all
+  // the way to the requested maxLeads. The localityRank sort + final slice keep
+  // the searched area on top and trim to the requested count — so choosing 100
+  // returns 100 (local first) whenever that many leads exist at all.
+  const chosenRegex = regionPool.length > 0
+    ? [...regionPool, ...statePool.filter(r => !inRegion(r))]
+    : (statePool.length > 0 ? statePool : allRegex)
   const regexLeads = chosenRegex.map(r => r.lead)
 
   const allWebLeads = [...regexLeads, ...allAiLeads]
@@ -406,6 +407,23 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     if (seen.has(key)) continue
     seen.add(key)
     deduped.push(lead)
+  }
+
+  // Merge the persistent per-area cache so a flaky run (sources blocked this
+  // time) never collapses the count — fresh leads win on dedupe, cached ones
+  // fill the rest. Best-effort; only when a businessId is provided and we're
+  // running a normal (not predictive) search.
+  const cacheable = !!params.businessId && (params.mode ?? "filings") !== "predictive"
+  const cacheKey  = areaCacheKey({ searchType: primary.searchType, zipCode: primary.zipCode, city: primary.city, county: primary.county, state: primary.state })
+  if (cacheable) {
+    const cached = await loadAreaCache(params.businessId!, cacheKey)
+    for (const lead of cached) {
+      if (!isValidPropertyAddress(lead.address)) continue
+      const key = (lead.address + (lead.city ?? "")).toLowerCase().replace(/[\s,#.-]/g, "")
+      if (seen.has(key)) continue
+      seen.add(key)
+      deduped.push(lead)
+    }
   }
 
   // Locality rank — the user's exact city/zip first, then same-region, then the
@@ -442,6 +460,12 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   )
 
   const leads    = deduped.slice(0, maxLeads)
+
+  // Persist the merged pool (fresh ∪ cached) so the area's lead count keeps
+  // growing and never collapses on a later flaky run. Fire-and-forget.
+  if (cacheable && deduped.length > 0) {
+    void saveAreaCache(params.businessId!, cacheKey, deduped)
+  }
 
   // ── Intelligence pass — zero-cost, never-throws enrichment of every lead ──
   // Computes auction countdowns, sweeps for junior liens, and surfaces urgency.

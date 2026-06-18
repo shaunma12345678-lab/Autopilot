@@ -1348,6 +1348,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders }: { businessId: strin
             countyIds,
             maxLeads:   p.maxLeads,
             daysBack:   p.daysBack,
+            businessId,
           }),
         })
 

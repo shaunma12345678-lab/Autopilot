@@ -2004,7 +2004,7 @@ function AdminDistressMap({ password }: { password: string }) {
           city:       type === "city"   ? a : undefined,
           county:     type === "county" ? a : undefined,
           state:      type === "zip"    ? undefined : state.trim(),
-          maxLeads, daysBack,
+          maxLeads, daysBack, businessId,
         }),
       })
       if (!res.ok) {
@@ -2019,7 +2019,7 @@ function AdminDistressMap({ password }: { password: string }) {
     } finally {
       setLoading(false)
     }
-  }, [area, state, searchType, maxLeads, daysBack, password])
+  }, [area, state, searchType, maxLeads, daysBack, password, businessId])
 
   const hot = leads.filter(l => l.priority === "HOT").length
   const auctions = leads.filter(l => typeof l.daysUntilAuction === "number").length
