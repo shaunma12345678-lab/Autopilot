@@ -1410,10 +1410,11 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     }, 5500)
   }
 
-  const search = async () => {
+  const search = async (maxLeadsOverride?: number) => {
     if (p.searchType === "zip" && !p.zipCode) { setError("Enter a ZIP code."); return }
     if (p.searchType === "city" && (!p.city || !p.state)) { setError("Enter city and state."); return }
     if (p.searchType === "county" && (!p.county || !p.state)) { setError("Enter county and state."); return }
+    const effMax = typeof maxLeadsOverride === "number" ? maxLeadsOverride : p.maxLeads
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
     setProgressPct(0); setProgressMsg(""); setSourceSummary(null); setNewCount(null)
     setMapHighlight(null); setAutoEnrichBusy(false)
@@ -1445,7 +1446,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
           })()
         : undefined
 
-      startProgressAnimation(p.maxLeads)
+      startProgressAnimation(effMax)
 
       try {
         const res = await fetch("/api/leads/deep-search", {
@@ -1458,7 +1459,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
             state:      p.state    || undefined,
             county:     p.county   || undefined,
             countyIds,
-            maxLeads:   p.maxLeads,
+            maxLeads:   effMax,
             daysBack:   p.daysBack,
             businessId,
             leadType:   p.leadType || undefined,
@@ -1508,6 +1509,14 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     setLoading(false)
   }
   useEffect(() => { latestSearchRef.current = search })
+
+  // Cast a wider net for a thin targeted type — bump Max Leads and re-run with
+  // the same focus (more queries surface more of that category).
+  const widenSearch = () => {
+    const newMax = p.maxLeads >= 300 ? 500 : 300
+    setP(q => ({ ...q, maxLeads: newMax }))
+    search(newMax)
+  }
 
   const saveSingle = async (lead: ForeclosureLead) => {
     setSaving(true)
@@ -1970,6 +1979,17 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               </span>
             )}
           </p>
+
+          {/* Thin targeted-type → offer to widen, and always keep all leads one click away */}
+          {!predictiveOnly && p.leadType && (leadTypeCounts[p.leadType] ?? 0) < 40 && (
+            <div className="flex flex-wrap items-center gap-2 bg-amber-950/20 border border-amber-500/25 rounded-lg px-3 py-2">
+              <span className="text-[11px] text-amber-200">
+                🎯 Found <b>{leadTypeCounts[p.leadType] ?? 0}</b> {leadTypeMeta(p.leadType)?.label ?? "targeted"} lead{(leadTypeCounts[p.leadType] ?? 0) === 1 ? "" : "s"} in {searchedArea ?? "this area"}{["probate", "divorce", "bankruptcy"].includes(p.leadType) ? " — court-record types can be sparse" : ""}.
+              </span>
+              <button onClick={widenSearch} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 disabled:opacity-50 text-white border border-amber-400/40">🔍 Cast a wider net (Max {p.maxLeads >= 300 ? 500 : 300})</button>
+              <button onClick={() => setTypeFilter(null)} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 border border-gray-600/50">Show all {result?.leads.length ?? 0} leads found</button>
+            </div>
+          )}
 
           {/* 🎯 Find Any Lead — motivated-seller categories from this search */}
           {!predictiveOnly && Object.keys(leadTypeCounts).length > 0 && (
