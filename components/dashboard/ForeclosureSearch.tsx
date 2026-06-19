@@ -66,6 +66,7 @@ interface AreaParams {
   searchType: "zip" | "city" | "county"
   zipCode: string; city: string; state: string; county: string
   daysBack: number; maxLeads: number; enrichContacts: boolean
+  leadType?: string   // focus a specific motivated-seller category ("" = all)
 }
 
 function AreaForm({ p, setP, onSearch, loading, extra }: {
@@ -121,6 +122,11 @@ function AreaForm({ p, setP, onSearch, loading, extra }: {
             <option value={200}>200</option>
             <option value={300}>300</option>
             <option value={500}>500</option>
+          </select></div>
+        <div><label className="label">🎯 Lead Type</label>
+          <select value={p.leadType ?? ""} onChange={e => setP(q => ({ ...q, leadType: e.target.value }))} className={INPUT} title="Focus the search on one motivated-seller category">
+            <option value="">All types</option>
+            {LEAD_TYPES.map(t => <option key={t.id} value={t.id}>{t.emoji} {t.label}</option>)}
           </select></div>
       </div>
 
@@ -1455,6 +1461,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
             maxLeads:   p.maxLeads,
             daysBack:   p.daysBack,
             businessId,
+            leadType:   p.leadType || undefined,
           }),
         })
 
@@ -1479,6 +1486,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
         const finalLeads = fillComps(rawLeads)
         setResult({ leads: finalLeads, total: data.total ?? 0, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
         recordSeen(finalLeads)
+        if (p.leadType) setTypeFilter(p.leadType)   // auto-show the targeted category
         setSourceSummary(data.sourceCounts ?? null)
         setNewCount(data.newTotal ?? null)
         autoEnrichTopLeads(finalLeads, seq) // background: refine the best HOT leads

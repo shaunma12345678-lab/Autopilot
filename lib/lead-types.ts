@@ -6,6 +6,7 @@
 // belong to several categories. Pure + null-safe.
 
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
+import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 import { predictPreForeclosure } from "@/lib/predictive"
 
 export interface LeadType {
@@ -72,4 +73,26 @@ export function typeCounts(leads: ForeclosureLead[]): Record<string, number> {
   const counts: Record<string, number> = {}
   for (const l of leads) for (const id of classifyLead(l)) counts[id] = (counts[id] ?? 0) + 1
   return counts
+}
+
+// FreeLead-level matcher — used by the engine to PRIORITIZE a targeted lead type
+// before slicing to maxLeads (a FreeLead has fewer computed fields than a scored
+// ForeclosureLead, so equity/predicted can't be judged here — those are matched
+// post-adapter on the client).
+export function freeLeadHasType(fl: FreeLead, typeId: string): boolean {
+  const text = [(fl.rawSignals ?? []).join(" "), fl.foreclosureStage].filter(Boolean).join(" ").toLowerCase()
+  switch (typeId) {
+    case "foreclosure": return fl.foreclosureStage === "NOTICE_OF_SALE" || fl.foreclosureStage === "AUCTION" || !!fl.auctionDate || (typeof fl.daysUntilAuction === "number" && fl.daysUntilAuction >= 0)
+    case "probate":     return /probate|deceased|estate|inherit|obituary|heir/.test(text)
+    case "taxdelq":     return /tax delinquen|tax default|back tax|delinquent tax/.test(text)
+    case "vacant":      return fl.occupancy === "vacant" || /vacant|abandoned|boarded|zombie/.test(text)
+    case "absentee":    return fl.occupancy === "absentee" || /absentee|out[- ]of[- ]state|non[- ]owner/.test(text)
+    case "liens":       return (fl.juniorLiens?.length ?? 0) > 0 || /\blien\b|judgment|heloc|writ of execution/.test(text)
+    case "code":        return /code violation|condemn|nuisance|unsafe|uninhabitable/.test(text)
+    case "divorce":     return /divorce|marital|dissolution/.test(text)
+    case "eviction":    return /eviction|unlawful detainer|tired landlord|rental property/.test(text)
+    case "bankruptcy":  return /bankruptcy|chapter 13|chapter 7/.test(text)
+    case "motivated":   return /motivated|price (?:cut|reduced|drop|reduction)|must sell|\bas[- ]is\b|cash only|fixer|short sale|distressed listing|fire|water damage/.test(text)
+    default:            return false   // highequity / predicted are computed later
+  }
 }

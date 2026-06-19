@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
     maxLeads?:   number
     daysBack?:   number
     businessId?: string
+    leadType?:   string
   }
 
   try {
@@ -58,6 +59,7 @@ export async function POST(request: NextRequest) {
     maxLeads,
     daysBack:   body.daysBack,
     businessId: body.businessId,
+    leadType:   body.leadType,
   }
 
   // Race: deep search vs. hard deadline

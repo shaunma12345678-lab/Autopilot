@@ -19,6 +19,7 @@ import { extractAddressesFromContent, leadMatchesTarget, type ExtractResult, typ
 import { fetchCaDojForeclosures, fetchPublicNotices } from "@/lib/legal-notice-sources"
 import { enrichFreeLead } from "@/lib/lead-intelligence"
 import { loadAreaCache, saveAreaCache, areaCacheKey } from "@/lib/lead-cache"
+import { freeLeadHasType } from "@/lib/lead-types"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
 // ── Search location ─────────────────────────────────────────────────────────
@@ -56,7 +57,7 @@ function isValidPropertyAddress(address: string | undefined): boolean {
 // notices that reliably carry a property address — best for the normal
 // pre-foreclosure search. "predictive" leads with PRE-filing early-distress
 // signals — best for the forecast layer, which wants owners NOT yet in court.
-function buildDeepQuerySet(loc: SearchLocation, year: number, mode: "filings" | "predictive" = "filings"): string[] {
+function buildDeepQuerySet(loc: SearchLocation, year: number, mode: "filings" | "predictive" = "filings", leadType?: string): string[] {
   const st = loc.state || "United States"
   // Primary place phrase used across queries
   const place =
@@ -122,6 +123,72 @@ function buildDeepQuerySet(loc: SearchLocation, year: number, mode: "filings" | 
     `${placeLoose} "owner unknown" OR "owner deceased" vacant tax delinquent property ${year} address`,
   ]
 
+  // Targeted lead-type focus — when the user wants a SPECIFIC kind of deal
+  // (e.g. 100 probate leads), lead with queries aimed at that category so far
+  // more of that type surfaces, then fall back to the rest for fill.
+  if (leadType) {
+    const cat: Record<string, string[]> = {
+      probate: [
+        `${placeLoose} probate "real property" estate ${year} address sale`,
+        `${placeLoose} inherited house OR "estate sale" "as-is" ${year} address`,
+        `${placeLoose} deceased owner OR heir property ${year} address for sale`,
+        `${placeLoose} probate court real estate ${year} ${st} address`,
+      ],
+      taxdelq: [
+        `${placeLoose} property tax delinquent list ${year} owner address`,
+        `${placeLoose} "tax defaulted" OR "tax sale" property ${year} address`,
+        `${placeLoose} treasurer back taxes owed property ${year} address`,
+      ],
+      vacant: [
+        `${placeLoose} vacant property registry ${year} address`,
+        `${placeLoose} abandoned OR boarded-up OR "zombie property" house ${year} address`,
+        `${placeLoose} code enforcement vacant building ${year} address`,
+      ],
+      absentee: [
+        `${placeLoose} absentee owner OR out-of-state landlord ${year} property address`,
+        `${placeLoose} non-owner occupied rental ${year} owner address`,
+        `${placeLoose} tired landlord selling rental ${year} address`,
+      ],
+      liens: [
+        `${placeLoose} property tax lien OR judgment lien ${year} address`,
+        `${placeLoose} mechanics lien OR HOA lien ${year} property address`,
+        `${placeLoose} IRS OR state tax lien real property ${year} address`,
+      ],
+      code: [
+        `${placeLoose} code violation OR condemned property ${year} address`,
+        `${placeLoose} nuisance abatement OR unsafe building ${year} address`,
+      ],
+      divorce: [
+        `${placeLoose} divorce "real property" OR marital home ${year} address sale`,
+        `${placeLoose} dissolution of marriage property ${year} address`,
+      ],
+      eviction: [
+        `${placeLoose} eviction OR "unlawful detainer" landlord property ${year} address`,
+        `${placeLoose} tired landlord OR problem tenant selling ${year} address`,
+      ],
+      bankruptcy: [
+        `${placeLoose} bankruptcy "chapter 13" OR "chapter 7" real property ${year} address`,
+        `${placeLoose} bankruptcy estate home ${year} ${st} address`,
+      ],
+      motivated: [
+        `${placeLoose} motivated seller "as-is" OR "must sell" ${year} house address`,
+        `${placeLoose} "cash only" OR fixer-upper OR "price reduced" distressed ${year} address`,
+        `${placeLoose} fire OR water damage house ${year} address for sale`,
+      ],
+      highequity: [
+        `${placeLoose} "free and clear" OR "no mortgage" owner property ${year} address sell`,
+        `${placeLoose} long-time owner OR "owned since" high equity property ${year} address`,
+      ],
+      foreclosure: filings,
+      predicted: early,
+    }
+    const focus = cat[leadType]
+    if (focus && focus.length) {
+      const rest = leadType === "predicted" ? filings : early
+      return [...focus, ...filings, ...rest].filter((q, i, a) => a.indexOf(q) === i)
+    }
+  }
+
   return mode === "predictive" ? [...early, ...filings] : [...filings, ...early]
 }
 
@@ -183,10 +250,11 @@ JSON array only:`
 async function runWebSearchPhase(
   loc: SearchLocation,
   maxLeads: number,
-  mode: "filings" | "predictive" = "filings"
+  mode: "filings" | "predictive" = "filings",
+  leadType?: string
 ): Promise<{ regex: ExtractResult[]; ai: FreeLead[] }> {
   const year    = new Date().getFullYear()
-  const queries = buildDeepQuerySet(loc, year, mode)
+  const queries = buildDeepQuerySet(loc, year, mode, leadType)
   const isCA    = (loc.state || "").toUpperCase() === "CA"
 
   const noticeQuery =
@@ -253,6 +321,7 @@ export interface DeepSearchParams {
   daysBack?:         number
   existingAddresses?: Set<string>  // already in DB — used for new-lead detection
   mode?:             "filings" | "predictive"  // query bias; "filings" = normal search
+  leadType?:         string        // focus a specific motivated-seller category
   businessId?:       string        // when set, merge/persist a per-area lead cache
   onProgress?:       (msg: string, count: number) => void
 }
@@ -339,7 +408,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   )
 
   const webWork = withDeadline(
-    Promise.allSettled(locations.map(loc => runWebSearchPhase(loc, maxLeads, params.mode ?? "filings"))),
+    Promise.allSettled(locations.map(loc => runWebSearchPhase(loc, maxLeads, params.mode ?? "filings", params.leadType))),
     38000,
     [] as PromiseSettledResult<Awaited<ReturnType<typeof runWebSearchPhase>>>[]
   )
@@ -454,7 +523,11 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     LIS_PENDENS:      3,
     PRE_FORECLOSURE:  4,
   }
+  // When a specific lead type is targeted, matches come first so they survive
+  // the slice to maxLeads — then locality, then stage urgency.
+  const typeRank = (l: FreeLead) => (params.leadType && freeLeadHasType(l, params.leadType) ? 0 : 1)
   deduped.sort((a, b) =>
+    (typeRank(a) - typeRank(b)) ||
     (localityRank(a) - localityRank(b)) ||
     ((STAGE_ORDER[a.foreclosureStage] ?? 5) - (STAGE_ORDER[b.foreclosureStage] ?? 5))
   )
