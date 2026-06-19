@@ -18,6 +18,7 @@ import { openDealSheet } from "@/lib/deal-sheet"
 import { telHref, smsHref, mailtoHref, printLetter, printLetterBatch } from "@/lib/outreach-actions"
 import { featurize, leadArea, adaptiveScore, type LearnedModel } from "@/lib/learning-engine"
 import { LEAD_TYPES, classifyLead, leadHasType, typeCounts, leadTypeMeta } from "@/lib/lead-types"
+import { leadSignature } from "@/lib/seen-leads"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -124,8 +125,9 @@ function AreaForm({ p, setP, onSearch, loading, extra }: {
             <option value={500}>500</option>
           </select></div>
         <div><label className="label">🎯 Lead Type</label>
-          <select value={p.leadType ?? ""} onChange={e => setP(q => ({ ...q, leadType: e.target.value }))} className={INPUT} title="Focus the search on one motivated-seller category">
+          <select value={p.leadType ?? ""} onChange={e => setP(q => ({ ...q, leadType: e.target.value }))} className={INPUT} title="Focus the search on one lead category — returns ONLY that type">
             <option value="">All types</option>
+            <option value="new">🆕 New leads (not seen before)</option>
             {LEAD_TYPES.map(t => <option key={t.id} value={t.id}>{t.emoji} {t.label}</option>)}
           </select></div>
       </div>
@@ -1410,11 +1412,12 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     }, 5500)
   }
 
-  const search = async (maxLeadsOverride?: number) => {
+  const search = async (maxLeadsOverride?: number, leadTypeOverride?: string) => {
     if (p.searchType === "zip" && !p.zipCode) { setError("Enter a ZIP code."); return }
     if (p.searchType === "city" && (!p.city || !p.state)) { setError("Enter city and state."); return }
     if (p.searchType === "county" && (!p.county || !p.state)) { setError("Enter county and state."); return }
-    const effMax = typeof maxLeadsOverride === "number" ? maxLeadsOverride : p.maxLeads
+    const effMax  = typeof maxLeadsOverride === "number" ? maxLeadsOverride : p.maxLeads
+    const effType = typeof leadTypeOverride === "string" ? leadTypeOverride : (p.leadType ?? "")
     setLoading(true); setError(null); setResult(null); setSelected(new Set()); setSavedIds(new Set())
     setProgressPct(0); setProgressMsg(""); setSourceSummary(null); setNewCount(null)
     setMapHighlight(null); setAutoEnrichBusy(false)
@@ -1462,7 +1465,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
             maxLeads:   effMax,
             daysBack:   p.daysBack,
             businessId,
-            leadType:   p.leadType || undefined,
+            leadType:   effType && effType !== "new" ? effType : undefined,
           }),
         })
 
@@ -1484,10 +1487,21 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
           state: l.state || p.state || "",
           zip:   l.zip   || (p.searchType === "zip" ? p.zipCode : "") || "",
         }))
-        const finalLeads = fillComps(rawLeads)
-        setResult({ leads: finalLeads, total: data.total ?? 0, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
+        let finalLeads = fillComps(rawLeads)
+        // Targeted type → return ONLY those leads (so the table AND map show just
+        // that category). "new" → only leads we haven't surfaced before. "All
+        // types" / "" → everything.
+        if (effType === "new") {
+          try {
+            const sres = await fetch("/api/leads/seen", { method: "POST", headers: apiHeaders, body: JSON.stringify({ businessId, signatures: finalLeads.map(l => leadSignature(l)), record: false }) })
+            const sdata = await sres.json()
+            if (Array.isArray(sdata.new)) { const newSet = new Set<string>(sdata.new); finalLeads = finalLeads.filter(l => newSet.has(leadSignature(l))) }
+          } catch { /* keep all on failure */ }
+        } else if (effType) {
+          finalLeads = finalLeads.filter(l => classifyLead(l).includes(effType))
+        }
+        setResult({ leads: finalLeads, total: finalLeads.length, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
         recordSeen(finalLeads)
-        if (p.leadType) setTypeFilter(p.leadType)   // auto-show the targeted category
         setSourceSummary(data.sourceCounts ?? null)
         setNewCount(data.newTotal ?? null)
         autoEnrichTopLeads(finalLeads, seq) // background: refine the best HOT leads
@@ -1516,6 +1530,12 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     const newMax = p.maxLeads >= 300 ? 500 : 300
     setP(q => ({ ...q, maxLeads: newMax }))
     search(newMax)
+  }
+
+  // Drop the type focus and re-run to see every kind of lead in the area.
+  const searchAllTypes = () => {
+    setP(q => ({ ...q, leadType: "" }))
+    search(undefined, "")
   }
 
   const saveSingle = async (lead: ForeclosureLead) => {
@@ -1980,14 +2000,23 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
             )}
           </p>
 
-          {/* Thin targeted-type → offer to widen, and always keep all leads one click away */}
-          {!predictiveOnly && p.leadType && (leadTypeCounts[p.leadType] ?? 0) < 40 && (
+          {/* Targeted type = ONLY those leads. Offer to widen / switch back to all. */}
+          {!predictiveOnly && p.leadType === "new" && (
+            <div className="flex flex-wrap items-center gap-2 bg-sky-950/20 border border-sky-500/25 rounded-lg px-3 py-2">
+              <span className="text-[11px] text-sky-200">
+                🆕 <b>{result?.leads.length ?? 0}</b> new lead{(result?.leads.length ?? 0) === 1 ? "" : "s"} in {searchedArea ?? "this area"} since you last looked{(result?.leads.length ?? 0) === 0 ? " — none new yet; widen the area or check back later" : ""}.
+              </span>
+              <button onClick={widenSearch} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-sky-600/80 hover:bg-sky-500 disabled:opacity-50 text-white border border-sky-400/40">🔍 Cast a wider net (Max {p.maxLeads >= 300 ? 500 : 300})</button>
+              <button onClick={searchAllTypes} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 border border-gray-600/50">Show all types</button>
+            </div>
+          )}
+          {!predictiveOnly && p.leadType && p.leadType !== "new" && (result?.leads.length ?? 0) < 40 && (
             <div className="flex flex-wrap items-center gap-2 bg-amber-950/20 border border-amber-500/25 rounded-lg px-3 py-2">
               <span className="text-[11px] text-amber-200">
-                🎯 Found <b>{leadTypeCounts[p.leadType] ?? 0}</b> {leadTypeMeta(p.leadType)?.label ?? "targeted"} lead{(leadTypeCounts[p.leadType] ?? 0) === 1 ? "" : "s"} in {searchedArea ?? "this area"}{["probate", "divorce", "bankruptcy"].includes(p.leadType) ? " — court-record types can be sparse" : ""}.
+                🎯 Found <b>{result?.leads.length ?? 0}</b> {leadTypeMeta(p.leadType)?.label ?? "targeted"} lead{(result?.leads.length ?? 0) === 1 ? "" : "s"} in {searchedArea ?? "this area"}{["probate", "divorce", "bankruptcy"].includes(p.leadType) ? " — court-record types can be sparse" : ""}.
               </span>
               <button onClick={widenSearch} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 disabled:opacity-50 text-white border border-amber-400/40">🔍 Cast a wider net (Max {p.maxLeads >= 300 ? 500 : 300})</button>
-              <button onClick={() => setTypeFilter(null)} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 border border-gray-600/50">Show all {result?.leads.length ?? 0} leads found</button>
+              <button onClick={searchAllTypes} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 border border-gray-600/50">Show all types instead</button>
             </div>
           )}
 
