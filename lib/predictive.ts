@@ -43,7 +43,7 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
     return { predicted: false, confirmed: true, probability: 100, timeframe: "in foreclosure now", confidence: "high", factors: [] }
   }
 
-  const text = [lead.distressSignals?.join(" "), lead.scoreReason, lead.foreclosureType].filter(Boolean).join(" ").toLowerCase()
+  const text = [lead.distressSignals?.join(" "), lead.scoreReason, lead.foreclosureType, lead.ownerName].filter(Boolean).join(" ").toLowerCase()
   let p = 0
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
@@ -65,7 +65,10 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   if (motivated) add(16, "Motivated-seller signals (long days-on-market / price cuts / as-is)")
 
   const taxDelq = lead.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(text)
-  const probate = /probate|deceased|estate|inherited|obituary/.test(text)
+  // Precise probate/estate detection — owner names like "Estate of…", "…Heirs",
+  // "et al", or "deceased" signal an inherited property even with no court file
+  // (but don't match "Real Estate LLC").
+  const probate = /probate|deceased|decedent|inherited|obituary|\bheirs?\b|estate of|estate sale|\bet\.? al\b/.test(text)
   const divorce = /divorce|marital|dissolution/.test(text)
   const vacant  = lead.occupancy === "vacant" || /vacant|abandoned|boarded/.test(text)
   const code    = /code violation|condemn|nuisance|unsafe/.test(text)

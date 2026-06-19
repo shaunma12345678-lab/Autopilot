@@ -432,6 +432,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
         county:     loc.county,
         countyId:   loc.countyId,
         maxLeads,
+        leadType:   params.leadType,
       }))
     ),
     20000,

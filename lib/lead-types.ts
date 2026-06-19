@@ -24,7 +24,7 @@ export const LEAD_TYPES: LeadType[] = [
   { id: "predicted", label: "Predicted", emoji: "🔮", cls: "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30",
     match: (l) => predictPreForeclosure(l).predicted },
   { id: "probate", label: "Probate / Inherited", emoji: "⚰️", cls: "bg-stone-500/15 text-stone-300 border-stone-500/30",
-    match: (_l, t) => /probate|deceased|estate|inherit|obituary|heir/.test(t) },
+    match: (_l, t) => /probate|deceased|decedent|inherit|obituary|\bheirs?\b|estate of|estate sale|inherited estate|\bet\.? al\b/.test(t) },
   { id: "taxdelq", label: "Tax Delinquent", emoji: "🏛", cls: "bg-orange-500/15 text-orange-300 border-orange-500/30",
     match: (l, t) => !!l.taxDelinquent || /tax delinquen|tax default|back tax|delinquent tax/.test(t) },
   { id: "vacant", label: "Vacant / Abandoned", emoji: "🏚️", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30",
@@ -51,8 +51,10 @@ const TYPE_BY_ID = new Map(LEAD_TYPES.map((t) => [t.id, t]))
 export function leadTypeMeta(id: string): LeadType | undefined { return TYPE_BY_ID.get(id) }
 
 function leadText(lead: ForeclosureLead): string {
-  // distressSignals already folds in the raw scraped signals (via the adapter).
-  return [lead.distressSignals?.join(" "), lead.scoreReason, lead.foreclosureType]
+  // distressSignals folds in the raw scraped signals (via the adapter); the
+  // OWNER NAME is a strong pattern signal — "Estate of…", "…Heirs", "…Living
+  // Trust", an LLC, etc. tell us the likely situation even with no court record.
+  return [lead.distressSignals?.join(" "), lead.scoreReason, lead.foreclosureType, lead.ownerName]
     .filter(Boolean).join(" ").toLowerCase()
 }
 
@@ -80,10 +82,10 @@ export function typeCounts(leads: ForeclosureLead[]): Record<string, number> {
 // ForeclosureLead, so equity/predicted can't be judged here — those are matched
 // post-adapter on the client).
 export function freeLeadHasType(fl: FreeLead, typeId: string): boolean {
-  const text = [(fl.rawSignals ?? []).join(" "), fl.foreclosureStage].filter(Boolean).join(" ").toLowerCase()
+  const text = [(fl.rawSignals ?? []).join(" "), fl.foreclosureStage, fl.ownerName].filter(Boolean).join(" ").toLowerCase()
   switch (typeId) {
     case "foreclosure": return fl.foreclosureStage === "NOTICE_OF_SALE" || fl.foreclosureStage === "AUCTION" || !!fl.auctionDate || (typeof fl.daysUntilAuction === "number" && fl.daysUntilAuction >= 0)
-    case "probate":     return /probate|deceased|estate|inherit|obituary|heir/.test(text)
+    case "probate":     return /probate|deceased|decedent|inherit|obituary|\bheirs?\b|estate of|estate sale|inherited estate|\bet\.? al\b/.test(text)
     case "taxdelq":     return /tax delinquen|tax default|back tax|delinquent tax/.test(text)
     case "vacant":      return fl.occupancy === "vacant" || /vacant|abandoned|boarded|zombie/.test(text)
     case "absentee":    return fl.occupancy === "absentee" || /absentee|out[- ]of[- ]state|non[- ]owner/.test(text)
