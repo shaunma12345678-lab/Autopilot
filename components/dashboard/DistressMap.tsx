@@ -725,7 +725,8 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         // and dimmer) so the OTHER pins never disappear when a filter is on.
         else {
           const du = leadUrgency(p.l)
-          const dPred = predictPreForeclosure(p.l).predicted
+          const dp = predictPreForeclosure(p.l)
+          const dPred = dp.predicted && (dp.probability ?? 0) >= 45
           L.circleMarker([p.ll.lat, p.ll.lng], { radius: 4, weight: 1, color: "#0b0f17", fillColor: dPred ? PREDICT_COLOR : URGENCY_COLOR[du], fillOpacity: 0.5, bubblingMouseEvents: false }).addTo(layer)
         }
       }
@@ -745,11 +746,15 @@ export default function DistressMap({ leads, flyToQuery, onSelectLead, highlight
         const { l, ll } = b.items[0]
         const u = leadUrgency(l)
         const stage = crmRef.current[l.attomId]
-        const predicted = predictPreForeclosure(l).predicted
+        // "predicted" is broad (the whole at-risk population), but only a
+        // HIGH-probability forecast gets the magenta pin — keeps the map's color
+        // gradient instead of going all-purple as the at-risk set grows.
+        const predObj = predictPreForeclosure(l)
+        const predicted = predObj.predicted && (predObj.probability ?? 0) >= 45
         const radius = 6 + Math.round((Math.max(0, Math.min(100, l.score ?? 0)) / 100) * 10)
         const m = L.circleMarker([ll.lat, ll.lng], {
           radius,
-          // Predicted (no filing) gets a magenta dashed ring — clearly a forecast.
+          // Strong forecast gets a magenta dashed ring — clearly a prediction.
           color: predicted && !pipelineRef.current ? PREDICT_COLOR : l.isAbsentee ? "#a78bfa" : "#0b0f17",
           weight: predicted && !pipelineRef.current ? 2.5 : l.isAbsentee ? 3 : 1.5,
           dashArray: predicted && !pipelineRef.current ? "3 3" : undefined,

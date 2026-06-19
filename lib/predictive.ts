@@ -48,15 +48,16 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   const factors: string[] = []
   const add = (pts: number, label: string) => { p += pts; factors.push(label) }
 
-  // A REAL early foreclosure filing (notice of default / lis pendens) is itself
-  // a strong forecast — these are recorded court/recorder events, not listings,
-  // so they qualify on their own. A bare PRE_FORECLOSURE is just the listing
-  // default and does NOT auto-qualify — it needs a genuine distress/motivation
-  // signal below. This keeps "predicted" a DISTINCT subset (purple) instead of
-  // turning every ordinary listing purple.
+  // The whole point of "predicted" is to forecast WHO MIGHT GET FORECLOSED, so
+  // every property already at an early foreclosure stage (no sale scheduled yet)
+  // counts — that's the at-risk population. A notice of default / lis pendens is
+  // a recorded court event (strongest); a PRE_FORECLOSURE listing is itself an
+  // at-risk flag. The map keeps its color gradient by reserving the purple pin
+  // for HIGH-probability forecasts (see DistressMap), so this doesn't wash it out.
   const stage = lead.foreclosureStage
-  if (stage === "NOTICE_OF_DEFAULT")   add(36, "Notice of default filed — early in the foreclosure timeline")
-  else if (stage === "LIS_PENDENS")    add(34, "Lis pendens filed — pre-sale stage")
+  if (stage === "NOTICE_OF_DEFAULT")    add(36, "Notice of default filed — early in the foreclosure timeline")
+  else if (stage === "LIS_PENDENS")     add(34, "Lis pendens filed — pre-sale stage")
+  else if (stage === "PRE_FORECLOSURE") add(28, "Pre-foreclosure — flagged at risk, no sale scheduled yet")
 
   // Motivated-seller / stale-listing signals (from listing data like Redfin):
   // long days-on-market, price cuts, as-is / must-sell language forecast a
