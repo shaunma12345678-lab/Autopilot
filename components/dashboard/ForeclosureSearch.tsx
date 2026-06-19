@@ -1488,9 +1488,11 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
           zip:   l.zip   || (p.searchType === "zip" ? p.zipCode : "") || "",
         }))
         let finalLeads = fillComps(rawLeads)
-        // Targeted type → return ONLY those leads (so the table AND map show just
-        // that category). "new" → only leads we haven't surfaced before. "All
-        // types" / "" → everything.
+        // Targeted type → put exact matches first. If there are enough, show only
+        // them; if the category is sparse (court-record types often are from free
+        // sources), FILL with the area's other distressed leads so the list is
+        // never empty — the exact ones stay badged and the chip can isolate them.
+        // "new" → only leads we haven't surfaced before. "" → everything.
         if (effType === "new") {
           try {
             const sres = await fetch("/api/leads/seen", { method: "POST", headers: apiHeaders, body: JSON.stringify({ businessId, signatures: finalLeads.map(l => leadSignature(l)), record: false }) })
@@ -1498,7 +1500,9 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
             if (Array.isArray(sdata.new)) { const newSet = new Set<string>(sdata.new); finalLeads = finalLeads.filter(l => newSet.has(leadSignature(l))) }
           } catch { /* keep all on failure */ }
         } else if (effType) {
-          finalLeads = finalLeads.filter(l => classifyLead(l).includes(effType))
+          const isMatch = (l: ForeclosureLead) => classifyLead(l).includes(effType)
+          const matches = finalLeads.filter(isMatch)
+          finalLeads = matches.length >= 12 ? matches : [...matches, ...finalLeads.filter(l => !isMatch(l))]
         }
         setResult({ leads: finalLeads, total: finalLeads.length, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
         recordSeen(finalLeads)
@@ -2010,15 +2014,24 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               <button onClick={searchAllTypes} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 border border-gray-600/50">Show all types</button>
             </div>
           )}
-          {!predictiveOnly && p.leadType && p.leadType !== "new" && (result?.leads.length ?? 0) < 40 && (
-            <div className="flex flex-wrap items-center gap-2 bg-amber-950/20 border border-amber-500/25 rounded-lg px-3 py-2">
-              <span className="text-[11px] text-amber-200">
-                🎯 Found <b>{result?.leads.length ?? 0}</b> {leadTypeMeta(p.leadType)?.label ?? "targeted"} lead{(result?.leads.length ?? 0) === 1 ? "" : "s"} in {searchedArea ?? "this area"}{["probate", "divorce", "bankruptcy"].includes(p.leadType) ? " — court-record types can be sparse" : ""}.
-              </span>
-              <button onClick={widenSearch} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 disabled:opacity-50 text-white border border-amber-400/40">🔍 Cast a wider net (Max {p.maxLeads >= 300 ? 500 : 300})</button>
-              <button onClick={searchAllTypes} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 border border-gray-600/50">Show all types instead</button>
-            </div>
-          )}
+          {!predictiveOnly && p.leadType && p.leadType !== "new" && result && (() => {
+            const exact = leadTypeCounts[p.leadType] ?? 0
+            const total = result.leads.length
+            const label = leadTypeMeta(p.leadType)?.label ?? "targeted"
+            const filled = total > exact
+            return (
+              <div className="flex flex-wrap items-center gap-2 bg-amber-950/20 border border-amber-500/25 rounded-lg px-3 py-2">
+                <span className="text-[11px] text-amber-200">
+                  🎯 <b>{exact}</b> exact {label} {exact === 1 ? "lead" : "leads"}{filled ? ` + ${total - exact} related distressed leads` : ""} in {searchedArea ?? "this area"}{filled && ["probate", "divorce", "bankruptcy"].includes(p.leadType) ? " — court-record types are sparse from free sources" : ""}.
+                </span>
+                {filled && exact > 0 && (
+                  <button onClick={() => setTypeFilter(f => f === p.leadType ? null : (p.leadType ?? null))} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white border border-amber-400/40">{typeFilter === p.leadType ? "Show all found" : `Show only ${label}`}</button>
+                )}
+                <button onClick={widenSearch} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-700/50 hover:bg-amber-600/60 disabled:opacity-50 text-amber-100 border border-amber-500/40">🔍 Cast a wider net (Max {p.maxLeads >= 300 ? 500 : 300})</button>
+                <button onClick={searchAllTypes} disabled={loading} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 border border-gray-600/50">All types</button>
+              </div>
+            )
+          })()}
 
           {/* 🎯 Find Any Lead — motivated-seller categories from this search */}
           {!predictiveOnly && Object.keys(leadTypeCounts).length > 0 && (
