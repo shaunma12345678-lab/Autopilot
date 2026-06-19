@@ -192,9 +192,22 @@ function buildDeepQuerySet(loc: SearchLocation, year: number, mode: "filings" | 
   return mode === "predictive" ? [...early, ...filings] : [...filings, ...early]
 }
 
+// Category focus for targeted extraction + a signal tag so classifyLead matches.
+const CATEGORY_FOCUS: Record<string, { focus: string; signal: string }> = {
+  probate:    { focus: "PROBATE / estate / inherited / deceased-owner",     signal: "Probate / inherited estate" },
+  eviction:   { focus: "eviction / unlawful-detainer / tired-landlord",     signal: "Eviction / tired landlord" },
+  divorce:    { focus: "divorce / marital-dissolution",                     signal: "Divorce dissolution" },
+  bankruptcy: { focus: "bankruptcy (chapter 7 / 13)",                       signal: "Bankruptcy filing" },
+  code:       { focus: "code-violation / condemned / nuisance",             signal: "Code violation" },
+  taxdelq:    { focus: "tax-delinquent / tax-defaulted",                    signal: "Tax delinquent" },
+  vacant:     { focus: "vacant / abandoned",                                signal: "Vacant abandoned" },
+  liens:      { focus: "lien / judgment",                                   signal: "Lien judgment" },
+}
+
 // AI extraction — secondary pass over capped content for any location.
-async function extractLeadsFromContent(content: string, locLabel: string): Promise<FreeLead[]> {
+async function extractLeadsFromContent(content: string, locLabel: string, category?: string): Promise<FreeLead[]> {
   if (!content.trim()) return []
+  const cat = category ? CATEGORY_FOCUS[category] : undefined
 
   const SYSTEM = `You are a real estate public records extraction specialist.
 Extract distressed property leads from web search results.
@@ -202,7 +215,7 @@ Return valid JSON arrays ONLY — no markdown, no preamble.
 Be thorough — include every property with a recognizable street address.
 Never fabricate data.`
 
-  const USER = `Extract EVERY pre-foreclosure, foreclosure, trustee-sale, or distressed property with a street address from these search results (target area: ${locLabel}).
+  const USER = `Extract EVERY ${cat ? `${cat.focus} property` : "pre-foreclosure, foreclosure, trustee-sale, or distressed property"} with a street address from these search results (target area: ${locLabel}).
 
 ${content}
 
@@ -235,7 +248,11 @@ JSON array only:`
     const jsonMatch = rawStr.match(/\[[\s\S]*\]/)
     if (!jsonMatch) return []
     const parsed = JSON.parse(jsonMatch[0]) as FreeLead[]
-    return Array.isArray(parsed) ? parsed.filter(l => l?.address?.trim()) : []
+    if (!Array.isArray(parsed)) return []
+    const cleaned = parsed.filter(l => l?.address?.trim())
+    // Tag with the category signal so classifyLead recognizes the targeted type.
+    if (cat) for (const l of cleaned) l.rawSignals = [cat.signal, ...(l.rawSignals ?? [])].slice(0, 3)
+    return cleaned
   } catch {
     return []
   }
@@ -257,10 +274,24 @@ async function runWebSearchPhase(
   const queries = buildDeepQuerySet(loc, year, mode, leadType)
   const isCA    = (loc.state || "").toUpperCase() === "CA"
 
-  const noticeQuery =
-    loc.searchType === "zip"  ? `${loc.zipCode} notice of trustee sale ${year}` :
-    loc.searchType === "city" ? `${loc.city} ${loc.state} notice of default trustee sale ${year}` :
-    `${loc.county} County ${loc.state} notice of trustee sale ${year}`
+  // Public-notice query — category-aware so a probate/eviction/etc. search hits
+  // the relevant legal notices, not just trustee-sale notices.
+  const CATEGORY_NOTICE_TERMS: Record<string, string> = {
+    probate:    "probate notice estate administer creditors real property",
+    eviction:   "unlawful detainer eviction notice property",
+    divorce:    "dissolution of marriage real property notice",
+    bankruptcy: "bankruptcy notice real property estate",
+    code:       "code violation abatement condemned notice property",
+    taxdelq:    "tax delinquent defaulted property sale notice",
+    liens:      "lien judgment notice property",
+    vacant:     "vacant abandoned property notice registry",
+  }
+  const placePart =
+    loc.searchType === "zip"  ? `${loc.zipCode}` :
+    loc.searchType === "city" ? `${loc.city} ${loc.state}` :
+    `${loc.county} County ${loc.state}`
+  const noticeTerms = (leadType && CATEGORY_NOTICE_TERMS[leadType]) || "notice of trustee sale default"
+  const noticeQuery = `${placePart} ${noticeTerms} ${year}`
 
   // Fire official + public-notice fetchers and free web searches in parallel.
   // Wider net than before so a small-city search still works toward the
@@ -300,7 +331,7 @@ async function runWebSearchPhase(
   let ai: FreeLead[] = []
   if (combined.length > 200) {
     ai = await Promise.race([
-      extractLeadsFromContent(combined.slice(0, 14000), loc.label),
+      extractLeadsFromContent(combined.slice(0, 14000), loc.label, leadType),
       new Promise<FreeLead[]>(resolve => setTimeout(() => resolve([]), 8000)),
     ])
   }
