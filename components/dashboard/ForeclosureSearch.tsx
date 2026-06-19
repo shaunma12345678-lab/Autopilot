@@ -1488,24 +1488,21 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
           zip:   l.zip   || (p.searchType === "zip" ? p.zipCode : "") || "",
         }))
         let finalLeads = fillComps(rawLeads)
-        // Targeted type → put exact matches first. If there are enough, show only
-        // them; if the category is sparse (court-record types often are from free
-        // sources), FILL with the area's other distressed leads so the list is
-        // never empty — the exact ones stay badged and the chip can isolate them.
-        // "new" → only leads we haven't surfaced before. "" → everything.
+        // Keep ALL leads in the result so the category chips show real numbers for
+        // EVERY type. The targeted type is isolated in the table + map via the chip
+        // filter (auto-applied below) — so you see only the type you picked, but the
+        // counts for every other type are still one click away. "new" is a freshness
+        // filter (not a category), so it does trim the result to unseen leads.
         if (effType === "new") {
           try {
             const sres = await fetch("/api/leads/seen", { method: "POST", headers: apiHeaders, body: JSON.stringify({ businessId, signatures: finalLeads.map(l => leadSignature(l)), record: false }) })
             const sdata = await sres.json()
             if (Array.isArray(sdata.new)) { const newSet = new Set<string>(sdata.new); finalLeads = finalLeads.filter(l => newSet.has(leadSignature(l))) }
           } catch { /* keep all on failure */ }
-        } else if (effType) {
-          const isMatch = (l: ForeclosureLead) => classifyLead(l).includes(effType)
-          const matches = finalLeads.filter(isMatch)
-          finalLeads = matches.length >= 12 ? matches : [...matches, ...finalLeads.filter(l => !isMatch(l))]
         }
         setResult({ leads: finalLeads, total: finalLeads.length, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
         recordSeen(finalLeads)
+        if (effType && effType !== "new") setTypeFilter(effType)   // isolate the picked type in table + map
         setSourceSummary(data.sourceCounts ?? null)
         setNewCount(data.newTotal ?? null)
         autoEnrichTopLeads(finalLeads, seq) // background: refine the best HOT leads
@@ -1637,6 +1634,9 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
 
   // 🎯 Find Any Lead — counts per motivated-seller category across the results.
   const leadTypeCounts = useMemo(() => (result ? typeCounts(result.leads) : {}), [result])
+
+  // The map mirrors the active category filter so it shows ONLY the picked type.
+  const mapLeads = useMemo(() => (typeFilter ? sorted.filter(l => leadHasType(l, typeFilter)) : sorted), [sorted, typeFilter])
 
   // Toggle predictive: fetch the forecast leads with our own engine on first open.
   const togglePredictive = async () => {
@@ -1818,7 +1818,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
         <>
           {/* Live Distress Map — spatial hunting view, its own section up top */}
           <DistressMap
-            leads={sorted}
+            leads={mapLeads}
             flyToQuery={searchedArea}
             onSelectLead={focusLeadFromMap}
             highlightId={mapHighlight}
