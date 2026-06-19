@@ -2061,7 +2061,7 @@ function AdminDistressMap({ password }: { password: string }) {
             <label className="text-xs text-gray-500">Max Leads</label>
             <select value={maxLeads} onChange={e => setMaxLeads(Number(e.target.value))}
               className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
-              {[50, 100, 150, 250, 350, 500].map(n => <option key={n} value={n}>{n}</option>)}
+              {[50, 100, 150, 250, 350, 500, 750, 1000].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </div>
           <div className="w-32">

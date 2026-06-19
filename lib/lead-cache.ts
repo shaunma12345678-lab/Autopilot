@@ -14,7 +14,7 @@ import { prisma } from "@/lib/prisma"
 import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 
 const SLUG          = "re-area-cache"
-const PER_AREA_CAP  = 600              // max leads retained per area
+const PER_AREA_CAP  = 1500             // max leads retained per area (accumulates across searches)
 const FRESH_DAYS    = 60               // ignore caches older than this
 
 export interface AreaKeyParts {

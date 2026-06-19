@@ -296,7 +296,7 @@ async function runWebSearchPhase(
   // Fire official + public-notice fetchers and free web searches in parallel.
   // Wider net than before so a small-city search still works toward the
   // requested volume instead of stopping at a handful of leads.
-  const queryCount = maxLeads <= 100 ? 12 : maxLeads <= 200 ? 18 : 24
+  const queryCount = maxLeads <= 100 ? 12 : maxLeads <= 200 ? 18 : maxLeads <= 400 ? 24 : 30
   const selectedQueries = queries.slice(0, queryCount)
 
   const [caDoj, publicNotices, webBatches] = await Promise.all([
@@ -435,7 +435,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
         leadType:   params.leadType,
       }))
     ),
-    20000,
+    28000,
     [] as PromiseSettledResult<Awaited<ReturnType<typeof searchDirectSources>>>[]
   )
 

@@ -123,6 +123,8 @@ function AreaForm({ p, setP, onSearch, loading, extra }: {
             <option value={200}>200</option>
             <option value={300}>300</option>
             <option value={500}>500</option>
+            <option value={750}>750</option>
+            <option value={1000}>1000</option>
           </select></div>
         <div><label className="label">🎯 Lead Type</label>
           <select value={p.leadType ?? ""} onChange={e => setP(q => ({ ...q, leadType: e.target.value }))} className={INPUT} title="Focus the search on one lead category — returns ONLY that type">

@@ -54,11 +54,15 @@ export function tileBox(box: GeoBox, cols: number, rows: number): GeoBox[] {
 // Returns the grid dimensions for a target lead count.
 // More leads → more tiles → more API queries → higher total.
 export function tilesForTarget(maxLeads: number): { cols: number; rows: number } {
+  // Finer tiling captures MORE in dense areas (each request caps its own count),
+  // so we split harder as the target grows. Per-tile fetches fail gracefully, so
+  // extra tiles only ever add yield.
   if (maxLeads <= 100) return { cols: 2, rows: 2 }  // 4 tiles
-  if (maxLeads <= 200) return { cols: 2, rows: 3 }  // 6 tiles
-  if (maxLeads <= 300) return { cols: 3, rows: 3 }  // 9 tiles
-  if (maxLeads <= 400) return { cols: 3, rows: 4 }  // 12 tiles
-  return                      { cols: 4, rows: 4 }  // 16 tiles
+  if (maxLeads <= 200) return { cols: 3, rows: 3 }  // 9 tiles
+  if (maxLeads <= 300) return { cols: 3, rows: 4 }  // 12 tiles
+  if (maxLeads <= 500) return { cols: 4, rows: 5 }  // 20 tiles
+  if (maxLeads <= 750) return { cols: 5, rows: 5 }  // 25 tiles
+  return                      { cols: 5, rows: 6 }  // 30 tiles
 }
 
 // Run an array of async factories with at most `limit` running at once.

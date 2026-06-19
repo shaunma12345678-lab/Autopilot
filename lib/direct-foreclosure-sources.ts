@@ -124,7 +124,7 @@ async function scrapeZillowTiled(box: GeoBox, maxLeads: number): Promise<FreeLea
   const tiles = tileBox(box, cols, rows)
   const batches = await withConcurrency(
     tiles.map(t => () => fetchZillowTile(t)),
-    4
+    6
   )
   return batches.flat()
 }
@@ -143,7 +143,7 @@ async function fetchRedfinTile(tile: GeoBox, fallbackState = "CA"): Promise<Free
   const params = new URLSearchParams({
     al:          "1",
     market:      "national",
-    num_homes:   "200",
+    num_homes:   "350",
     ord:         "redfin-recommended-asc",
     page_number: "1",
     poly,
@@ -252,7 +252,7 @@ async function scrapeRedfinTiled(box: GeoBox, maxLeads: number, fallbackState = 
   const tiles = tileBox(box, cols, rows)
   const batches = await withConcurrency(
     tiles.map(t => () => fetchRedfinTile(t, fallbackState)),
-    4
+    6
   )
   return batches.flat()
 }

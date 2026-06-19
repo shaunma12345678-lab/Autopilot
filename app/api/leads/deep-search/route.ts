@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  const maxLeads = Math.min(Math.max(body.maxLeads ?? 100, 10), 500)
+  const maxLeads = Math.min(Math.max(body.maxLeads ?? 100, 10), 1000)
 
   const params: DeepSearchParams = {
     searchType: body.searchType as "zip" | "city" | "county",
