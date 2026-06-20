@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import Link from "next/link"
 import ForeclosureSearch from "@/components/dashboard/ForeclosureSearch"
 import DistressMap from "@/components/dashboard/DistressMap"
+import MarketAnalysis from "@/components/dashboard/MarketAnalysis"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 /* ── Types ── */
@@ -2144,7 +2145,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2215,6 +2216,7 @@ export default function AdminPage() {
     { id: "sites",        label: "🌐 Website Builder" },
     { id: "real-estate",  label: "🏚 Real Estate" },
     { id: "distress-map", label: "🗺️ Distress Map" },
+    { id: "markets",      label: "📈 Markets" },
     { id: "queue",        label: "Job Queue" },
     { id: "integrations", label: "Integrations" },
     { id: "sandbox",      label: "AI Sandbox" },
@@ -2280,6 +2282,7 @@ export default function AdminPage() {
             <AdminRealEstate password={pw} />
           )}
           {tab === "distress-map" && <AdminDistressMap password={pw} />}
+          {tab === "markets" && <MarketAnalysis password={pw} />}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}

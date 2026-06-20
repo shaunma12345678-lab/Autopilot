@@ -42,7 +42,15 @@ export const LEAD_TYPES: LeadType[] = [
   { id: "bankruptcy", label: "Bankruptcy", emoji: "💸", cls: "bg-slate-500/15 text-slate-300 border-slate-500/30",
     match: (_l, t) => /bankruptcy|chapter 13|chapter 7/.test(t) },
   { id: "highequity", label: "High Equity", emoji: "💰", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-    match: (l) => (l.equityPercent ?? 0) >= 40 },
+    // High equity = the high-profit deals investors want. Known equity when we
+    // have it, else genuine POSITIVE signals (free-and-clear, long ownership).
+    // Volume comes from the search FOCUS (free-and-clear / long-time-owner
+    // queries), not from mislabeling distressed listings as high-equity.
+    match: (l, t) => {
+      if (l.equityPercent != null) return l.equityPercent >= 35
+      if (/free and clear|free-and-clear|no mortgage|owned free|paid off|owns? outright|owned since/.test(t)) return true
+      return (l.yearsOwned ?? 0) >= 12
+    } },
   { id: "motivated", label: "Motivated / As-Is", emoji: "🔥", cls: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
     match: (_l, t) => /motivated|price (?:cut|reduced|drop|reduction)|must sell|\bas[- ]is\b|cash only|fixer|short sale|distressed listing|fire|water damage/.test(t) },
 ]

@@ -17,32 +17,64 @@ interface CountyConfig {
   sets:          SocrataSet[]     // category searches to run against the domain
 }
 
-// Registry — add markets here as we wire them.
+// Shared comprehensive distress set for tuned markets (each portal's catalog is
+// searched for these, so dataset naming differences don't matter much).
+const DISTRESS_SETS: SocrataSet[] = [
+  { q: "code enforcement violation", signal: "Code violation (open data)" },
+  { q: "building violation",         signal: "Building violation (open data)" },
+  { q: "vacant abandoned building",  signal: "Vacant / abandoned (open data)", vacant: true },
+  { q: "vacant lot",                 signal: "Vacant lot (open data)", vacant: true },
+  { q: "demolition",                 signal: "Demolition (open data)", vacant: true },
+  { q: "tax delinquent",             signal: "Tax delinquent (open data)" },
+  { q: "lien",                       signal: "Lien (open data)" },
+]
+
+// Registry — tuned top markets (deep, pinned portal). Everywhere else is covered
+// by automatic portal resolution + the same category set, so it's just as deep.
 const COUNTY_REGISTRY: Record<string, CountyConfig> = {
   "los-angeles": {
     label: "Los Angeles",
     socrataDomain: "data.lacity.org",
     sets: [
-      { q: "code enforcement",          signal: "Code enforcement case (LA open data)" },
-      { q: "building code violation",   signal: "Building/code violation (LA open data)" },
-      { q: "vacant building",           signal: "Vacant building (LA open data)", vacant: true },
-      { q: "vacant property",           signal: "Vacant property (LA open data)", vacant: true },
-      { q: "nuisance abatement",        signal: "Nuisance abatement (LA open data)" },
-      { q: "order to comply",           signal: "Order to comply / code case (LA open data)" },
-      { q: "rent registry",             signal: "Rental / landlord registry (LA open data)" },
-      { q: "demolition permit",         signal: "Demolition permit (LA open data)", vacant: true },
+      { q: "code enforcement",        signal: "Code enforcement case (LA open data)" },
+      { q: "building code violation", signal: "Building/code violation (LA open data)" },
+      { q: "vacant building",         signal: "Vacant building (LA open data)", vacant: true },
+      { q: "nuisance abatement",      signal: "Nuisance abatement (LA open data)" },
+      { q: "order to comply",         signal: "Order to comply / code case (LA open data)" },
+      { q: "demolition permit",       signal: "Demolition permit (LA open data)", vacant: true },
     ],
   },
+  "new-york-city": {
+    label: "New York City",
+    socrataDomain: "data.cityofnewyork.us",
+    sets: [
+      { q: "housing maintenance code violations", signal: "HPD housing violation (NYC open data)" },
+      { q: "DOB violations",                      signal: "DOB building violation (NYC open data)" },
+      { q: "vacant lot",                          signal: "Vacant lot (NYC open data)", vacant: true },
+      { q: "code enforcement",                    signal: "Code enforcement (NYC open data)" },
+      { q: "tax lien",                            signal: "Tax lien (NYC open data)" },
+    ],
+  },
+  "chicago":       { label: "Chicago",       socrataDomain: "data.cityofchicago.org", sets: DISTRESS_SETS },
+  "san-diego":     { label: "San Diego",     socrataDomain: "data.sandiego.gov",      sets: DISTRESS_SETS },
+  "san-francisco": { label: "San Francisco", socrataDomain: "data.sfgov.org",         sets: DISTRESS_SETS },
 }
 
-// Map a search to a registered county (by countyId, county name, or city).
+// Place-name → tuned market matchers.
+const MATCHERS: Array<{ id: string; rx: RegExp }> = [
+  { id: "los-angeles",   rx: /los angeles|long beach|hollywood|van nuys|north hollywood|san pedro|venice|\bl\.?a\.?\b/ },
+  { id: "new-york-city", rx: /new york city|nyc|manhattan|brooklyn|bronx|queens|staten island/ },
+  { id: "chicago",       rx: /chicago|cook county/ },
+  { id: "san-diego",     rx: /san diego/ },
+  { id: "san-francisco", rx: /san francisco/ },
+]
+
+// Map a search to a registered market (by countyId, county name, or city).
 export function resolveCounty(p: { countyId?: string; county?: string; city?: string; state?: string }): { id: string; cfg: CountyConfig } | null {
   const direct = p.countyId && COUNTY_REGISTRY[p.countyId] ? p.countyId : null
   if (direct) return { id: direct, cfg: COUNTY_REGISTRY[direct] }
   const name = `${p.county ?? ""} ${p.city ?? ""}`.toLowerCase()
-  if (/los angeles|\bla\b|long beach|hollywood|van nuys|north hollywood|san pedro|venice/.test(name) && (p.state ?? "").toUpperCase() !== "" ) {
-    if (COUNTY_REGISTRY["los-angeles"]) return { id: "los-angeles", cfg: COUNTY_REGISTRY["los-angeles"] }
-  }
+  for (const m of MATCHERS) if (m.rx.test(name) && COUNTY_REGISTRY[m.id]) return { id: m.id, cfg: COUNTY_REGISTRY[m.id] }
   return null
 }
 
@@ -92,11 +124,41 @@ async function socrataDiscoverGlobal(q: string): Promise<Array<{ domain: string;
   }
 }
 
-// Default distress categories used for generic (non-registered) counties.
+// Domains that aren't a specific local portal — skip so we pin the LOCAL one.
+const GENERIC_DOMAINS = new Set(["data.gov", "catalog.data.gov", "data.ca.gov", "performance.commerce.gov"])
+
+// Resolve the searched area's OWN open-data portal (the Socrata domain that hosts
+// the most datasets for that place). Once we have it we can run the full category
+// set against it — the same depth as a hand-tuned market, but automatically.
+async function resolveSocrataDomain(areaTerm: string): Promise<string | null> {
+  try {
+    const url = `https://api.us.socrata.com/api/catalog/v1?q=${encodeURIComponent(areaTerm)}&only=dataset&limit=25`
+    const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(7000) })
+    if (!res.ok) return null
+    const data = await res.json()
+    const counts = new Map<string, number>()
+    for (const r of (data.results ?? []) as Record<string, unknown>[]) {
+      const d = String((r.metadata as Record<string, unknown>)?.domain ?? "")
+      if (!d || GENERIC_DOMAINS.has(d)) continue
+      counts.set(d, (counts.get(d) ?? 0) + 1)
+    }
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1])
+    return ranked[0]?.[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+// Default distress categories used for generic (non-registered) counties — broad
+// so the auto-discovery goes DEEP wherever a county publishes, no per-county code.
 const GENERIC_SETS: SocrataSet[] = [
-  { q: "code enforcement violation", signal: "Code violation (open data)" },
-  { q: "vacant property",            signal: "Vacant property (open data)", vacant: true },
-  { q: "tax delinquent property",    signal: "Tax delinquent (open data)" },
+  { q: "code enforcement violation",  signal: "Code violation (open data)" },
+  { q: "vacant abandoned property",   signal: "Vacant / abandoned (open data)", vacant: true },
+  { q: "tax delinquent property",     signal: "Tax delinquent (open data)" },
+  { q: "nuisance condemned property", signal: "Nuisance / condemned (open data)" },
+  { q: "demolition order",            signal: "Demolition order (open data)", vacant: true },
+  { q: "foreclosure registry",        signal: "Foreclosure registry (open data)" },
+  { q: "property lien assessment",    signal: "Lien / assessment (open data)" },
 ]
 
 async function socrataRows(domain: string, id: string, areaTerm: string): Promise<Record<string, unknown>[]> {
@@ -135,26 +197,31 @@ function rowToLead(row: Record<string, unknown>, set: SocrataSet, domain: string
 export async function fetchCountyRecords(
   p: { countyId?: string; county?: string; city?: string; state?: string; zipCode?: string },
 ): Promise<FreeLead[]> {
-  const areaTerm = p.zipCode || p.city || p.county || ""
+  const areaTerm = p.county || p.city || p.zipCode || ""
   if (!areaTerm) return []
   const match = resolveCounty(p)
 
+  // Pin a domain: tuned registry first, else auto-resolve the area's own portal.
+  // Either way we then run the FULL category set against it — so any county gets
+  // the same depth as a hand-tuned market.
+  const domain = match?.cfg.socrataDomain ?? await resolveSocrataDomain(areaTerm)
+  const sets   = match?.cfg.sets ?? GENERIC_SETS
+  const rowArea = p.zipCode || p.city || ""
+
   let batches: FreeLead[][]
-  if (match?.cfg.socrataDomain) {
-    // Tuned market — pinned domain.
-    const domain = match.cfg.socrataDomain
-    batches = await Promise.all(match.cfg.sets.map(async (set) => {
+  if (domain) {
+    batches = await Promise.all(sets.map(async (set) => {
       const ids = await socrataDiscover(domain, set.q)
-      const rowsArrays = await Promise.all(ids.map((id) => socrataRows(domain, id, areaTerm)))
+      const rowsArrays = await Promise.all(ids.map((id) => socrataRows(domain, id, rowArea)))
       return rowsArrays.flat().map((row) => rowToLead(row, set, domain, p)).filter((l): l is FreeLead => l !== null)
     }))
   } else {
-    // Generic — discover across all Socrata domains, biased to the place name.
+    // No local portal resolved — last-resort discovery across all domains.
     batches = await Promise.all(GENERIC_SETS.map(async (set) => {
       const found = await socrataDiscoverGlobal(`${areaTerm} ${set.q}`)
-      const rowsArrays = await Promise.all(found.map((f) => socrataRows(f.domain, f.id, areaTerm).then((rows) => ({ rows, domain: f.domain }))))
+      const rowsArrays = await Promise.all(found.map((f) => socrataRows(f.domain, f.id, rowArea).then((rows) => ({ rows, domain: f.domain }))))
       const out: FreeLead[] = []
-      for (const { rows, domain } of rowsArrays) for (const row of rows) { const l = rowToLead(row, set, domain, p); if (l) out.push(l) }
+      for (const { rows, domain: d } of rowsArrays) for (const row of rows) { const l = rowToLead(row, set, d, p); if (l) out.push(l) }
       return out
     }))
   }

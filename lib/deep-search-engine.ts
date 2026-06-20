@@ -178,6 +178,9 @@ function buildDeepQuerySet(loc: SearchLocation, year: number, mode: "filings" | 
       highequity: [
         `${placeLoose} "free and clear" OR "no mortgage" owner property ${year} address sell`,
         `${placeLoose} long-time owner OR "owned since" high equity property ${year} address`,
+        `${placeLoose} owner financing OR "owns outright" home ${year} address motivated`,
+        `${placeLoose} senior OR retired downsizing paid-off home ${year} address sell`,
+        `${placeLoose} inherited OR free clear "no loan" property ${year} address`,
       ],
       foreclosure: filings,
       predicted: early,
