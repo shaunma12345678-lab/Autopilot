@@ -66,7 +66,7 @@ function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: numbe
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[] } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; fundConfigured: boolean } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
 
@@ -92,7 +92,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error || !data?.report) { setError(data?.error ?? `No data for ${m.city} yet — run it again; the cache fills over time.`) }
-      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [] }) }
+      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], fundConfigured: !!data.fundConfigured }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
@@ -103,7 +103,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth, fund, fundScore } = report
+    const { m, market, strat, leads, depth, fund, fundScore, fundConfigured } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -136,6 +136,11 @@ export default function MarketAnalysis({ password }: { password: string }) {
           </div>
         </div>
         {/* Real market fundamentals (US Census) */}
+        {!fundConfigured && (
+          <div className="bg-amber-950/20 border border-amber-500/25 rounded-xl px-3 py-2">
+            <p className="text-[11px] text-amber-200">📊 Real market fundamentals (population, income, jobs, poverty) need a <b>free Census API key</b>. Get one at census.gov/data/key_signup.html and add <code className="text-amber-100">CENSUS_API_KEY</code> to the Vercel env — then population/job-growth scoring goes live.</p>
+          </div>
+        )}
         {fund && (
           <div className="bg-emerald-950/20 border border-emerald-500/25 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-2">

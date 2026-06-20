@@ -22,6 +22,11 @@ const STATE_FIPS: Record<string, string> = {
   VT: "50", VA: "51", WA: "53", WV: "54", WI: "55", WY: "56",
 }
 
+// Census's data API requires a free key (census.gov/data/key_signup.html). With
+// no key the fundamentals stay null and the analysis falls back to deal metrics.
+const CENSUS_KEY = process.env.CENSUS_API_KEY ?? ""
+export const isFundamentalsConfigured = () => Boolean(CENSUS_KEY)
+
 const num = (v: unknown): number | null => { const n = Number(v); return Number.isFinite(n) && n > -100000 ? n : null }
 const normPlace = (s: string) => s.toLowerCase().replace(/\b(city|town|cdp|village|borough|municipality)\b/g, "").replace(/,.*$/, "").trim()
 
@@ -29,7 +34,7 @@ const normPlace = (s: string) => s.toLowerCase().replace(/\b(city|town|cdp|villa
 async function fetchYear(year: number, fips: string, city: string): Promise<string[] | null> {
   try {
     const vars = "NAME,B01003_001E,B19013_001E,B17001_002E,B17001_001E,B23025_003E,B23025_005E"
-    const url = `https://api.census.gov/data/${year}/acs/acs5?get=${vars}&for=place:*&in=state:${fips}`
+    const url = `https://api.census.gov/data/${year}/acs/acs5?get=${vars}&for=place:*&in=state:${fips}&key=${CENSUS_KEY}`
     const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(9000) })
     if (!res.ok) return null
     const data = (await res.json()) as string[][]
@@ -54,7 +59,7 @@ async function fetchYear(year: number, fips: string, city: string): Promise<stri
 
 export async function fetchFundamentals(city: string, state: string): Promise<Fundamentals | null> {
   const fips = STATE_FIPS[(state || "").toUpperCase()]
-  if (!fips || !city.trim()) return null
+  if (!fips || !city.trim() || !CENSUS_KEY) return null
   try {
     const [cur, old] = await Promise.all([fetchYear(2022, fips, city), fetchYear(2017, fips, city)])
     if (!cur) return null

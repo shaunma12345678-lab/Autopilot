@@ -6,7 +6,7 @@ import { deepSearch } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
 import { analyzeMarket, scoreStrategies, type MarketReport, type MarketStrategies } from "@/lib/market-analysis"
-import { fetchFundamentals, fundamentalsScore, type Fundamentals } from "@/lib/market-fundamentals"
+import { fetchFundamentals, fundamentalsScore, isFundamentalsConfigured, type Fundamentals } from "@/lib/market-fundamentals"
 import { opportunityScore } from "@/lib/opportunity"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
@@ -16,6 +16,7 @@ export interface MarketAnalysisResult {
   fundamentals: Fundamentals | null
   fundScore:   number | null
   fundReasons: string[]
+  fundConfigured: boolean
   leads:       ForeclosureLead[]   // top leads in the market (for the find-leads list)
   total:       number
 }
@@ -33,5 +34,5 @@ export async function runMarketAnalysis(city: string, state: string, depth = 250
   const fs     = fundamentalsScore(fundamentals)
   // Return only the top leads by opportunity to keep the payload small.
   const leads  = [...allLeads].sort((a, b) => opportunityScore(b).score - opportunityScore(a).score).slice(0, 40)
-  return { report, strat, fundamentals: fundamentals ?? null, fundScore: fs?.score ?? null, fundReasons: fs?.reasons ?? [], leads, total: allLeads.length }
+  return { report, strat, fundamentals: fundamentals ?? null, fundScore: fs?.score ?? null, fundReasons: fs?.reasons ?? [], fundConfigured: isFundamentalsConfigured(), leads, total: allLeads.length }
 }
