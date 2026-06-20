@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     try {
       const r = await runMarketAnalysis(m.city, m.state, 250)
       if (r) {
-        const entry: MarketEntry = { city: m.city, state: m.state, report: r.report, strat: r.strat, fundamentals: r.fundamentals, fundScore: r.fundScore, fundReasons: r.fundReasons, at: new Date().toISOString() }
+        const entry: MarketEntry = { city: m.city, state: m.state, report: r.report, strat: r.strat, fundamentals: r.fundamentals, fundScore: r.fundScore, fundReasons: r.fundReasons, upside: r.upside, upsideReasons: r.upsideReasons, at: new Date().toISOString() }
         cache.reports[marketKey(m.city, m.state)] = entry
         analyzed++
       }

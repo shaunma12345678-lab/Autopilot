@@ -35,7 +35,9 @@ function median(ns: number[]): number | null {
 
 const valueOf = (l: ForeclosureLead): number => l.avmValue ?? l.estimatedValue ?? 0
 
-export function analyzeMarket(leads: ForeclosureLead[]): MarketReport {
+// `real` lets the caller override the (distressed-sample) median value/rent with
+// authoritative ACS numbers so every downstream metric + insight is consistent.
+export function analyzeMarket(leads: ForeclosureLead[], real?: { value?: number | null; rent?: number | null }): MarketReport {
   const n = leads.length
   const values = leads.map(valueOf)
   const psfs = leads.filter((l) => l.sqft && l.sqft > 200 && valueOf(l) > 0).map((l) => valueOf(l) / l.sqft!)
@@ -67,19 +69,24 @@ export function analyzeMarket(leads: ForeclosureLead[]): MarketReport {
     .sort((a, b) => b.distress - a.distress || b.count - a.count)
     .slice(0, 6)
 
-  const medianValue = median(values)
+  // Real ACS median value/rent win over the distressed-lead sample when present.
+  const medianValue = real?.value ?? median(values)
   const psf = psfs.length ? Math.round(median(psfs) ?? 0) : null
   const avgScore = n ? Math.round(leads.reduce((s, l) => s + (l.score ?? 0), 0) / n) : 0
   const avgEquity = equities.length ? Math.round(equities.reduce((s, e) => s + e, 0) / equities.length) : null
-  const rentYield = yields.length ? Math.round((median(yields) ?? 0) * 10) / 10 : null
   const distressRate = n ? Math.round((distress / n) * 100) : 0
   const predictedRate = n ? Math.round((predicted / n) * 100) : 0
 
-  // Rent + cap rate. Use real rent estimates where we have them, else the 0.7%
-  // rule off median value as a fallback so every market gets a number.
+  // Rent + cap rate. Prefer real ACS rent, then our rent estimates, else the
+  // 0.7% rule off median value so every market gets a number.
   const rents = leads.map((l) => l.rentEstimate).filter((r): r is number => r != null && r > 0)
-  const medianRent = rents.length ? median(rents) : (medianValue ? Math.round(medianValue * 0.007) : null)
+  const medianRent = real?.rent ?? (rents.length ? median(rents) : (medianValue ? Math.round(medianValue * 0.007) : null))
   const capRate = medianRent && medianValue ? Math.round((medianRent * 12 * 0.55) / medianValue * 1000) / 10 : null
+  // Gross yield from the authoritative value/rent when we have ACS data, else
+  // from the per-lead rent estimates.
+  const rentYield = (real?.value && medianRent && medianValue)
+    ? Math.round((medianRent * 12) / medianValue * 1000) / 10
+    : (yields.length ? Math.round((median(yields) ?? 0) * 10) / 10 : null)
 
   const insights: string[] = []
   if (medianValue) insights.push(`Median value ≈ $${Math.round(medianValue / 1000)}k${psf ? ` · ~$${psf}/sqft` : ""}`)

@@ -16,6 +16,7 @@ export interface MarketEntry {
   city: string; state: string
   report: MarketReport; strat: MarketStrategies
   fundamentals?: Fundamentals | null; fundScore?: number | null; fundReasons?: string[]
+  upside?: number | null; upsideReasons?: string[]
   at: string
 }
 export interface MarketCache { reports: Record<string, MarketEntry>; cursor: number }

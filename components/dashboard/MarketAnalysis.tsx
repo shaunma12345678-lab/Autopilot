@@ -42,11 +42,23 @@ function StrategyCard({ title, emoji, s }: { title: string; emoji: string; s: St
   )
 }
 
-interface Fund { population: number | null; popGrowth5yr: number | null; medianIncome: number | null; povertyRate: number | null; unemploymentRate: number | null; growthFrom?: string; source?: string }
-interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; fundamentals?: Fund | null; fundScore?: number | null; fundReasons?: string[]; at: string }
+interface Fund { population: number | null; popGrowth5yr: number | null; medianIncome: number | null; povertyRate: number | null; unemploymentRate: number | null; medianHomeValue?: number | null; medianRent?: number | null; vacancyRate?: number | null; priceToIncome?: number | null; grossYield?: number | null; growthFrom?: string; source?: string }
+interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; fundamentals?: Fund | null; fundScore?: number | null; fundReasons?: string[]; upside?: number | null; upsideReasons?: string[]; at: string }
 const mKey = (c: string, s: string) => `${c.toLowerCase().trim()}:${(s || "").toUpperCase().trim()}`
-// Rank weights fundamentals (real population/jobs data) at 50%, deal economics at 50%.
-const composite = (e?: CachedEntry) => (e ? Math.round((typeof e.fundScore === "number" ? e.fundScore * 0.5 : (e.strat.flip.score + e.strat.longRental.score) / 4) + (e.strat.flip.score + e.strat.longRental.score) / (typeof e.fundScore === "number" ? 4 : 2)) : -1)
+// Composite rank = current health (fundamentals) 40% + upside/appreciation
+// potential 35% + live deal economics 25%, so markets rank by both how good
+// they are now AND how much they can still go up. Falls back to deal economics
+// when fundamentals haven't been fetched yet.
+const composite = (e?: CachedEntry) => {
+  if (!e) return -1
+  const deal = (e.strat.flip.score + e.strat.longRental.score) / 2
+  const hasFund = typeof e.fundScore === "number"
+  const hasUp = typeof e.upside === "number"
+  if (!hasFund && !hasUp) return Math.round(deal)
+  const fund = hasFund ? e.fundScore! : deal
+  const up = hasUp ? e.upside! : fund
+  return Math.round(fund * 0.4 + up * 0.35 + deal * 0.25)
+}
 const ago = (iso: string) => { const h = (Date.now() - new Date(iso).getTime()) / 3.6e6; return h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago` }
 
 function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: number; onClick: () => void; busy: boolean; entry?: CachedEntry }) {
@@ -66,7 +78,7 @@ function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: numbe
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; fundConfigured: boolean } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; fundConfigured: boolean } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
 
@@ -92,7 +104,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error || !data?.report) { setError(data?.error ?? `No data for ${m.city} yet — run it again; the cache fills over time.`) }
-      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], fundConfigured: !!data.fundConfigured }) }
+      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], fundConfigured: !!data.fundConfigured }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
@@ -103,7 +115,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth, fund, fundScore } = report
+    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -135,20 +147,28 @@ export default function MarketAnalysis({ password }: { password: string }) {
             ))}
           </div>
         </div>
-        {/* Real market fundamentals — our own keyless engine (Wikidata + BLS) */}
+        {/* Real market fundamentals — our own keyless engine (Census ACS + Wikidata) */}
         {fund && (
           <div className="bg-emerald-950/20 border border-emerald-500/25 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-semibold text-emerald-200">📊 Market Fundamentals <span className="text-[10px] font-normal text-gray-500">· live public data ({fund.source ?? "Wikidata · BLS"})</span></p>
-              {fundScore != null && <span className="text-xs font-bold text-emerald-300">Fundamentals score: {fundScore}/100</span>}
+              <p className="text-sm font-semibold text-emerald-200">📊 Market Fundamentals <span className="text-[10px] font-normal text-gray-500">· real public data ({fund.source ?? "Census ACS · Wikidata"})</span></p>
+              <div className="flex items-center gap-2">
+                {fundScore != null && <span className="text-xs font-bold text-emerald-300">Health {fundScore}/100</span>}
+                {upside != null && <span className="text-xs font-bold text-amber-300" title={upsideReasons.join(" · ")}>↑ Upside {upside}/100</span>}
+              </div>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               {[
                 ["Population", fund.population != null ? fund.population.toLocaleString() : "—"],
-                ["Pop growth 5yr", fund.popGrowth5yr != null ? `${fund.popGrowth5yr > 0 ? "+" : ""}${fund.popGrowth5yr}%` : "—"],
+                ["Pop growth", fund.popGrowth5yr != null ? `${fund.popGrowth5yr > 0 ? "+" : ""}${fund.popGrowth5yr}%` : "—"],
                 ["Median income", fund.medianIncome != null ? `$${Math.round(fund.medianIncome / 1000)}k` : "—"],
                 ["Poverty", fund.povertyRate != null ? `${fund.povertyRate}%` : "—"],
                 ["Unemployment", fund.unemploymentRate != null ? `${fund.unemploymentRate}%` : "—"],
+                ["Median home value", fund.medianHomeValue != null ? `$${Math.round(fund.medianHomeValue / 1000)}k` : "—"],
+                ["Median rent", fund.medianRent != null ? `$${fund.medianRent.toLocaleString()}` : "—"],
+                ["Vacancy", fund.vacancyRate != null ? `${fund.vacancyRate}%` : "—"],
+                ["Price-to-income", fund.priceToIncome != null ? `${fund.priceToIncome}×` : "—"],
+                ["Gross yield", fund.grossYield != null ? `${fund.grossYield}%` : "—"],
               ].map(([k, v]) => (
                 <div key={k} className="bg-gray-900/50 border border-gray-700/40 rounded-lg px-2.5 py-2">
                   <p className="text-[10px] text-gray-500 uppercase tracking-wide">{k}</p>
@@ -156,6 +176,9 @@ export default function MarketAnalysis({ password }: { password: string }) {
                 </div>
               ))}
             </div>
+            {upside != null && upsideReasons.length > 0 && (
+              <p className="text-[11px] text-amber-200/80 mt-2">↑ <b>Appreciation potential {upside}/100</b> — {upsideReasons.join(" · ")}</p>
+            )}
           </div>
         )}
 
