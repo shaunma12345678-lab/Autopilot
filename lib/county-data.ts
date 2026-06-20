@@ -24,9 +24,13 @@ const COUNTY_REGISTRY: Record<string, CountyConfig> = {
     socrataDomain: "data.lacity.org",
     sets: [
       { q: "code enforcement",          signal: "Code enforcement case (LA open data)" },
-      { q: "building violation",        signal: "Building/code violation (LA open data)" },
+      { q: "building code violation",   signal: "Building/code violation (LA open data)" },
       { q: "vacant building",           signal: "Vacant building (LA open data)", vacant: true },
       { q: "vacant property",           signal: "Vacant property (LA open data)", vacant: true },
+      { q: "nuisance abatement",        signal: "Nuisance abatement (LA open data)" },
+      { q: "order to comply",           signal: "Order to comply / code case (LA open data)" },
+      { q: "rent registry",             signal: "Rental / landlord registry (LA open data)" },
+      { q: "demolition permit",         signal: "Demolition permit (LA open data)", vacant: true },
     ],
   },
 }

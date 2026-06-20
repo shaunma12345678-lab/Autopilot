@@ -20,6 +20,7 @@ import { featurize, leadArea, adaptiveScore, type LearnedModel } from "@/lib/lea
 import { LEAD_TYPES, classifyLead, leadHasType, typeCounts, leadTypeMeta } from "@/lib/lead-types"
 import { leadSignature } from "@/lib/seen-leads"
 import { opportunityScore } from "@/lib/opportunity"
+import { analyzeMarket } from "@/lib/market-analysis"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -1331,6 +1332,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
   const [smartRank, setSmartRank]   = useState(false)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)   // 🎯 Find Any Lead category
   const [gemsSort, setGemsSort]     = useState(false)                  // 🔥 Hidden Gems — deals nobody else is working
+  const [showMarket, setShowMarket] = useState(false)                  // 📊 Market snapshot
   // Load what the system has learned so far.
   useEffect(() => {
     if (!businessId) return
@@ -1646,6 +1648,9 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
   // The map mirrors the active category filter so it shows ONLY the picked type.
   const mapLeads = useMemo(() => (typeFilter ? sorted.filter(l => leadHasType(l, typeFilter)) : sorted), [sorted, typeFilter])
 
+  // 📊 Market snapshot — investor read of the searched area, from our own data.
+  const market = useMemo(() => (result && result.leads.length ? analyzeMarket(result.leads) : null), [result])
+
   // Toggle predictive: fetch the forecast leads with our own engine on first open.
   const togglePredictive = async () => {
     const next = !predictiveOnly
@@ -1926,6 +1931,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               <button onClick={skipTraceAll} disabled={traceBusy} className="bg-indigo-700/40 border border-indigo-500/40 hover:bg-indigo-700/60 disabled:opacity-50 text-indigo-200 text-xs font-semibold px-3 rounded-lg" title="Find owner names + phones/emails for all shown leads (powers personalized mail & calling/texting)">{traceBusy ? "Tracing…" : traceDone != null ? `✓ ${traceDone} traced` : "👤 Skip-trace all"}</button>
               <button onClick={() => setSmartRank(v => !v)} disabled={!learnModel?.ready} title={learnModel?.ready ? "Re-rank by what your system has learned you pursue" : `Learning… ${learnModel?.nPursued ?? 0}/3 — save or open a few deals you like to unlock`} className={`text-xs font-semibold px-3 rounded-lg border disabled:opacity-50 ${smartRank && learnModel?.ready ? "bg-fuchsia-600 border-fuchsia-400 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`}>🧠 Smart Rank{learnModel?.ready ? "" : " 🔒"}</button>
               <button onClick={() => setGemsSort(v => !v)} title="Surface the deals nobody else is working — multiple distress signals corroborating on off-market properties (low competition, high motivation)" className={`text-xs font-semibold px-3 rounded-lg border ${gemsSort ? "bg-orange-600 border-orange-400 text-white" : "bg-orange-700/30 border-orange-500/40 text-orange-200 hover:bg-orange-700/50"}`}>🔥 Hidden Gems</button>
+              <button onClick={() => setShowMarket(v => !v)} title="Investor market snapshot for this area — value, distress density, equity, rent yield, hottest ZIPs" className={`text-xs font-semibold px-3 rounded-lg border ${showMarket ? "bg-teal-600 border-teal-400 text-white" : "bg-teal-700/30 border-teal-500/40 text-teal-200 hover:bg-teal-700/50"}`}>📊 Market</button>
             </div>
             {forYou && !learned && <p className="text-[11px] text-violet-300/80 mt-2">Teaching mode: move 3+ deals to Offer/Contract/Closed in their CRM, then “For you” ranks new deals like those.</p>}
             {learnModel && (learnModel.insights.length > 0 || learnModel.topAreas.length > 0) && (
@@ -2041,6 +2047,48 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               </div>
             )
           })()}
+
+          {/* 📊 Market snapshot — investor read of the searched area */}
+          {showMarket && market && (
+            <div className="bg-teal-950/20 border border-teal-500/25 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-teal-200">📊 Market Snapshot — {searchedArea ?? "this area"}</h4>
+                <span className="text-[10px] text-gray-500">{market.n} properties analyzed</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  ["Median Value", market.medianValue ? `$${Math.round(market.medianValue / 1000)}k` : "—"],
+                  ["$/sqft", market.psf ? `$${market.psf}` : "—"],
+                  ["Distress density", `${market.distressRate}%`],
+                  ["At-risk (predicted)", `${market.predictedRate}%`],
+                  ["Avg equity", market.avgEquity != null ? `${market.avgEquity}%` : "—"],
+                  ["Gross rent yield", market.rentYield != null ? `${market.rentYield}%` : "—"],
+                  ["🔥 Hidden gems", String(market.gemCount)],
+                  ["Avg score", String(market.avgScore)],
+                ].map(([k, v]) => (
+                  <div key={k} className="bg-gray-900/50 border border-gray-700/40 rounded-lg px-2.5 py-2">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wide">{k}</p>
+                    <p className="text-sm font-bold text-white mt-0.5">{v}</p>
+                  </div>
+                ))}
+              </div>
+              {market.insights.length > 0 && (
+                <ul className="space-y-0.5">
+                  {market.insights.map((s, i) => <li key={i} className="text-[11px] text-gray-300 flex gap-2"><span className="text-teal-400 shrink-0">▸</span>{s}</li>)}
+                </ul>
+              )}
+              {market.topZips.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  <span className="text-[10px] text-gray-500 mr-1">Hottest ZIPs:</span>
+                  {market.topZips.map(z => (
+                    <button key={z.zip} onClick={() => { setP(q => ({ ...q, searchType: "zip", zipCode: z.zip })); }} title={`${z.distress} distressed of ${z.count}${z.medianValue ? ` · ~$${Math.round(z.medianValue / 1000)}k` : ""} — click to load this ZIP`} className="text-[10px] font-semibold bg-teal-700/30 text-teal-200 border border-teal-500/40 px-2 py-0.5 rounded hover:bg-teal-700/50">
+                      {z.zip} · {z.distress}🔴
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 🎯 Find Any Lead — motivated-seller categories from this search */}
           {!predictiveOnly && Object.keys(leadTypeCounts).length > 0 && (
