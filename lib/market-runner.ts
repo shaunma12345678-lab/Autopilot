@@ -1,6 +1,7 @@
 // Shared market-analysis orchestration (server-only). Runs the deep search +
-// pulls real Census fundamentals, then scores. Used by the on-demand endpoint
-// and the 24/7 cron so they stay identical.
+// pulls real, keyless fundamentals (Wikidata population/growth + BLS
+// unemployment), then scores. Used by the on-demand endpoint and the 24/7 cron
+// so they stay identical.
 
 import { deepSearch } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
