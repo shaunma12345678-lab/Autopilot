@@ -8,13 +8,9 @@
 export const maxDuration = 300
 
 import { NextRequest } from "next/server"
-import { deepSearch } from "@/lib/deep-search-engine"
-import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
-import { fillComps } from "@/lib/comp-engine"
-import { analyzeMarket, scoreStrategies } from "@/lib/market-analysis"
+import { runMarketAnalysis } from "@/lib/market-runner"
 import { TOP_MARKETS, UPCOMING_MARKETS } from "@/lib/markets-data"
 import { loadMarketCache, saveMarketCache, marketKey, type MarketEntry } from "@/lib/market-store"
-import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 const CRON_SECRET    = process.env.CRON_SECRET ?? ""
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
@@ -45,12 +41,9 @@ export async function GET(request: NextRequest) {
 
   for (const m of batch) {
     try {
-      const ds = await deepSearch({ searchType: "city", city: m.city, state: m.state, maxLeads: 250 })
-      const leads: ForeclosureLead[] = fillComps(ds.leads.map(freeLeadToForeclosureLead))
-      if (leads.length) {
-        const report = analyzeMarket(leads)
-        const strat = scoreStrategies(report)
-        const entry: MarketEntry = { city: m.city, state: m.state, report, strat, at: new Date().toISOString() }
+      const r = await runMarketAnalysis(m.city, m.state, 250)
+      if (r) {
+        const entry: MarketEntry = { city: m.city, state: m.state, report: r.report, strat: r.strat, fundamentals: r.fundamentals, fundScore: r.fundScore, fundReasons: r.fundReasons, at: new Date().toISOString() }
         cache.reports[marketKey(m.city, m.state)] = entry
         analyzed++
       }

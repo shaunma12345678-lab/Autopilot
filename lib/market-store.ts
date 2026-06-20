@@ -7,11 +7,17 @@
 import { prisma } from "@/lib/prisma"
 import { resolveLearningBusinessId } from "@/lib/learning-store"
 import type { MarketReport, MarketStrategies } from "@/lib/market-analysis"
+import type { Fundamentals } from "@/lib/market-fundamentals"
 
 const SLUG = "re-markets"
 const KEY  = "cache"
 
-export interface MarketEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; at: string }
+export interface MarketEntry {
+  city: string; state: string
+  report: MarketReport; strat: MarketStrategies
+  fundamentals?: Fundamentals | null; fundScore?: number | null; fundReasons?: string[]
+  at: string
+}
 export interface MarketCache { reports: Record<string, MarketEntry>; cursor: number }
 
 export function marketKey(city: string, state: string): string {

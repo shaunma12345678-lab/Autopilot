@@ -6,7 +6,7 @@
 // market stats — all computed from our own data.
 
 import { useState, useEffect, useMemo } from "react"
-import { analyzeMarket, scoreStrategies, type MarketReport, type MarketStrategies, type StrategyScore } from "@/lib/market-analysis"
+import type { MarketReport, MarketStrategies, StrategyScore } from "@/lib/market-analysis"
 import { TOP_MARKETS, UPCOMING_MARKETS, type Market } from "@/lib/markets-data"
 import { opportunityScore } from "@/lib/opportunity"
 import { openDealSheet } from "@/lib/deal-sheet"
@@ -42,9 +42,11 @@ function StrategyCard({ title, emoji, s }: { title: string; emoji: string; s: St
   )
 }
 
-interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; at: string }
+interface Fund { population: number | null; popGrowth5yr: number | null; medianIncome: number | null; povertyRate: number | null; unemploymentRate: number | null }
+interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; fundamentals?: Fund | null; fundScore?: number | null; fundReasons?: string[]; at: string }
 const mKey = (c: string, s: string) => `${c.toLowerCase().trim()}:${(s || "").toUpperCase().trim()}`
-const composite = (e?: CachedEntry) => (e ? Math.round((e.strat.flip.score + e.strat.longRental.score) / 2) : -1)
+// Rank weights fundamentals (real Census data) at 50%, deal economics at 50%.
+const composite = (e?: CachedEntry) => (e ? Math.round((typeof e.fundScore === "number" ? e.fundScore * 0.5 : (e.strat.flip.score + e.strat.longRental.score) / 4) + (e.strat.flip.score + e.strat.longRental.score) / (typeof e.fundScore === "number" ? 4 : 2)) : -1)
 const ago = (iso: string) => { const h = (Date.now() - new Date(iso).getTime()) / 3.6e6; return h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago` }
 
 function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: number; onClick: () => void; busy: boolean; entry?: CachedEntry }) {
@@ -64,7 +66,7 @@ function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: numbe
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[] } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
 
@@ -83,15 +85,14 @@ export default function MarketAnalysis({ password }: { password: string }) {
     if (!m.city.trim()) return
     setLoading(m.city); setError(null)
     try {
-      const res = await fetch("/api/leads/deep-search", {
+      const res = await fetch("/api/leads/market", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-password": password },
-        body: JSON.stringify({ searchType: "city", city: m.city.trim(), state: (m.state || "").trim(), maxLeads: depth }),
+        body: JSON.stringify({ city: m.city.trim(), state: (m.state || "").trim(), depth }),
       })
       const data = await res.json()
-      const leads: ForeclosureLead[] = data.leads ?? []
-      if (!leads.length) { setError(`No data for ${m.city} yet — run it again; the cache fills over time.`); }
-      else { const market = analyzeMarket(leads); setReport({ m, market, strat: scoreStrategies(market), leads, depth }) }
+      if (data?.error || !data?.report) { setError(data?.error ?? `No data for ${m.city} yet — run it again; the cache fills over time.`) }
+      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [] }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
@@ -102,7 +103,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth } = report
+    const { m, market, strat, leads, depth, fund, fundScore } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -134,6 +135,30 @@ export default function MarketAnalysis({ password }: { password: string }) {
             ))}
           </div>
         </div>
+        {/* Real market fundamentals (US Census) */}
+        {fund && (
+          <div className="bg-emerald-950/20 border border-emerald-500/25 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-emerald-200">📊 Market Fundamentals <span className="text-[10px] font-normal text-gray-500">· US Census (real data)</span></p>
+              {fundScore != null && <span className="text-xs font-bold text-emerald-300">Fundamentals score: {fundScore}/100</span>}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {[
+                ["Population", fund.population != null ? fund.population.toLocaleString() : "—"],
+                ["Pop growth 5yr", fund.popGrowth5yr != null ? `${fund.popGrowth5yr > 0 ? "+" : ""}${fund.popGrowth5yr}%` : "—"],
+                ["Median income", fund.medianIncome != null ? `$${Math.round(fund.medianIncome / 1000)}k` : "—"],
+                ["Poverty", fund.povertyRate != null ? `${fund.povertyRate}%` : "—"],
+                ["Unemployment", fund.unemploymentRate != null ? `${fund.unemploymentRate}%` : "—"],
+              ].map(([k, v]) => (
+                <div key={k} className="bg-gray-900/50 border border-gray-700/40 rounded-lg px-2.5 py-2">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wide">{k}</p>
+                  <p className="text-sm font-bold text-white mt-0.5">{v}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <StrategyCard title="Buy & Flip"          emoji="🔨" s={strat.flip} />
           <StrategyCard title="Short-term rental"   emoji="🏖" s={strat.shortRental} />
