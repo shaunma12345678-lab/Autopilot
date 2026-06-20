@@ -8,6 +8,7 @@
 // equityPercent, sqft, scoreBreakdown, occupancy, daysUntilAuction…).
 
 import type { ForeclosureLead, ScoreBreakdown } from "@/lib/agents/foreclosure-agent"
+import { carryingCosts } from "@/lib/strategy"
 
 export type RepairLevel = "light" | "medium" | "heavy"
 
@@ -21,6 +22,66 @@ export const REPAIR_LABEL: Record<RepairLevel, string> = {
 
 const ASSIGNMENT_FEE = 10_000 // default wholesale assignment fee
 const SQFT_FALLBACK   = 1_500
+
+// ── Explicit Max-Allowable-Offer formula (fix-&-flip / fixer-upper) ──────────
+// The investor's exact rule, broken out line by line instead of the shorthand
+// 70% rule:  MAO = ARV − resale commission − closing (buy + sell) − holding −
+// renovation − desired profit.  Transparent so every dollar is accounted for.
+const COMMISSION_PCT   = 0.06   // agent commission on the resale
+const CLOSING_BUY_PCT  = 0.02   // title/escrow/lender on acquisition (of ARV)
+const CLOSING_SELL_PCT = 0.02   // title/escrow/transfer on resale, excl. commission
+const HOLD_MONTHS      = 5      // typical flip timeline
+const PROFIT_PCT       = 0.12   // investor's required profit (of ARV)
+const MIN_PROFIT       = 15_000 // profit floor regardless of size
+const HARD_MONEY_RATE  = 0.11   // hard-money interest during the hold
+const UTILITIES_MO     = 250    // utilities/misc while holding
+
+export interface MaoLine { label: string; amount: number; deduction: boolean }
+export interface MaoBreakdown {
+  arv: number; commission: number; closingBuy: number; closingSell: number
+  holding: number; renovation: number; profit: number; mao: number
+  holdMonths: number; lines: MaoLine[]
+}
+
+export interface MaoOpts {
+  commissionPct?: number; closingBuyPct?: number; closingSellPct?: number
+  holdMonths?: number; profitPct?: number; minProfit?: number
+}
+
+// Build the full MAO breakdown for a property at a given ARV + rehab cost.
+export function flipMaoBreakdown(lead: ForeclosureLead, arv: number, repairCost: number, opts?: MaoOpts): MaoBreakdown {
+  const commissionPct  = opts?.commissionPct  ?? COMMISSION_PCT
+  const closingBuyPct  = opts?.closingBuyPct  ?? CLOSING_BUY_PCT
+  const closingSellPct = opts?.closingSellPct ?? CLOSING_SELL_PCT
+  const holdMonths     = opts?.holdMonths     ?? HOLD_MONTHS
+  const profitPct      = opts?.profitPct      ?? PROFIT_PCT
+
+  const commission  = Math.round(arv * commissionPct)
+  const closingBuy  = Math.round(arv * closingBuyPct)
+  const closingSell = Math.round(arv * closingSellPct)
+
+  const cc = carryingCosts(lead)
+  const taxYr = cc.propertyTaxYr ?? Math.round(arv * 0.011)
+  const insYr = cc.insuranceYr  ?? Math.round(arv * 0.005)
+  const financing = Math.round(arv * 0.65 * (HARD_MONEY_RATE / 12) * holdMonths) // interest on ~65% LTV
+  const holding = Math.round(((taxYr + insYr) / 12 + UTILITIES_MO) * holdMonths + financing)
+
+  const renovation = Math.max(0, Math.round(repairCost))
+  const profit = Math.max(Math.round(arv * profitPct), opts?.minProfit ?? MIN_PROFIT)
+  const mao = Math.max(0, Math.round(arv - commission - closingBuy - closingSell - holding - renovation - profit))
+
+  const lines: MaoLine[] = [
+    { label: "After-Repair Value (ARV)",                       amount: arv,         deduction: false },
+    { label: `Resale commission (${Math.round(commissionPct * 100)}%)`, amount: commission,  deduction: true },
+    { label: "Closing costs — buy",                            amount: closingBuy,  deduction: true },
+    { label: "Closing costs — sell",                           amount: closingSell, deduction: true },
+    { label: `Holding (${holdMonths} mo: taxes, insurance, utilities, interest)`, amount: holding, deduction: true },
+    { label: "Renovation",                                     amount: renovation,  deduction: true },
+    { label: "Desired profit",                                 amount: profit,      deduction: true },
+    { label: "Max Allowable Offer",                            amount: mao,         deduction: false },
+  ]
+  return { arv, commission, closingBuy, closingSell, holding, renovation, profit, mao, holdMonths, lines }
+}
 
 const SCORE_META: { key: keyof ScoreBreakdown; label: string; max: number }[] = [
   { key: "equity",   label: "Equity position",  max: 35 },
@@ -103,6 +164,7 @@ export interface DealAnalysis {
   repairCost:      number
   totalDebt:       number
   mao:             number          // max allowable offer (70% rule − repairs)
+  maoDetail:       MaoBreakdown | null  // explicit MAO formula, line by line (flip/fixer)
   equityAvailable: number          // arv − totalDebt
   equityPercent:   number          // 0-100
   wholesaleSpread: number          // mao − totalDebt (assignable room)
@@ -212,6 +274,8 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?
 
   const repairCost = hasValue ? repairCostFor(lead, repairLevel) : 0
   const mao = hasValue ? Math.max(0, Math.round(arv * maoPct - repairCost - assignmentFee)) : 0
+  // Explicit fix-&-flip MAO (the full investor formula, line by line).
+  const maoDetail = hasValue ? flipMaoBreakdown(lead, arv, repairCost) : null
   const equityAvailable = hasValue ? Math.max(0, arv - totalDebt) : 0
   const equityPercent = hasValue ? Math.round((equityAvailable / arv) * 100) : (lead.equityPercent ?? 0)
   const wholesaleSpread = hasValue ? mao - totalDebt : 0
@@ -344,7 +408,7 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?
   else verdict = { call: "Pass", reason: "Margin too thin at current numbers." }
 
   return {
-    hasValue, arv, repairLevel, repairCost, totalDebt, mao,
+    hasValue, arv, repairLevel, repairCost, totalDebt, mao, maoDetail,
     equityAvailable, equityPercent, wholesaleSpread, flipProfit,
     grade, motivation, exit, risks, scoreParts, narrative,
     debtEstimated, estimatedPayoff: payoff?.balance ?? null, bankruptcy, chronic,

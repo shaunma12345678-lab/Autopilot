@@ -63,6 +63,21 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
   ].filter(Boolean)
   const contactHtml = contact.length ? contact.join(" &nbsp;·&nbsp; ") : '<span style="color:#64748b">Run skip-trace to reveal owner contact</span>'
 
+  const maoBlock = a.maoDetail ? `
+    <div class="card" style="border-color:#bfdbfe;background:#eff6ff">
+      <div class="h">Max Allowable Offer — Full Breakdown</div>
+      <table>
+        ${a.maoDetail.lines.map((ln, i) => {
+          const last = i === a.maoDetail!.lines.length - 1
+          const color = last ? "#1d4ed8" : ln.deduction ? "#b91c1c" : "#0f172a"
+          const weight = (last || i === 0) ? "700" : "400"
+          const val = (ln.deduction ? "− " : "") + m(ln.amount)
+          return `<tr${last ? ' style="border-top:2px solid #1d4ed8"' : ""}><td style="font-weight:${weight}">${esc(ln.label)}</td><td style="text-align:right;color:${color};font-weight:${weight}">${val}</td></tr>`
+        }).join("")}
+      </table>
+      <p style="margin:8px 0 0;color:#64748b;font-size:11px">Offer at or below the MAO to keep the full projected profit. Renovation = ${esc(a.repairLevel)} rehab.</p>
+    </div>` : ""
+
   const strat = bestStrategy(lead)
   const cc    = carryingCosts(lead)
   const carryBlock = (cc.propertyTaxYr != null || cc.insuranceYr != null) ? `
@@ -139,6 +154,8 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
       <div class="h">Why It's a Deal</div>
       <ul>${whyList}</ul>
     </div>
+
+    ${maoBlock}
 
     ${carryBlock}
 
