@@ -6,6 +6,7 @@
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { predictPreForeclosure } from "@/lib/predictive"
+import { bestStrategy, carryingCosts } from "@/lib/strategy"
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!))
@@ -61,6 +62,19 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
     ...(lead.phones ?? []).slice(0, 3).map((p) => `📞 ${esc(p)}`),
   ].filter(Boolean)
   const contactHtml = contact.length ? contact.join(" &nbsp;·&nbsp; ") : '<span style="color:#64748b">Run skip-trace to reveal owner contact</span>'
+
+  const strat = bestStrategy(lead)
+  const cc    = carryingCosts(lead)
+  const carryBlock = (cc.propertyTaxYr != null || cc.insuranceYr != null) ? `
+    <div class="card">
+      <div class="h">Strategy & Carrying Costs</div>
+      <p style="margin:0 0 8px;font-size:14px"><b>${strat.emoji} ${esc(strat.strategy)}</b> — <span style="color:#475569">${esc(strat.why)}</span></p>
+      <div class="grid" style="margin:0">
+        <div class="cell"><div class="k">Est. Property Tax / yr</div><div class="v">${cc.propertyTaxYr != null ? m(cc.propertyTaxYr) : "—"}${cc.rate != null ? ` <span style="font-size:11px;color:#64748b">(${cc.rate}%)</span>` : ""}</div></div>
+        <div class="cell"><div class="k">Est. Insurance / yr</div><div class="v">${cc.insuranceYr != null ? m(cc.insuranceYr) : "—"}</div></div>
+        <div class="cell"><div class="k">Est. Carry / mo</div><div class="v">${cc.propertyTaxYr != null && cc.insuranceYr != null ? m(Math.round((cc.propertyTaxYr + cc.insuranceYr) / 12)) : "—"}</div></div>
+      </div>
+    </div>` : ""
 
   const vc = VERDICT_COLOR[a.verdict.call] ?? "#0f172a"
 
@@ -125,6 +139,8 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
       <div class="h">Why It's a Deal</div>
       <ul>${whyList}</ul>
     </div>
+
+    ${carryBlock}
 
     ${predBlock}
 

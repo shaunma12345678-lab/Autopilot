@@ -42,10 +42,10 @@ function StrategyCard({ title, emoji, s }: { title: string; emoji: string; s: St
   )
 }
 
-interface Fund { population: number | null; popGrowth5yr: number | null; medianIncome: number | null; povertyRate: number | null; unemploymentRate: number | null }
+interface Fund { population: number | null; popGrowth5yr: number | null; medianIncome: number | null; povertyRate: number | null; unemploymentRate: number | null; growthFrom?: string; source?: string }
 interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; fundamentals?: Fund | null; fundScore?: number | null; fundReasons?: string[]; at: string }
 const mKey = (c: string, s: string) => `${c.toLowerCase().trim()}:${(s || "").toUpperCase().trim()}`
-// Rank weights fundamentals (real Census data) at 50%, deal economics at 50%.
+// Rank weights fundamentals (real population/jobs data) at 50%, deal economics at 50%.
 const composite = (e?: CachedEntry) => (e ? Math.round((typeof e.fundScore === "number" ? e.fundScore * 0.5 : (e.strat.flip.score + e.strat.longRental.score) / 4) + (e.strat.flip.score + e.strat.longRental.score) / (typeof e.fundScore === "number" ? 4 : 2)) : -1)
 const ago = (iso: string) => { const h = (Date.now() - new Date(iso).getTime()) / 3.6e6; return h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago` }
 
@@ -103,7 +103,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth, fund, fundScore, fundConfigured } = report
+    const { m, market, strat, leads, depth, fund, fundScore } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -135,16 +135,11 @@ export default function MarketAnalysis({ password }: { password: string }) {
             ))}
           </div>
         </div>
-        {/* Real market fundamentals (US Census) */}
-        {!fundConfigured && (
-          <div className="bg-amber-950/20 border border-amber-500/25 rounded-xl px-3 py-2">
-            <p className="text-[11px] text-amber-200">📊 Real market fundamentals (population, income, jobs, poverty) need a <b>free Census API key</b>. Get one at census.gov/data/key_signup.html and add <code className="text-amber-100">CENSUS_API_KEY</code> to the Vercel env — then population/job-growth scoring goes live.</p>
-          </div>
-        )}
+        {/* Real market fundamentals — our own keyless engine (Wikidata + BLS) */}
         {fund && (
           <div className="bg-emerald-950/20 border border-emerald-500/25 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-semibold text-emerald-200">📊 Market Fundamentals <span className="text-[10px] font-normal text-gray-500">· US Census (real data)</span></p>
+              <p className="text-sm font-semibold text-emerald-200">📊 Market Fundamentals <span className="text-[10px] font-normal text-gray-500">· live public data ({fund.source ?? "Wikidata · BLS"})</span></p>
               {fundScore != null && <span className="text-xs font-bold text-emerald-300">Fundamentals score: {fundScore}/100</span>}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
