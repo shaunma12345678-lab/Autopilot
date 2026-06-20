@@ -61,7 +61,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
   const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number } | null>(null)
   const [manual, setManual]   = useState("")
 
-  const analyze = async (m: Market | { city: string; state: string }, depth = 300) => {
+  const analyze = async (m: Market | { city: string; state: string }, depth = 500) => {
     if (!m.city.trim()) return
     setLoading(m.city); setError(null)
     try {
