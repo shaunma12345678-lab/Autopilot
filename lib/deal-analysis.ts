@@ -201,7 +201,7 @@ export interface RentalAnalysis {
   onePercent: boolean  // passes the 1% rule
 }
 
-export interface AnalyzeOpts { fallbackPsf?: number; maoPct?: number; assignmentFee?: number }
+export interface AnalyzeOpts { fallbackPsf?: number; maoPct?: number; assignmentFee?: number; repairCap?: number }
 
 // #3 ARV fallback: appreciate the purchase price to today when no value exists.
 function appreciatedValue(lead: ForeclosureLead): number | null {
@@ -272,7 +272,9 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?
   const debtEstimated = recordedDebt <= 0 && payoff !== null
   const totalDebt = recordedDebt > 0 ? recordedDebt : (payoff?.balance ?? 0)
 
-  const repairCost = hasValue ? repairCostFor(lead, repairLevel) : 0
+  // Rehab from sqft, optionally capped to a share of ARV so a cheap home isn't
+  // assigned a rehab bigger than the house is worth (caller opts in).
+  const repairCost = hasValue ? Math.min(repairCostFor(lead, repairLevel), opts?.repairCap ?? Number.POSITIVE_INFINITY) : 0
   const mao = hasValue ? Math.max(0, Math.round(arv * maoPct - repairCost - assignmentFee)) : 0
   // Explicit fix-&-flip MAO (the full investor formula, line by line).
   const maoDetail = hasValue ? flipMaoBreakdown(lead, arv, repairCost) : null

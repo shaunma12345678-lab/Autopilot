@@ -49,8 +49,14 @@ export interface FixerDeal {
   fixerScore:       number   // 0-100 — flip margin + condition + motivation + equity room
 }
 
+// Rehab shouldn't exceed a sane share of the after-repair value by scope.
+const REHAB_CAP_PCT: Record<RepairLevel, number> = { light: 0.12, medium: 0.22, heavy: 0.35 }
+
 export function analyzeFixer(lead: ForeclosureLead, fallbackPsf?: number): FixerDeal | null {
-  const deal = analyzeDeal(lead, fixerRepairLevel(lead), fallbackPsf ? { fallbackPsf } : undefined)
+  const level = fixerRepairLevel(lead)
+  const arvGuess = lead.avmValue ?? lead.estimatedValue ?? 0
+  const repairCap = arvGuess > 0 ? Math.round((arvGuess * REHAB_CAP_PCT[level]) / 500) * 500 : undefined
+  const deal = analyzeDeal(lead, level, { repairCap, ...(fallbackPsf ? { fallbackPsf } : {}) })
   if (!deal.hasValue || !deal.maoDetail) return null   // need an ARV to underwrite a flip
 
   const conditionSignals = fixerCondition(lead)
