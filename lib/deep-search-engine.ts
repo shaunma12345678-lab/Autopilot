@@ -43,6 +43,28 @@ const KNOWN_COUNTY_NAMES: Record<string, string> = {
 // marketing text like "No Reserve Auctions", "grossed billions", etc.).
 const ADDRESS_JUNK_RX = /\b(no reserve|auctions|grossed|billion|properties and|car auction|click here|view more|learn more|opening bid|sign in|create account)\b/i
 
+// Border cities that fall just outside a neighboring county's bounding box — so
+// a county search doesn't pull, e.g., Chino Hills (San Bernardino) into LA.
+const CITY_COUNTY: Record<string, string> = {
+  "chino hills": "san bernardino", "chino": "san bernardino", "ontario": "san bernardino",
+  "montclair": "san bernardino", "upland": "san bernardino", "rancho cucamonga": "san bernardino",
+  "fontana": "san bernardino", "rialto": "san bernardino", "san bernardino": "san bernardino",
+  "corona": "riverside", "norco": "riverside", "eastvale": "riverside", "riverside": "riverside",
+  "anaheim": "orange", "santa ana": "orange", "irvine": "orange", "huntington beach": "orange",
+  "diamond bar": "los angeles", "pomona": "los angeles", "long beach": "los angeles",
+  "lancaster": "los angeles", "palmdale": "los angeles", "los angeles": "los angeles",
+}
+
+// Best-effort county for a lead: CA-DOJ leads carry their county in rawSignals;
+// otherwise fall back to a known city→county lookup. null = unknown (keep it).
+function leadCounty(l: FreeLead): string | null {
+  const sig = (l.rawSignals ?? []).join(" ")
+  const m = sig.match(/[—-]\s*([A-Za-z .]+?)\s+County\b/i) ?? sig.match(/\b([A-Za-z .]+?)\s+County\b/i)
+  if (m) return m[1].toLowerCase().trim()
+  const city = (l.city ?? "").toLowerCase().trim()
+  return CITY_COUNTY[city] ?? null
+}
+
 function isValidPropertyAddress(address: string | undefined): boolean {
   const a = (address ?? "").trim()
   if (a.length < 6 || a.length > 90) return false
@@ -531,6 +553,16 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
       seen.add(key)
       deduped.push(lead)
     }
+  }
+
+  // County scoping — for a county search, drop leads we can identify as being in
+  // a DIFFERENT county (CA-DOJ county tag or city→county). This keeps a Los
+  // Angeles County search inside LA's cities instead of bleeding Chino Hills
+  // (San Bernardino) across the border, and filters polluted cache too.
+  if (primary.searchType === "county" && primary.county) {
+    const tc = primary.county.toLowerCase().replace(/\s+county\s*$/i, "").trim()
+    const scoped = deduped.filter((l) => { const c = leadCounty(l); return c == null || c === tc })
+    if (scoped.length > 0) { deduped.length = 0; deduped.push(...scoped) }
   }
 
   // Locality rank — the user's exact city/zip first, then same-region, then the
