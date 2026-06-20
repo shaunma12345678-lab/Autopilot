@@ -8,6 +8,9 @@
 import { useState } from "react"
 import { analyzeMarket, scoreStrategies, type MarketReport, type MarketStrategies, type StrategyScore } from "@/lib/market-analysis"
 import { TOP_MARKETS, UPCOMING_MARKETS, type Market } from "@/lib/markets-data"
+import { opportunityScore } from "@/lib/opportunity"
+import { openDealSheet } from "@/lib/deal-sheet"
+import { fmtMoney } from "@/lib/deal-analysis"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 const GRADE_CLR: Record<string, string> = {
@@ -55,32 +58,40 @@ function MarketCard({ m, rank, onClick, busy }: { m: Market; rank?: number; onCl
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number } | null>(null)
   const [manual, setManual]   = useState("")
 
-  const analyze = async (m: Market | { city: string; state: string }) => {
+  const analyze = async (m: Market | { city: string; state: string }, depth = 300) => {
     if (!m.city.trim()) return
     setLoading(m.city); setError(null)
     try {
       const res = await fetch("/api/leads/deep-search", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-password": password },
-        body: JSON.stringify({ searchType: "city", city: m.city.trim(), state: (m.state || "").trim(), maxLeads: 200 }),
+        body: JSON.stringify({ searchType: "city", city: m.city.trim(), state: (m.state || "").trim(), maxLeads: depth }),
       })
       const data = await res.json()
       const leads: ForeclosureLead[] = data.leads ?? []
       if (!leads.length) { setError(`No data for ${m.city} yet — run it again; the cache fills over time.`); }
-      else { const market = analyzeMarket(leads); setReport({ m, market, strat: scoreStrategies(market) }) }
+      else { const market = analyzeMarket(leads); setReport({ m, market, strat: scoreStrategies(market), leads, depth }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
 
+  // Top leads in the market, ranked by hidden-gem opportunity.
+  const topLeads = (leads: ForeclosureLead[]) =>
+    [...leads].sort((a, b) => opportunityScore(b).score - opportunityScore(a).score).slice(0, 20)
+
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat } = report
+    const { m, market, strat, leads, depth } = report
+    const tl = topLeads(leads)
     return (
       <div className="space-y-4">
-        <button onClick={() => setReport(null)} className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold">← Back to markets</button>
+        <div className="flex items-center justify-between">
+          <button onClick={() => setReport(null)} className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold">← Back to markets</button>
+          <button onClick={() => analyze(m, depth >= 500 ? 1000 : 500)} disabled={!!loading} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 disabled:opacity-50 text-white border border-indigo-400/40">{loading ? "Searching…" : `🔍 Deeper search (${depth >= 500 ? 1000 : 500})`}</button>
+        </div>
         <div className="bg-gradient-to-r from-indigo-950/50 to-violet-950/40 border border-indigo-500/25 rounded-2xl p-5">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h4 className="text-xl font-bold text-white">{m.city}{m.state ? `, ${m.state}` : ""}</h4>
@@ -117,6 +128,36 @@ export default function MarketAnalysis({ password }: { password: string }) {
             <ul className="space-y-0.5">{market.insights.map((s, i) => <li key={i} className="text-[11px] text-gray-300 flex gap-2"><span className="text-indigo-400 shrink-0">▸</span>{s}</li>)}</ul>
           </div>
         )}
+        {/* 🔍 Find leads in this market */}
+        <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-700/40 flex items-center justify-between">
+            <p className="text-sm font-semibold text-white">🔍 Top leads in {m.city} <span className="text-[11px] font-normal text-gray-500">· {leads.length} found, best {tl.length}</span></p>
+            <span className="text-[10px] text-gray-500">ranked by hidden-gem opportunity</span>
+          </div>
+          <div className="divide-y divide-gray-800/50 max-h-[420px] overflow-y-auto">
+            {tl.map((l) => {
+              const opp = opportunityScore(l)
+              return (
+                <div key={l.attomId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-800/20">
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${opp.tier === "gem" ? "bg-orange-500/20 text-orange-300 border-orange-500/40" : opp.tier === "strong" ? "bg-amber-500/15 text-amber-300 border-amber-500/30" : "bg-gray-700/40 text-gray-400 border-gray-700"}`}>{opp.score}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-white truncate">{l.address}</p>
+                    <p className="text-[11px] text-gray-500 truncate">{l.city}, {l.state} {l.zip}{l.ownerName && !/unknown/i.test(l.ownerName) ? ` · ${l.ownerName}` : ""}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs text-white">{fmtMoney(l.estimatedValue ?? l.avmValue ?? 0)}</p>
+                    <p className="text-[10px] text-gray-500">score {l.score ?? 0}</p>
+                  </div>
+                  <button onClick={() => openDealSheet(l)} title="Open deal sheet" className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-400/40 shrink-0">📄</button>
+                </div>
+              )
+            })}
+          </div>
+          <div className="px-4 py-2.5 border-t border-gray-700/40">
+            <p className="text-[11px] text-gray-500">Open the <span className="text-indigo-300 font-semibold">🏚 Real Estate</span> tab and search “{m.city}{m.state ? `, ${m.state}` : ""}” to skip-trace, save, and run outreach on these.</p>
+          </div>
+        </div>
+
         <p className="text-[10px] text-gray-600">Flip &amp; long-term-rental use live deal data; short/mid-term are modeled estimates (add an STR-data key for real Airbnb demand).</p>
       </div>
     )
