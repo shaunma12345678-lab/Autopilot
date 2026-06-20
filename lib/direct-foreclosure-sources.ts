@@ -17,6 +17,7 @@ import type { FreeLead } from "@/lib/free-foreclosure-scraper"
 import { geocodeArea, type GeoBox } from "@/lib/geocoding"
 import { COUNTY_BOXES, tileBox, tilesForTarget, withConcurrency } from "@/lib/geo-tiles"
 import { fetchOpenDataLeads } from "@/lib/open-data-sources"
+import { fetchCountyRecords } from "@/lib/county-data"
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -1019,7 +1020,7 @@ export async function searchDirectSources(params: {
   const [
     zillowLeads, redfinLeads,
     homePathLeads, homeStepsLeads,
-    arcgisLeads, openDataLeads,
+    arcgisLeads, openDataLeads, countyRecordsLeads,
     auctionLeads, hudLeads, usdaLeads, bid4Leads,
     fcComLeads, legalNoticeLeads,
   ] = await Promise.all([
@@ -1029,6 +1030,7 @@ export async function searchDirectSources(params: {
     box ? scrapeHomeSteps(box)              : Promise.resolve([]),
     box ? queryArcGISHub(box, areaLabel)    : Promise.resolve([]),
     fetchOpenDataLeads(box, state, params.leadType),   // gov open data (code/vacant/tax/lien)
+    fetchCountyRecords({ countyId: params.countyId, county: countyName, city: params.city, state, zipCode: params.zipCode }), // county/city Socrata records
     scrapeAuctionCom(params),
     scrapeHudReo({ state, county: countyName }),
     scrapeUsda(state),
@@ -1044,6 +1046,7 @@ export async function searchDirectSources(params: {
   if (homeStepsLeads.length)    sourceCounts["HomeSteps (Freddie)"] = homeStepsLeads.length
   if (arcgisLeads.length)       sourceCounts["County records"]   = arcgisLeads.length
   if (openDataLeads.length)     sourceCounts["Gov open data"]    = openDataLeads.length
+  if (countyRecordsLeads.length) sourceCounts["County records"]   = countyRecordsLeads.length
   if (auctionLeads.length)      sourceCounts["auction.com"]      = auctionLeads.length
   if (hudLeads.length)          sourceCounts["HUD REO"]          = hudLeads.length
   if (usdaLeads.length)         sourceCounts["USDA RD"]          = usdaLeads.length
@@ -1055,6 +1058,7 @@ export async function searchDirectSources(params: {
   const seen = new Set<string>()
   const leads = [
     // Highest quality (have verified addresses) first
+    ...countyRecordsLeads,
     ...openDataLeads,
     ...arcgisLeads,
     ...hudLeads,
