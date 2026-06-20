@@ -5,7 +5,7 @@
 // flips and short / mid / long-term rentals, the "best for" verdict, and the
 // market stats — all computed from our own data.
 
-import { useState } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { analyzeMarket, scoreStrategies, type MarketReport, type MarketStrategies, type StrategyScore } from "@/lib/market-analysis"
 import { TOP_MARKETS, UPCOMING_MARKETS, type Market } from "@/lib/markets-data"
 import { opportunityScore } from "@/lib/opportunity"
@@ -42,15 +42,21 @@ function StrategyCard({ title, emoji, s }: { title: string; emoji: string; s: St
   )
 }
 
-function MarketCard({ m, rank, onClick, busy }: { m: Market; rank?: number; onClick: () => void; busy: boolean }) {
+interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; at: string }
+const mKey = (c: string, s: string) => `${c.toLowerCase().trim()}:${(s || "").toUpperCase().trim()}`
+const composite = (e?: CachedEntry) => (e ? Math.round((e.strat.flip.score + e.strat.longRental.score) / 2) : -1)
+const ago = (iso: string) => { const h = (Date.now() - new Date(iso).getTime()) / 3.6e6; return h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago` }
+
+function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: number; onClick: () => void; busy: boolean; entry?: CachedEntry }) {
+  const c = composite(entry)
   return (
     <button onClick={onClick} disabled={busy} className="text-left bg-gray-900/60 border border-gray-700/40 rounded-xl p-3 hover:border-indigo-500/50 hover:bg-gray-800/40 transition-all disabled:opacity-50">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold text-white truncate">{rank != null && <span className="text-gray-600 mr-1">#{rank}</span>}{m.city}, {m.state}</p>
-        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${TAG_CLR[m.tag]}`}>{m.tag}</span>
+        {c >= 0 ? <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${GRADE_CLR[c >= 65 ? "A" : c >= 50 ? "C" : "D"]}`}>{c}</span> : <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${TAG_CLR[m.tag]}`}>{m.tag}</span>}
       </div>
       <p className="text-[11px] text-gray-500 mt-1 line-clamp-2">{m.why}</p>
-      <p className="text-[10px] text-indigo-400 font-semibold mt-1.5">Analyze →</p>
+      {entry ? <p className="text-[10px] text-emerald-400 font-semibold mt-1.5">🏆 {entry.strat.bestFor} · updated {ago(entry.at)} →</p> : <p className="text-[10px] text-indigo-400 font-semibold mt-1.5">Analyze →</p>}
     </button>
   )
 }
@@ -60,6 +66,18 @@ export default function MarketAnalysis({ password }: { password: string }) {
   const [error, setError]     = useState<string | null>(null)
   const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number } | null>(null)
   const [manual, setManual]   = useState("")
+  const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
+
+  // Load the 24/7-analyzed reports so the lists rank by LIVE data.
+  useEffect(() => {
+    fetch("/api/cron/markets?read=1", { headers: { "x-admin-password": password } })
+      .then(r => r.json()).then(d => { if (d?.reports) setCached(d.reports) }).catch(() => {})
+  }, [password])
+
+  const sortByLive = (list: Market[]) => [...list].sort((a, b) => composite(cached[mKey(b.city, b.state)]) - composite(cached[mKey(a.city, a.state)]))
+  const topSorted = useMemo(() => sortByLive(TOP_MARKETS), [cached])        // eslint-disable-line react-hooks/exhaustive-deps
+  const upSorted  = useMemo(() => sortByLive(UPCOMING_MARKETS), [cached])   // eslint-disable-line react-hooks/exhaustive-deps
+  const cachedCount = Object.keys(cached).length
 
   const analyze = async (m: Market | { city: string; state: string }, depth = 500) => {
     if (!m.city.trim()) return
@@ -180,16 +198,19 @@ export default function MarketAnalysis({ password }: { password: string }) {
       </div>
 
       <div>
-        <h4 className="text-sm font-semibold text-white mb-2">🏆 Top 20 Markets</h4>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-sm font-semibold text-white">🏆 Top 20 Markets</h4>
+          <span className="text-[10px] text-gray-500">{cachedCount > 0 ? `🔄 analyzed 24/7 · ${cachedCount} cached · ranked by live score` : "ranked by live data once the 24/7 analyzer runs"}</span>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {TOP_MARKETS.map((m, i) => <MarketCard key={m.city} m={m} rank={i + 1} onClick={() => analyze(m)} busy={!!loading} />)}
+          {topSorted.map((m, i) => <MarketCard key={m.city} m={m} rank={i + 1} onClick={() => analyze(m)} busy={!!loading} entry={cached[mKey(m.city, m.state)]} />)}
         </div>
       </div>
 
       <div>
         <h4 className="text-sm font-semibold text-white mb-2">🌱 Upcoming Cities <span className="text-[11px] font-normal text-gray-500">— lower cost, high potential</span></h4>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {UPCOMING_MARKETS.map((m) => <MarketCard key={m.city} m={m} onClick={() => analyze(m)} busy={!!loading} />)}
+          {upSorted.map((m) => <MarketCard key={m.city} m={m} onClick={() => analyze(m)} busy={!!loading} entry={cached[mKey(m.city, m.state)]} />)}
         </div>
       </div>
     </div>
