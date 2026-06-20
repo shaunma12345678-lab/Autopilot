@@ -516,6 +516,9 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   // every normal (not predictive) search. Best-effort.
   const cacheable = (params.mode ?? "filings") !== "predictive"
   const cacheKey  = areaCacheKey({ searchType: primary.searchType, zipCode: primary.zipCode, city: primary.city, county: primary.county, state: primary.state })
+  // Leads found on THIS run (before cache merge) → their "last seen" resets to
+  // now; older cached leads keep their timestamp so stale deals age out.
+  const freshKeys = new Set(seen)
   if (cacheable) {
     const cached = await loadAreaCache(cacheKey, params.businessId)
     for (const lead of cached) {
@@ -569,7 +572,7 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
   // Persist the merged pool (fresh ∪ cached) so the area's lead count keeps
   // growing and never collapses on a later flaky run. Fire-and-forget.
   if (cacheable && deduped.length > 0) {
-    void saveAreaCache(cacheKey, deduped, params.businessId)
+    void saveAreaCache(cacheKey, deduped, freshKeys, params.businessId)
   }
 
   // ── Intelligence pass — zero-cost, never-throws enrichment of every lead ──

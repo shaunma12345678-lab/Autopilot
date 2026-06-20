@@ -19,6 +19,7 @@ import { telHref, smsHref, mailtoHref, printLetter, printLetterBatch } from "@/l
 import { featurize, leadArea, adaptiveScore, type LearnedModel } from "@/lib/learning-engine"
 import { LEAD_TYPES, classifyLead, leadHasType, typeCounts, leadTypeMeta } from "@/lib/lead-types"
 import { leadSignature } from "@/lib/seen-leads"
+import { opportunityScore } from "@/lib/opportunity"
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -703,6 +704,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
   const p = PRI[lead.priority]
   const liens = lead.juniorLiens ?? []
   const pred = predictPreForeclosure(lead)
+  const opp = opportunityScore(lead)
 
   return (
     <>
@@ -733,6 +735,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
             {liens.length > 0 && <span className="text-[9px] bg-red-600/20 text-red-300 px-1 rounded" title={liens.map(l => l.label).join(", ")}>⚠ {liens.length} lien{liens.length === 1 ? "" : "s"}</span>}
             {lead.ownerType === "corporate" && <span className="text-[9px] bg-gray-700/40 text-gray-400 px-1 rounded">LLC</span>}
             {classifyLead(lead).filter(id => !["foreclosure","predicted","absentee","taxdelq","vacant","liens"].includes(id)).slice(0, 2).map(id => { const m = leadTypeMeta(id); return m ? <span key={id} className={`text-[9px] px-1 rounded border ${m.cls}`} title={m.label}>{m.emoji} {m.label.split(" ")[0]}</span> : null })}
+            {opp.tier === "gem" && <span className="text-[9px] font-bold bg-orange-500/20 text-orange-300 border border-orange-500/40 px-1 rounded" title={`Hidden gem (${opp.score}/100): ${opp.reasons.join(" · ")}`}>🔥 GEM</span>}
           </div>
         </td>
         <td className="px-3 py-3">
@@ -1327,6 +1330,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
   const [learnModel, setLearnModel] = useState<LearnedModel | null>(null)
   const [smartRank, setSmartRank]   = useState(false)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)   // 🎯 Find Any Lead category
+  const [gemsSort, setGemsSort]     = useState(false)                  // 🔥 Hidden Gems — deals nobody else is working
   // Load what the system has learned so far.
   useEffect(() => {
     if (!businessId) return
@@ -1629,10 +1633,12 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     if (assistantFilter) ls = ls.filter(l => matchesAssistant(l, assistantFilter))
     if (typeFilter) ls = ls.filter(l => leadHasType(l, typeFilter))   // 🎯 Find Any Lead
     if (fitIds) ls = [...ls].sort((a, b) => (fitIds.has(b.attomId) ? 1 : 0) - (fitIds.has(a.attomId) ? 1 : 0) || (b.score ?? 0) - (a.score ?? 0))
+    // 🔥 Hidden Gems — surface cross-corroborated, off-market deals nobody else is working.
+    if (gemsSort) ls = [...ls].sort((a, b) => opportunityScore(b).score - opportunityScore(a).score)
     // 🧠 Smart Rank — re-order by the learned model (what you actually pursue).
     if (smartRank && learnModel?.ready) ls = [...ls].sort((a, b) => adaptiveScore(b, learnModel) - adaptiveScore(a, learnModel))
     return ls
-  }, [predictiveOnly, predictiveResult, sorted, zoneIds, assistantFilter, typeFilter, fitIds, smartRank, learnModel])
+  }, [predictiveOnly, predictiveResult, sorted, zoneIds, assistantFilter, typeFilter, fitIds, gemsSort, smartRank, learnModel])
 
   // 🎯 Find Any Lead — counts per motivated-seller category across the results.
   const leadTypeCounts = useMemo(() => (result ? typeCounts(result.leads) : {}), [result])
@@ -1919,6 +1925,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
               <button onClick={skipTraceAll} disabled={traceBusy} className="bg-indigo-700/40 border border-indigo-500/40 hover:bg-indigo-700/60 disabled:opacity-50 text-indigo-200 text-xs font-semibold px-3 rounded-lg" title="Find owner names + phones/emails for all shown leads (powers personalized mail & calling/texting)">{traceBusy ? "Tracing…" : traceDone != null ? `✓ ${traceDone} traced` : "👤 Skip-trace all"}</button>
               <button onClick={() => setSmartRank(v => !v)} disabled={!learnModel?.ready} title={learnModel?.ready ? "Re-rank by what your system has learned you pursue" : `Learning… ${learnModel?.nPursued ?? 0}/3 — save or open a few deals you like to unlock`} className={`text-xs font-semibold px-3 rounded-lg border disabled:opacity-50 ${smartRank && learnModel?.ready ? "bg-fuchsia-600 border-fuchsia-400 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`}>🧠 Smart Rank{learnModel?.ready ? "" : " 🔒"}</button>
+              <button onClick={() => setGemsSort(v => !v)} title="Surface the deals nobody else is working — multiple distress signals corroborating on off-market properties (low competition, high motivation)" className={`text-xs font-semibold px-3 rounded-lg border ${gemsSort ? "bg-orange-600 border-orange-400 text-white" : "bg-orange-700/30 border-orange-500/40 text-orange-200 hover:bg-orange-700/50"}`}>🔥 Hidden Gems</button>
             </div>
             {forYou && !learned && <p className="text-[11px] text-violet-300/80 mt-2">Teaching mode: move 3+ deals to Offer/Contract/Closed in their CRM, then “For you” ranks new deals like those.</p>}
             {learnModel && (learnModel.insights.length > 0 || learnModel.topAreas.length > 0) && (
