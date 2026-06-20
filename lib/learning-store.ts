@@ -40,13 +40,13 @@ export async function saveLearningTally(businessId: string, tally: Tally): Promi
 // Resolve a usable business id (first account) for single-operator server jobs.
 let cachedBiz: string | null | undefined
 export async function resolveLearningBusinessId(): Promise<string | null> {
-  if (cachedBiz !== undefined) return cachedBiz
+  if (cachedBiz) return cachedBiz   // only memoize a REAL id — re-query while null
   let id: string | null = null
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma.business as any).findFirst({ orderBy: { createdAt: "asc" } })
     id = row?.id ?? null
   } catch { id = null }
-  cachedBiz = id
+  if (id) cachedBiz = id
   return id
 }

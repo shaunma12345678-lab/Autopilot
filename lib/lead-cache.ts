@@ -43,7 +43,7 @@ interface CacheShape { savedAt?: string; leads?: FreeLead[]; seenAt?: Record<str
 
 let resolvedBizId: string | null | undefined
 async function cacheBusinessId(hint?: string): Promise<string | null> {
-  if (resolvedBizId !== undefined) return resolvedBizId
+  if (resolvedBizId) return resolvedBizId   // only memoize a REAL id — re-query while null
   let id: string | null = null
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,7 +52,7 @@ async function cacheBusinessId(hint?: string): Promise<string | null> {
     if (!row) row = await biz.findFirst({ orderBy: { createdAt: "asc" } })
     id = row?.id ?? null
   } catch { id = null }
-  resolvedBizId = id
+  if (id) resolvedBizId = id
   return id
 }
 
