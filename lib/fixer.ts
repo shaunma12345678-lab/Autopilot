@@ -4,7 +4,7 @@
 // flip is. Pure & synchronous, builds on analyzeDeal. Never throws.
 
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
-import { analyzeDeal, type DealAnalysis } from "@/lib/deal-analysis"
+import { analyzeDeal, type DealAnalysis, type RepairLevel } from "@/lib/deal-analysis"
 
 // Listing language that signals a property needs work (the classic fixer tells).
 const FIXER_RE = /fixer|tlc|handyman|needs?\s+(work|repair|updat|rehab|love|tlc)|as.?is|sold as is|cash only|investor special|investors?\s+only|gut\b|tear.?down|teardown|sweat equity|rehab|renovat|dated|original condition|diamond in the rough|value.?add|bring.{0,10}contractor|priced to sell/i
@@ -31,6 +31,17 @@ export function fixerCondition(lead: ForeclosureLead): string[] {
   return signals
 }
 
+// Pick a realistic rehab scope from the listing language — heavy only when
+// there are genuine gut/teardown signals, light when it reads move-in/cosmetic,
+// otherwise medium (a dated-but-standard flip). Avoids defaulting every old
+// house to a full $65/sqft gut, which understates the max offer.
+export function fixerRepairLevel(lead: ForeclosureLead): RepairLevel {
+  const t = fixerText(lead)
+  if (/gut\b|down to (the )?studs|tear.?down|teardown|condemn|full (gut|rehab)|fire damage|burn|major (repair|structural)/.test(t)) return "heavy"
+  if (/updated|renovated|remodel|move.?in|turnkey|cosmetic|freshly painted/.test(t)) return "light"
+  return "medium"
+}
+
 export interface FixerDeal {
   lead:             ForeclosureLead
   deal:             DealAnalysis
@@ -39,7 +50,7 @@ export interface FixerDeal {
 }
 
 export function analyzeFixer(lead: ForeclosureLead, fallbackPsf?: number): FixerDeal | null {
-  const deal = analyzeDeal(lead, undefined, fallbackPsf ? { fallbackPsf } : undefined)
+  const deal = analyzeDeal(lead, fixerRepairLevel(lead), fallbackPsf ? { fallbackPsf } : undefined)
   if (!deal.hasValue || !deal.maoDetail) return null   // need an ARV to underwrite a flip
 
   const conditionSignals = fixerCondition(lead)
