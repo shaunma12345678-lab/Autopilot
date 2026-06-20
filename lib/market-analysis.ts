@@ -20,6 +20,8 @@ export interface MarketReport {
   gemCount:      number            // hidden gems (opportunity tier)
   avgEquity:     number | null
   rentYield:     number | null     // median gross annual rent / value, %
+  medianRent:    number | null     // long-term monthly rent (est when no data)
+  capRate:       number | null     // NOI / value, %
   topZips:       ZipStat[]
   insights:      string[]
 }
@@ -73,6 +75,12 @@ export function analyzeMarket(leads: ForeclosureLead[]): MarketReport {
   const distressRate = n ? Math.round((distress / n) * 100) : 0
   const predictedRate = n ? Math.round((predicted / n) * 100) : 0
 
+  // Rent + cap rate. Use real rent estimates where we have them, else the 0.7%
+  // rule off median value as a fallback so every market gets a number.
+  const rents = leads.map((l) => l.rentEstimate).filter((r): r is number => r != null && r > 0)
+  const medianRent = rents.length ? median(rents) : (medianValue ? Math.round(medianValue * 0.007) : null)
+  const capRate = medianRent && medianValue ? Math.round((medianRent * 12 * 0.55) / medianValue * 1000) / 10 : null
+
   const insights: string[] = []
   if (medianValue) insights.push(`Median value ≈ $${Math.round(medianValue / 1000)}k${psf ? ` · ~$${psf}/sqft` : ""}`)
   if (distressRate >= 40) insights.push(`High distress density (${distressRate}% show real distress signals) — an active hunting ground`)
@@ -82,66 +90,74 @@ export function analyzeMarket(leads: ForeclosureLead[]): MarketReport {
   if (rentYield != null) insights.push(`~${rentYield}% gross rent yield — ${rentYield >= 8 ? "strong cash-flow market" : rentYield >= 5 ? "balanced" : "appreciation play, thin cash flow"}`)
   if (topZips[0]) insights.push(`Hottest ZIP: ${topZips[0].zip} (${topZips[0].distress} distressed of ${topZips[0].count})`)
 
-  return { n, medianValue, psf, avgScore, distressRate, predictedRate, gemCount: gems, avgEquity, rentYield, topZips, insights }
+  return { n, medianValue, psf, avgScore, distressRate, predictedRate, gemCount: gems, avgEquity, rentYield, medianRent, capRate, topZips, insights }
 }
 
-// ── Strategy fit — how the market performs for each investor strategy ─────────
-export interface StrategyScore { score: number; grade: string; verdict: string; reasons: string[]; estimated?: boolean }
+// ── Strategy fit — performance + ROI for each investor strategy ──────────────
+export interface StrategyScore { score: number; grade: string; verdict: string; roi: string; reasons: string[]; estimated?: boolean }
 export interface MarketStrategies {
   flip:        StrategyScore
-  longRental:  StrategyScore
-  shortRental: StrategyScore
-  buyHold:     StrategyScore   // appreciation / owner-buyer
+  shortRental: StrategyScore   // STR (Airbnb)
+  midRental:   StrategyScore   // MTR (furnished, 1-6mo, corporate/travel-nurse)
+  longRental:  StrategyScore   // LTR / buy & hold
   bestFor:     string
 }
 
 const grade = (s: number): string => (s >= 80 ? "A" : s >= 65 ? "B" : s >= 50 ? "C" : s >= 35 ? "D" : "F")
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)))
+const k = (n: number) => `$${Math.round(n / 1000)}k`
 
 export function scoreStrategies(r: MarketReport): MarketStrategies {
-  const eq = r.avgEquity ?? 30
+  const eq  = r.avgEquity ?? 30
   const val = r.medianValue ?? 0
+  const rent = r.medianRent ?? (val ? Math.round(val * 0.007) : 0)   // LTR monthly
 
-  // FLIP — needs deal SUPPLY (distress) + SPREAD (equity) + ready gems.
+  // FLIP — supply (distress) + spread (equity) + ready gems. ROI ≈ profit on cash.
   const flipScore = clamp(r.distressRate * 0.55 + eq * 0.5 + Math.min(r.gemCount * 2.5, 20))
+  const flipProfit = val ? Math.round(val * (0.06 + Math.min(eq, 50) / 500)) : 0  // rough avg profit/flip
   const flip: StrategyScore = {
     score: flipScore, grade: grade(flipScore),
     verdict: flipScore >= 65 ? "Strong flip market" : flipScore >= 50 ? "Workable for flips" : "Thin for flips",
-    reasons: [
-      `${r.distressRate}% distressed supply${r.gemCount ? ` · ${r.gemCount} hidden gems` : ""}`,
-      `~${eq}% avg equity ${eq >= 35 ? "→ room to buy low" : "→ tighter margins"}`,
-    ],
+    roi: val ? `~${k(flipProfit)} profit/flip · ${Math.round((flipProfit / Math.max(val * 0.25, 1)) * 100)}% cash-on-cash (est)` : "value n/a",
+    reasons: [`${r.distressRate}% distressed supply${r.gemCount ? ` · ${r.gemCount} hidden gems` : ""}`, `~${eq}% avg equity ${eq >= 35 ? "→ buy low" : "→ tighter margins"}`],
+    estimated: true,
   }
 
-  // LONG-TERM RENTAL — gross yield / price-to-rent.
-  const yld = r.rentYield ?? (val > 0 ? clamp(70 - val / 12000) / 10 : 6)   // proxy when no rent data
-  const ltrScore = clamp(yld * 9 + (val && val < 400_000 ? 12 : 0))
+  // LONG-TERM RENTAL — cap rate / gross yield.
+  const cap = r.capRate ?? (rent && val ? Math.round((rent * 12 * 0.55) / val * 1000) / 10 : 5)
+  const ltrScore = clamp(cap * 9 + (val && val < 350_000 ? 12 : 0))
   const longRental: StrategyScore = {
     score: ltrScore, grade: grade(ltrScore),
-    verdict: ltrScore >= 65 ? "Strong cash-flow rentals" : ltrScore >= 50 ? "Balanced rentals" : "Appreciation play, thin cash flow",
-    reasons: [`~${(r.rentYield ?? Math.round(yld * 10) / 10)}% gross yield`, val ? `median $${Math.round(val / 1000)}k` : "value n/a"],
+    verdict: ltrScore >= 65 ? "Strong cash flow" : ltrScore >= 50 ? "Balanced" : "Appreciation play, thin cash flow",
+    roi: `${cap}% cap rate · ~$${rent}/mo${r.rentYield != null ? ` · ${r.rentYield}% gross yield` : ""}`,
+    reasons: [val ? `median ${k(val)}` : "value n/a", `${cap}% cap rate`],
     estimated: r.rentYield == null,
   }
 
-  // SHORT-TERM RENTAL — we don't have STR demand data; rough proxy from value tier.
-  const strScore = clamp((val >= 300_000 && val <= 1_200_000 ? 58 : 42) + Math.min(r.distressRate * 0.1, 8))
+  // MID-TERM RENTAL — furnished 1–6mo (corporate / travel nurse). ~1.4× LTR rent,
+  // lower turnover than STR. Score tracks LTR with a furnished premium.
+  const mtrRent = Math.round(rent * 1.4)
+  const mtrCap = val ? Math.round((mtrRent * 12 * 0.6) / val * 1000) / 10 : cap
+  const midRental: StrategyScore = {
+    score: clamp(mtrCap * 9), grade: grade(clamp(mtrCap * 9)),
+    verdict: "Furnished mid-term — steadier than STR",
+    roi: `~$${mtrRent}/mo · ${mtrCap}% cap (est)`,
+    reasons: ["~1.4× long-term rent, fewer turnovers", "demand near hospitals / corporate hubs"],
+    estimated: true,
+  }
+
+  // SHORT-TERM RENTAL — ~2.4× LTR gross at ~55% occupancy. High upside + variance.
+  const strRent = Math.round(rent * 2.4 * 0.55)
+  const strScore = clamp((val >= 250_000 && val <= 1_200_000 ? 56 : 44) + Math.min(r.distressRate * 0.1, 8))
   const shortRental: StrategyScore = {
     score: strScore, grade: grade(strScore),
-    verdict: "Estimate — confirm with local STR demand",
-    reasons: ["Rough proxy (value tier); plug in an STR-data key for real Airbnb demand"],
+    verdict: "High upside, variable — verify local STR rules + demand",
+    roi: `~$${strRent}/mo net (est, ~55% occ)`,
+    reasons: ["~2.4× long-term rent gross", "check city STR permits + seasonality"],
     estimated: true,
   }
 
-  // BUY & HOLD / appreciation — stability (lower distress) + value tier.
-  const bhScore = clamp((100 - r.distressRate) * 0.5 + (val >= 250_000 ? 25 : 15))
-  const buyHold: StrategyScore = {
-    score: bhScore, grade: grade(bhScore),
-    verdict: bhScore >= 65 ? "Stable appreciation market" : "Mixed appreciation outlook",
-    reasons: [`${100 - r.distressRate}% non-distressed (stability)`, "appreciation trend needs historical data (estimate)"],
-    estimated: true,
-  }
-
-  const ranked = [["Flips", flip.score], ["Long-term rentals", longRental.score], ["Short-term rentals", shortRental.score], ["Buy & hold", buyHold.score]] as Array<[string, number]>
+  const ranked = [["Flips", flip.score], ["Short-term rentals", shortRental.score], ["Mid-term rentals", midRental.score], ["Long-term rentals", longRental.score]] as Array<[string, number]>
   ranked.sort((a, b) => b[1] - a[1])
-  return { flip, longRental, shortRental, buyHold, bestFor: ranked[0][0] }
+  return { flip, shortRental, midRental, longRental, bestFor: ranked[0][0] }
 }
