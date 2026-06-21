@@ -39,7 +39,7 @@ export default function FixerUppers({ password }: { password: string }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fixers, setFixers] = useState<FixerDeal[] | null>(null)
-  const [meta, setMeta]   = useState<{ total: number; scanned: number; area: string; exactCount: number; nearbyIncluded: boolean; searchType: Mode } | null>(null)
+  const [meta, setMeta]   = useState<{ total: number; scanned: number; area: string; exactCount: number; shown: number; fellBack: boolean; searchType: Mode } | null>(null)
   const [open, setOpen]   = useState<number | null>(null)
 
   const search = async () => {
@@ -55,7 +55,7 @@ export default function FixerUppers({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error) { setError(data.error); setFixers(null) }
-      else { setFixers(data.fixers ?? []); setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, nearbyIncluded: !!data.nearbyIncluded, searchType: data.searchType ?? mode }) }
+      else { setFixers(data.fixers ?? []); setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, shown: data.shown ?? (data.fixers?.length ?? 0), fellBack: !!data.fellBack, searchType: data.searchType ?? mode }) }
     } catch { setError("Search failed — try again."); setFixers(null) }
     setLoading(false)
   }
@@ -107,8 +107,9 @@ export default function FixerUppers({ password }: { password: string }) {
 
       {meta && fixers && (
         <p className="text-xs text-gray-500">
-          {fixers.length} flip{fixers.length === 1 ? "" : "s"} in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.scanned} properties scanned
-          {meta.searchType === "city" && meta.nearbyIncluded && <span className="text-amber-400"> · only {meta.exactCount} in-city, backfilled with nearby — try County mode for more</span>}
+          {fixers.length} flip{fixers.length === 1 ? "" : "s"} in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.scanned} scanned
+          {meta.searchType === "city" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in {meta.area.split(",")[0]}{fixers.length > meta.exactCount ? ` (+${fixers.length - meta.exactCount} unconfirmed addresses)` : ""} — use County mode for more volume</span>}
+          {meta.searchType === "city" && meta.fellBack && <span className="text-amber-400"> · none confirmed in {meta.area.split(",")[0]} this scan — showing nearby; try County mode</span>}
           {meta.searchType === "county" && <span className="text-emerald-400"> · spanning the whole county</span>}
         </p>
       )}

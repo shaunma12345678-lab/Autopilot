@@ -17,7 +17,6 @@ import { analyzeFixer, type FixerDeal } from "@/lib/fixer"
 import { geocodeAddressComponents } from "@/lib/geocode"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
-const CITY_FLOOR = 6     // below this many in-city flips, backfill with nearby/unknown
 const GEOCODE_CAP = 70   // resolve real city/zip for at most this many top candidates
 const GEOCODE_BUDGET_MS = 16000
 
@@ -93,30 +92,25 @@ export async function POST(request: NextRequest) {
     const head = scored.slice(0, GEOCODE_CAP)
     await resolveCities(head, state)
 
-    // City mode — keep only the searched city (drop confirmed-wrong neighbors like
-    // El Monte for Temple City); keep can't-resolve ones; backfill if too thin.
+    // City mode — be specific to the searched city. Show confirmed-in-city plus
+    // addresses we couldn't resolve (which may be in-city); DROP confirmed-wrong
+    // neighbors (El Monte/Rosemead for Temple City). Only if nothing in-city
+    // resolves do we fall back to nearby so the page isn't empty.
     let chosen = head
     const tCity = norm(city)
     let exactCount = head.length
-    let nearbyIncluded = false
+    let fellBack = false
     if (searchType === "city" && tCity) {
       const inCity  = head.filter((f) => sameCity(norm(f.lead.city), tCity))
       const unknown = head.filter((f) => !norm(f.lead.city))
-      const wrong   = head.filter((f) => norm(f.lead.city) && !sameCity(norm(f.lead.city), tCity))
       exactCount = inCity.length
-      if (inCity.length >= CITY_FLOOR) {
-        chosen = [...inCity, ...unknown]
-        nearbyIncluded = unknown.length > 0
-      } else {
-        // Too few confirmed in-city — include unknowns, then nearby, so it's not empty.
-        chosen = [...inCity, ...unknown, ...wrong]
-        nearbyIncluded = unknown.length + wrong.length > 0
-      }
+      chosen = [...inCity, ...unknown]
+      if (chosen.length === 0) { chosen = head; fellBack = true }  // nothing in-city — show nearby
     }
 
     const fixers = chosen.slice(0, 40)
     const area = searchType === "zip" ? `ZIP ${zip}` : searchType === "county" ? `${county} County${state ? `, ${state}` : ""}` : `${city}${state ? `, ${state}` : ""}`
-    return Response.json({ fixers, total: scored.length, scanned: ds?.leads.length ?? 0, area, searchType, exactCount, nearbyIncluded })
+    return Response.json({ fixers, total: scored.length, scanned: ds?.leads.length ?? 0, area, searchType, exactCount, shown: fixers.length, fellBack })
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : "Fixer search failed" }, { status: 500 })
   }
