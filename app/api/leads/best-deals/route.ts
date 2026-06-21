@@ -12,6 +12,7 @@ import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
 import { rankBestDeals, type BestDeal } from "@/lib/best-deals"
 import { resolveAreas, scopeToArea } from "@/lib/area-scope"
+import { fetchFundamentals } from "@/lib/market-fundamentals"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 const GEOCODE_CAP = 70
@@ -46,10 +47,16 @@ export async function POST(request: NextRequest) {
       : searchType === "county" ? { searchType: "county", county, state, maxLeads: depth }
       : { searchType: "city", city, state, maxLeads: depth }
 
-    const ds = await deepSearch(params).catch(() => null)
+    // Pull deals + the area's real median home value (Census ACS) in parallel —
+    // the median anchors thin bare-address leads to a ballpark ARV.
+    const [ds, fund] = await Promise.all([
+      deepSearch(params).catch(() => null),
+      fetchFundamentals(city || county, state).catch(() => null),
+    ])
     const leads = ds ? fillComps(ds.leads.map(freeLeadToForeclosureLead)) : []
+    const fallbackValue = fund?.medianHomeValue ?? undefined
 
-    const scored = rankBestDeals(leads).filter((d) => d.score >= minScore)
+    const scored = rankBestDeals(leads, { fallbackValue }).filter((d) => d.score >= minScore)
 
     const head = scored.slice(0, GEOCODE_CAP)
     const areas = await resolveAreas(head, state)

@@ -240,7 +240,7 @@ function brrrrAnalysis(arv: number, mao: number, repairCost: number): BrrrrAnaly
   }
 }
 
-export interface AnalyzeOpts { fallbackPsf?: number; maoPct?: number; assignmentFee?: number; repairCap?: number }
+export interface AnalyzeOpts { fallbackPsf?: number; fallbackValue?: number; maoPct?: number; assignmentFee?: number; repairCap?: number }
 
 // #3 ARV fallback: appreciate the purchase price to today when no value exists.
 function appreciatedValue(lead: ForeclosureLead): number | null {
@@ -301,6 +301,9 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?
   let valueEstimated = false
   if (arv <= 0) { const ap = appreciatedValue(lead); if (ap) { arv = ap; valueEstimated = true } }
   if (arv <= 0 && opts?.fallbackPsf && lead.sqft && lead.sqft > 200) { arv = Math.round(lead.sqft * opts.fallbackPsf); valueEstimated = true }
+  // Last resort: anchor on the area's real median home value (e.g. Census ACS)
+  // so thin bare-address leads still get a ballpark, clearly-estimated ARV.
+  if (arv <= 0 && opts?.fallbackValue && opts.fallbackValue > 0) { arv = Math.round(opts.fallbackValue); valueEstimated = true }
   const hasValue = arv > 0
 
   const recordedDebt = lead.totalLiens > 0

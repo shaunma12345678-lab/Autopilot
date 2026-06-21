@@ -27,56 +27,66 @@ export interface BestDeal {
   reasons: string[]      // the specific edges, strongest first
 }
 
-export function bestDealScore(lead: ForeclosureLead, fallbackPsf?: number): BestDeal | null {
-  const deal = analyzeDeal(lead, undefined, fallbackPsf ? { fallbackPsf } : undefined)
-  if (!deal.hasValue) return null
+export interface BestDealOpts { fallbackPsf?: number; fallbackValue?: number }
+
+export function bestDealScore(lead: ForeclosureLead, opts?: BestDealOpts): BestDeal | null {
+  const deal = analyzeDeal(lead, undefined, { fallbackPsf: opts?.fallbackPsf, fallbackValue: opts?.fallbackValue })
 
   const opp    = opportunityScore(lead)
   const fusion = fuseSignals(lead)
   const pred   = predictPreForeclosure(lead)
+  // Financial points only when the value is REAL (not an area-median anchor),
+  // so thin bare-address leads rank on their genuine distress signals, not on
+  // fabricated margin/equity.
+  const realValue = deal.hasValue && !deal.valueEstimated
 
   const reasons: string[] = []
   let s = 0
 
-  // 1. Margin — the money. Flip profit as a % of ARV (up to ~30 pts).
-  const marginPct = deal.arv > 0 ? deal.flipProfit / deal.arv : 0
-  s += clamp(marginPct * 120, 0, 30)
-  if (deal.flipProfit > 0) reasons.push(`~${fmtMoney(deal.flipProfit)} projected profit${deal.roiPct ? ` · ${deal.roiPct}% ROI` : ""}`)
+  // 1. Margin — only on a real per-property value (up to ~30 pts).
+  if (realValue) {
+    const marginPct = deal.arv > 0 ? deal.flipProfit / deal.arv : 0
+    s += clamp(marginPct * 120, 0, 30)
+    if (deal.flipProfit > 0) reasons.push(`~${fmtMoney(deal.flipProfit)} projected profit${deal.roiPct ? ` · ${deal.roiPct}% ROI` : ""}`)
+    if (deal.brrrr?.infinite) { s += 8; reasons.push("BRRRR: refi recovers all capital (near-infinite return)") }
+    else if (deal.brrrr && deal.brrrr.discountToArvPct >= 25) { s += 4; reasons.push(`${deal.brrrr.discountToArvPct}% below ARV`) }
+  }
 
-  // 2. BRRRR — capital recycling. Infinite return = the holy grail.
-  if (deal.brrrr?.infinite) { s += 8; reasons.push("BRRRR: refi recovers all capital (near-infinite return)") }
-  else if (deal.brrrr && deal.brrrr.discountToArvPct >= 25) { s += 4; reasons.push(`${deal.brrrr.discountToArvPct}% below ARV`) }
+  // 2. Equity — only when real debt is recorded (avoids inflated 100%) (up to 18).
+  if (deal.totalDebt > 0 && realValue) {
+    s += clamp(deal.equityPercent * 0.22, 0, 18)
+    if (deal.equityPercent >= 35) reasons.push(`${deal.equityPercent}% equity (~${fmtMoney(deal.equityAvailable)})`)
+  }
 
-  // 3. Equity — room to make an offer work (up to 18).
-  s += clamp(deal.equityPercent * 0.22, 0, 18)
-  if (deal.equityPercent >= 35) reasons.push(`${deal.equityPercent}% equity (~${fmtMoney(deal.equityAvailable)})`)
-
-  // 4. Motivation — likelihood the seller deals (up to 18).
-  s += clamp(deal.motivation * 0.18, 0, 18)
+  // 3. Motivation — likelihood the seller deals (up to 24; weighted up when we
+  //    have no financials so the best motivated leads still surface).
+  s += clamp(deal.motivation * (realValue ? 0.18 : 0.26), 0, realValue ? 18 : 24)
   if (deal.motivation >= 60) reasons.push("Highly motivated seller")
   if (typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0 && lead.daysUntilAuction <= 30)
     reasons.push(`Auction in ${lead.daysUntilAuction}d — real time pressure`)
 
-  // 5. Hidden-gem opportunity (cross-corroborated / off-market / early) (up to 14).
-  s += clamp(opp.score * 0.14, 0, 14)
+  // 4. Hidden-gem opportunity (cross-corroborated / off-market / early) (up to 16).
+  s += clamp(opp.score * (realValue ? 0.14 : 0.18), 0, realValue ? 14 : 16)
   if (opp.tier === "gem") reasons.push("Hidden gem — cross-corroborated & off-market")
 
-  // 6. Multi-vector signal fusion — independent distress signals agreeing (up to 8).
-  s += clamp(fusion.count * 2.5, 0, 8)
+  // 5. Multi-vector signal fusion — independent distress signals agreeing (up to 12).
+  s += clamp(fusion.count * (realValue ? 2.5 : 3.5), 0, realValue ? 8 : 12)
   if (fusion.corroborated) reasons.push(`${fusion.count} independent distress signals agree (${fusion.level})`)
 
-  // 7. Predictive pre-foreclosure probability (up to 4) — get ahead of the market.
-  if (pred.predicted) { s += clamp(pred.probability * 0.04, 0, 4); reasons.push(`Predicted pre-foreclosure (${pred.probability}%)`) }
+  // 6. Predictive pre-foreclosure probability (up to 8) — get ahead of the market.
+  if (pred.predicted) { s += clamp(pred.probability * (realValue ? 0.04 : 0.08), 0, realValue ? 4 : 8); reasons.push(`Predicted pre-foreclosure (${pred.probability}%)`) }
+  if (deal.distressType) reasons.push(deal.distressType)
 
   const score = clamp(Math.round(s), 0, 100)
+  if (score <= 0) return null
   const tier: DealTier = score >= 75 ? "elite" : score >= 55 ? "strong" : "solid"
-  return { lead, deal, score, tier, reasons: reasons.slice(0, 5) }
+  return { lead, deal, score, tier, reasons: Array.from(new Set(reasons)).slice(0, 5) }
 }
 
 // Rank a set of leads into the best deals, best first.
-export function rankBestDeals(leads: ForeclosureLead[], fallbackPsf?: number): BestDeal[] {
+export function rankBestDeals(leads: ForeclosureLead[], opts?: BestDealOpts): BestDeal[] {
   return leads
-    .map((l) => bestDealScore(l, fallbackPsf))
+    .map((l) => bestDealScore(l, opts))
     .filter((d): d is BestDeal => d !== null)
     .sort((a, b) => b.score - a.score || b.deal.flipProfit - a.deal.flipProfit)
 }
