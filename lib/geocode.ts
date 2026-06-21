@@ -94,6 +94,32 @@ export async function geocodeAddress(oneLineAddress: string): Promise<LatLng | n
   return null
 }
 
+// ── Street address → standardized city + ZIP (server-side, Census) ────────────
+// The CA-DOJ registry returns bare street addresses with no city/zip, so a small
+// city search can't tell Temple City from neighboring El Monte. Census's
+// onelineaddress geocoder returns the canonical city + ZIP for an address, which
+// lets us scope results to the city actually searched. Cached in-module.
+export interface AddrComponents { city: string | null; zip: string | null; lat: number | null; lng: number | null }
+const CENSUS_ONELINE = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+const compCache = new Map<string, AddrComponents | null>()
+
+export async function geocodeAddressComponents(address: string, state?: string): Promise<AddrComponents | null> {
+  if (!address?.trim()) return null
+  const q = [address.trim(), state].filter(Boolean).join(", ")
+  if (compCache.has(q)) return compCache.get(q)!
+  try {
+    const url = `${CENSUS_ONELINE}?address=${encodeURIComponent(q)}&benchmark=Public_AR_Current&format=json`
+    const res = await fetch(url, { signal: AbortSignal.timeout(7000) })
+    if (!res.ok) { compCache.set(q, null); return null }
+    const data = (await res.json()) as { result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number }; addressComponents?: { city?: string; zip?: string } }> } }
+    const m = data.result?.addressMatches?.[0]
+    if (!m) { compCache.set(q, null); return null }
+    const out: AddrComponents = { city: m.addressComponents?.city ?? null, zip: m.addressComponents?.zip ?? null, lat: m.coordinates?.y ?? null, lng: m.coordinates?.x ?? null }
+    compCache.set(q, out)
+    return out
+  } catch { compCache.set(q, null); return null }
+}
+
 // ── Place / city / ZIP → lat/lng (ZIP-aware on the server) ────────────────────
 export async function geocodePlace(query: string): Promise<LatLng | null> {
   const q = (query || "").trim()

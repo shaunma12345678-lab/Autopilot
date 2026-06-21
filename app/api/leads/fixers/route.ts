@@ -13,11 +13,13 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { deepSearch, type DeepSearchParams } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
-import { analyzeFixer } from "@/lib/fixer"
-import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
+import { analyzeFixer, type FixerDeal } from "@/lib/fixer"
+import { geocodeAddressComponents } from "@/lib/geocode"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
-const CITY_FLOOR = 6   // below this many exact-city flips, backfill with nearby
+const CITY_FLOOR = 6     // below this many in-city flips, backfill with nearby/unknown
+const GEOCODE_CAP = 70   // resolve real city/zip for at most this many top candidates
+const GEOCODE_BUDGET_MS = 16000
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
@@ -30,6 +32,25 @@ function sameCity(a: string, b: string): boolean {
   if (!a || !b) return false
   if (a === b) return true
   return a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a))
+}
+
+// Resolve each candidate's real city + ZIP from its bare address (Census),
+// bounded by a concurrency pool and a hard time budget. Fills lead.city/zip.
+async function resolveCities(items: FixerDeal[], state: string): Promise<void> {
+  let i = 0
+  const worker = async () => {
+    while (i < items.length) {
+      const f = items[i++]
+      if (f.lead.city) continue
+      const comp = await geocodeAddressComponents(f.lead.address, state).catch(() => null)
+      if (comp?.city) f.lead.city = comp.city
+      if (comp?.zip && !f.lead.zip) f.lead.zip = comp.zip
+    }
+  }
+  await Promise.race([
+    Promise.all(Array.from({ length: 8 }, worker)),
+    new Promise<void>((r) => setTimeout(r, GEOCODE_BUDGET_MS)),
+  ])
 }
 
 export async function POST(request: NextRequest) {
@@ -59,35 +80,43 @@ export async function POST(request: NextRequest) {
       : { searchType: "city", city, state, maxLeads: depth }
 
     const ds = await deepSearch(params).catch(() => null)
-    const allLeads = ds ? fillComps(ds.leads.map(freeLeadToForeclosureLead)) : []
+    const leads = ds ? fillComps(ds.leads.map(freeLeadToForeclosureLead)) : []
 
-    // Area scoping — for a CITY search keep results in that city (the engine's
-    // ZIP-3 region can include neighbors, e.g. Temple City ↔ El Monte). Backfill
-    // with nearby only if the city itself is thin, and tag what's in-area.
-    let leads: ForeclosureLead[] = allLeads
+    // Underwrite + rank all candidates.
+    const scored = leads
+      .map((l) => analyzeFixer(l))
+      .filter((f): f is FixerDeal => f !== null)
+      .filter((f) => (body.condition ? f.conditionSignals.length > 0 : true))
+      .sort((a, b) => b.fixerScore - a.fixerScore || b.deal.flipProfit - a.deal.flipProfit)
+
+    // Resolve real city/ZIP for the top candidates (CA-DOJ gives bare addresses).
+    const head = scored.slice(0, GEOCODE_CAP)
+    await resolveCities(head, state)
+
+    // City mode — keep only the searched city (drop confirmed-wrong neighbors like
+    // El Monte for Temple City); keep can't-resolve ones; backfill if too thin.
+    let chosen = head
     const tCity = norm(city)
-    let exactCount = allLeads.length
+    let exactCount = head.length
     let nearbyIncluded = false
     if (searchType === "city" && tCity) {
-      const exact = allLeads.filter((l) => sameCity(norm(l.city), tCity))
-      exactCount = exact.length
-      if (exact.length >= CITY_FLOOR) {
-        leads = exact
+      const inCity  = head.filter((f) => sameCity(norm(f.lead.city), tCity))
+      const unknown = head.filter((f) => !norm(f.lead.city))
+      const wrong   = head.filter((f) => norm(f.lead.city) && !sameCity(norm(f.lead.city), tCity))
+      exactCount = inCity.length
+      if (inCity.length >= CITY_FLOOR) {
+        chosen = [...inCity, ...unknown]
+        nearbyIncluded = unknown.length > 0
       } else {
-        nearbyIncluded = allLeads.length > exact.length
-        leads = [...exact, ...allLeads.filter((l) => !sameCity(norm(l.city), tCity))]
+        // Too few confirmed in-city — include unknowns, then nearby, so it's not empty.
+        chosen = [...inCity, ...unknown, ...wrong]
+        nearbyIncluded = unknown.length + wrong.length > 0
       }
     }
 
-    const fixers = leads
-      .map((l) => analyzeFixer(l))
-      .filter((f): f is NonNullable<typeof f> => f !== null)
-      .filter((f) => (body.condition ? f.conditionSignals.length > 0 : true))
-      .sort((a, b) => b.fixerScore - a.fixerScore || b.deal.flipProfit - a.deal.flipProfit)
-      .slice(0, 40)
-
+    const fixers = chosen.slice(0, 40)
     const area = searchType === "zip" ? `ZIP ${zip}` : searchType === "county" ? `${county} County${state ? `, ${state}` : ""}` : `${city}${state ? `, ${state}` : ""}`
-    return Response.json({ fixers, total: leads.length, scanned: ds?.leads.length ?? 0, area, searchType, exactCount, nearbyIncluded })
+    return Response.json({ fixers, total: scored.length, scanned: ds?.leads.length ?? 0, area, searchType, exactCount, nearbyIncluded })
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : "Fixer search failed" }, { status: 500 })
   }
