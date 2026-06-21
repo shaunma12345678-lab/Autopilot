@@ -43,13 +43,14 @@ export function bestDealScore(lead: ForeclosureLead, opts?: BestDealOpts): BestD
   const reasons: string[] = []
   let s = 0
 
-  // 1. Margin — only on a real per-property value (up to ~30 pts).
+  // 1. Margin — only on a real per-property value (up to 45 pts). A strong
+  //    spread alone can carry a deal to "strong"; distress signals push to elite.
   if (realValue) {
     const marginPct = deal.arv > 0 ? deal.flipProfit / deal.arv : 0
-    s += clamp(marginPct * 120, 0, 30)
+    s += clamp(marginPct * 180, 0, 45)
     if (deal.flipProfit > 0) reasons.push(`~${fmtMoney(deal.flipProfit)} projected profit${deal.roiPct ? ` · ${deal.roiPct}% ROI` : ""}`)
-    if (deal.brrrr?.infinite) { s += 8; reasons.push("BRRRR: refi recovers all capital (near-infinite return)") }
-    else if (deal.brrrr && deal.brrrr.discountToArvPct >= 25) { s += 4; reasons.push(`${deal.brrrr.discountToArvPct}% below ARV`) }
+    if (deal.brrrr?.infinite) { s += 14; reasons.push("BRRRR: refi recovers all capital (near-infinite return)") }
+    else if (deal.brrrr && deal.brrrr.discountToArvPct >= 25) { s += 6; reasons.push(`${deal.brrrr.discountToArvPct}% below ARV`) }
   }
 
   // 2. Equity — only when real debt is recorded (avoids inflated 100%) (up to 18).
