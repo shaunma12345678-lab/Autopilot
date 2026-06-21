@@ -21,8 +21,17 @@ const VERDICT_CLR: Record<string, string> = {
 }
 const m = (n: number | null | undefined) => (typeof n === "number" && Number.isFinite(n) ? fmtMoney(n) : "—")
 
+type Mode = "city" | "county" | "zip"
+const MODES: { id: Mode; label: string }[] = [
+  { id: "city",   label: "🏙 City" },
+  { id: "county", label: "🗺 County" },
+  { id: "zip",    label: "📮 ZIP" },
+]
+
 export default function FixerUppers({ password }: { password: string }) {
+  const [mode, setMode]   = useState<Mode>("city")
   const [city, setCity]   = useState("")
+  const [county, setCounty] = useState("")
   const [state, setState] = useState("")
   const [zip, setZip]     = useState("")
   const [depth, setDepth] = useState(250)
@@ -30,21 +39,23 @@ export default function FixerUppers({ password }: { password: string }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fixers, setFixers] = useState<FixerDeal[] | null>(null)
-  const [meta, setMeta]   = useState<{ total: number; scanned: number } | null>(null)
+  const [meta, setMeta]   = useState<{ total: number; scanned: number; area: string; exactCount: number; nearbyIncluded: boolean; searchType: Mode } | null>(null)
   const [open, setOpen]   = useState<number | null>(null)
 
   const search = async () => {
-    if (!city.trim() && !zip.trim()) { setError("Enter a city or ZIP to search."); return }
+    if (mode === "city" && !city.trim())   { setError("Enter a city."); return }
+    if (mode === "county" && !county.trim()) { setError("Enter a county."); return }
+    if (mode === "zip" && !zip.trim())     { setError("Enter a ZIP code."); return }
     setLoading(true); setError(null)
     try {
       const res = await fetch("/api/leads/fixers", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-password": password },
-        body: JSON.stringify({ city: city.trim(), state: state.trim(), zip: zip.trim(), depth, condition }),
+        body: JSON.stringify({ searchType: mode, city: city.trim(), county: county.trim(), state: state.trim(), zip: zip.trim(), depth, condition }),
       })
       const data = await res.json()
       if (data?.error) { setError(data.error); setFixers(null) }
-      else { setFixers(data.fixers ?? []); setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0 }) }
+      else { setFixers(data.fixers ?? []); setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, nearbyIncluded: !!data.nearbyIncluded, searchType: data.searchType ?? mode }) }
     } catch { setError("Search failed — try again."); setFixers(null) }
     setLoading(false)
   }
@@ -53,18 +64,33 @@ export default function FixerUppers({ password }: { password: string }) {
     <div className="space-y-4">
       <div>
         <h3 className="text-lg font-bold text-white">🔧 Fixer-Upper Finder</h3>
-        <p className="text-sm text-gray-400 mt-0.5">Finds distressed-condition houses, comps the after-repair value, and runs the full Max-Allowable-Offer formula (ARV − commission − closing − holding − renovation − profit) on each.</p>
+        <p className="text-sm text-gray-400 mt-0.5">Finds distressed-condition houses, comps the after-repair value, and runs the full Max-Allowable-Offer formula (ARV − commission − closing − holding − renovation − profit) on each. Search a single city, a whole county, or one ZIP.</p>
       </div>
 
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-          <input value={city} onChange={(e) => setCity(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="City" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
-          <input value={state} onChange={(e) => setState(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="State (e.g. TX)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
-          <input value={zip} onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="or ZIP" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
+        <div className="flex gap-1.5">
+          {MODES.map((md) => (
+            <button key={md.id} onClick={() => setMode(md.id)} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${mode === md.id ? "bg-indigo-600 border-indigo-400 text-white" : "bg-gray-800/40 border-gray-700/50 text-gray-400 hover:text-white"}`}>{md.label}</button>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {mode === "city" && (
+            <input value={city} onChange={(e) => setCity(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="City (e.g. Temple City)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
+          )}
+          {mode === "county" && (
+            <input value={county} onChange={(e) => setCounty(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="County (e.g. Los Angeles)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
+          )}
+          {mode === "zip" && (
+            <input value={zip} onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="ZIP (e.g. 91780)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
+          )}
+          <input value={state} onChange={(e) => setState(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="State (e.g. CA)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <select value={depth} onChange={(e) => setDepth(Number(e.target.value))} className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white">
             <option value={150}>Scan 150</option>
             <option value={250}>Scan 250</option>
             <option value={500}>Scan 500 (deep)</option>
+            <option value={1000}>Scan 1000 (county-wide)</option>
           </select>
         </div>
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -80,7 +106,11 @@ export default function FixerUppers({ password }: { password: string }) {
       </div>
 
       {meta && fixers && (
-        <p className="text-xs text-gray-500">{fixers.length} flip{fixers.length === 1 ? "" : "s"} underwritten · {meta.scanned} properties scanned in the area.</p>
+        <p className="text-xs text-gray-500">
+          {fixers.length} flip{fixers.length === 1 ? "" : "s"} in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.scanned} properties scanned
+          {meta.searchType === "city" && meta.nearbyIncluded && <span className="text-amber-400"> · only {meta.exactCount} in-city, backfilled with nearby — try County mode for more</span>}
+          {meta.searchType === "county" && <span className="text-emerald-400"> · spanning the whole county</span>}
+        </p>
       )}
 
       {fixers && fixers.length === 0 && !loading && (
