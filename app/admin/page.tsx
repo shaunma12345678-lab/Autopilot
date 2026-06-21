@@ -2214,7 +2214,6 @@ export default function AdminPage() {
     { id: "ap-agents",    label: `Agents${agentData ? ` · ${activeAgents} active` : ""}` },
     { id: "bos-agents",   label: "Business OS" },
     { id: "automations",  label: "Automations" },
-    { id: "sites",        label: "🌐 Website Builder" },
     { id: "real-estate",  label: "🏚 Real Estate" },
     { id: "distress-map", label: "🗺️ Distress Map" },
     { id: "markets",      label: "📈 Markets" },

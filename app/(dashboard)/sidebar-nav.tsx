@@ -29,7 +29,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/sales",         label: "Sales Scripts",  icon: "📞" },
       { href: "/pricing",       label: "Pricing",        icon: "💲" },
-      { href: "/website",       label: "Website Builder",icon: "◻" },
       { href: "/business-plan", label: "Business Plan",  icon: "📋" },
     ],
   },
