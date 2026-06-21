@@ -6,6 +6,7 @@ import ForeclosureSearch from "@/components/dashboard/ForeclosureSearch"
 import DistressMap from "@/components/dashboard/DistressMap"
 import MarketAnalysis from "@/components/dashboard/MarketAnalysis"
 import FixerUppers from "@/components/dashboard/FixerUppers"
+import BestDeals from "@/components/dashboard/BestDeals"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 /* ── Types ── */
@@ -2146,7 +2147,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2215,6 +2216,7 @@ export default function AdminPage() {
     { id: "bos-agents",   label: "Business OS" },
     { id: "automations",  label: "Automations" },
     { id: "real-estate",  label: "🏚 Real Estate" },
+    { id: "best-deals",   label: "💎 Best Deals" },
     { id: "distress-map", label: "🗺️ Distress Map" },
     { id: "markets",      label: "📈 Markets" },
     { id: "fixers",       label: "🔧 Fixer-Uppers" },
@@ -2285,6 +2287,7 @@ export default function AdminPage() {
           {tab === "distress-map" && <AdminDistressMap password={pw} />}
           {tab === "markets" && <MarketAnalysis password={pw} />}
           {tab === "fixers" && <FixerUppers password={pw} />}
+          {tab === "best-deals" && <BestDeals password={pw} />}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}

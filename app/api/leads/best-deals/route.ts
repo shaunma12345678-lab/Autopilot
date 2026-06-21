@@ -1,6 +1,7 @@
-// Fixer-Upper finder — searches an area for distressed-condition houses, comps
-// the ARV with our own engine, and runs the explicit fix-&-flip MAO formula on
-// each. Modes: city (scoped to that exact city), county (spans its places), zip.
+// Best Deals on the Market — scans an area and ranks every property by the
+// unified elite Best-Deal score (margin + BRRRR + equity + motivation + hidden
+// gem + signal fusion + predictive). Returns the very best deals first. Keyless;
+// reuses the deep search + comp engine + Census area scoping.
 
 export const maxDuration = 120
 
@@ -9,11 +10,11 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { deepSearch, type DeepSearchParams } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
-import { analyzeFixer, type FixerDeal } from "@/lib/fixer"
+import { rankBestDeals, type BestDeal } from "@/lib/best-deals"
 import { resolveAreas, scopeToArea } from "@/lib/area-scope"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
-const GEOCODE_CAP = 70   // resolve real city/zip for at most this many top candidates
+const GEOCODE_CAP = 70
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  let body: { searchType?: string; city?: string; state?: string; county?: string; zip?: string; depth?: number; condition?: boolean }
+  let body: { searchType?: string; city?: string; state?: string; county?: string; zip?: string; depth?: number; minScore?: number }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
 
   const searchType: "city" | "county" | "zip" =
@@ -36,7 +37,8 @@ export async function POST(request: NextRequest) {
   if (searchType === "zip" && !zip) return Response.json({ error: "ZIP is required" }, { status: 400 })
   if (searchType === "county" && !county) return Response.json({ error: "County is required" }, { status: 400 })
   if (searchType === "city" && !city) return Response.json({ error: "City is required" }, { status: 400 })
-  const depth = Math.min(Math.max(body.depth ?? 250, 50), 1000)
+  const depth = Math.min(Math.max(body.depth ?? 300, 50), 1000)
+  const minScore = Math.min(Math.max(body.minScore ?? 0, 0), 100)
 
   try {
     const params: DeepSearchParams =
@@ -47,20 +49,17 @@ export async function POST(request: NextRequest) {
     const ds = await deepSearch(params).catch(() => null)
     const leads = ds ? fillComps(ds.leads.map(freeLeadToForeclosureLead)) : []
 
-    const scored = leads
-      .map((l) => analyzeFixer(l))
-      .filter((f): f is FixerDeal => f !== null)
-      .filter((f) => (body.condition ? f.conditionSignals.length > 0 : true))
-      .sort((a, b) => b.fixerScore - a.fixerScore || b.deal.flipProfit - a.deal.flipProfit)
+    const scored = rankBestDeals(leads).filter((d) => d.score >= minScore)
 
     const head = scored.slice(0, GEOCODE_CAP)
     const areas = await resolveAreas(head, state)
-    const { chosen, exactCount, fellBack } = scopeToArea(head, areas, searchType, city, county)
+    const { chosen, exactCount, fellBack } = scopeToArea<BestDeal>(head, areas, searchType, city, county)
 
-    const fixers = chosen.slice(0, 40)
+    const deals = chosen.slice(0, 40)
+    const eliteCount = deals.filter((d) => d.tier === "elite").length
     const area = searchType === "zip" ? `ZIP ${zip}` : searchType === "county" ? `${county} County${state ? `, ${state}` : ""}` : `${city}${state ? `, ${state}` : ""}`
-    return Response.json({ fixers, total: scored.length, scanned: ds?.leads.length ?? 0, area, searchType, exactCount, shown: fixers.length, fellBack })
+    return Response.json({ deals, total: scored.length, scanned: ds?.leads.length ?? 0, eliteCount, area, searchType, exactCount, shown: deals.length, fellBack })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : "Fixer search failed" }, { status: 500 })
+    return Response.json({ error: err instanceof Error ? err.message : "Best-deals search failed" }, { status: 500 })
   }
 }
