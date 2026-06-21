@@ -110,7 +110,8 @@ export default function FixerUppers({ password }: { password: string }) {
           {fixers.length} flip{fixers.length === 1 ? "" : "s"} in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.scanned} scanned
           {meta.searchType === "city" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in {meta.area.split(",")[0]}{fixers.length > meta.exactCount ? ` (+${fixers.length - meta.exactCount} unconfirmed addresses)` : ""} — use County mode for more volume</span>}
           {meta.searchType === "city" && meta.fellBack && <span className="text-amber-400"> · none confirmed in {meta.area.split(",")[0]} this scan — showing nearby; try County mode</span>}
-          {meta.searchType === "county" && <span className="text-emerald-400"> · spanning the whole county</span>}
+          {meta.searchType === "county" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in {meta.area.split(",")[0]}{fixers.length > meta.exactCount ? ` (+${fixers.length - meta.exactCount} unconfirmed)` : ""}, spanning its cities</span>}
+          {meta.searchType === "county" && meta.fellBack && <span className="text-amber-400"> · none confirmed in {meta.area.split(",")[0]} this scan — showing nearest</span>}
         </p>
       )}
 

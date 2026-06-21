@@ -99,8 +99,9 @@ export async function geocodeAddress(oneLineAddress: string): Promise<LatLng | n
 // city search can't tell Temple City from neighboring El Monte. Census's
 // onelineaddress geocoder returns the canonical city + ZIP for an address, which
 // lets us scope results to the city actually searched. Cached in-module.
-export interface AddrComponents { city: string | null; zip: string | null; lat: number | null; lng: number | null }
-const CENSUS_ONELINE = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+export interface AddrComponents { city: string | null; zip: string | null; county: string | null; lat: number | null; lng: number | null }
+// Geographies endpoint returns the canonical city, ZIP, AND county for an address.
+const CENSUS_GEO = "https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress"
 const compCache = new Map<string, AddrComponents | null>()
 
 export async function geocodeAddressComponents(address: string, state?: string): Promise<AddrComponents | null> {
@@ -108,13 +109,19 @@ export async function geocodeAddressComponents(address: string, state?: string):
   const q = [address.trim(), state].filter(Boolean).join(", ")
   if (compCache.has(q)) return compCache.get(q)!
   try {
-    const url = `${CENSUS_ONELINE}?address=${encodeURIComponent(q)}&benchmark=Public_AR_Current&format=json`
+    const url = `${CENSUS_GEO}?address=${encodeURIComponent(q)}&benchmark=Public_AR_Current&vintage=Current_Current&format=json`
     const res = await fetch(url, { signal: AbortSignal.timeout(7000) })
     if (!res.ok) { compCache.set(q, null); return null }
-    const data = (await res.json()) as { result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number }; addressComponents?: { city?: string; zip?: string } }> } }
+    const data = (await res.json()) as { result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number }; addressComponents?: { city?: string; zip?: string }; geographies?: { Counties?: Array<{ NAME?: string }> } }> } }
     const m = data.result?.addressMatches?.[0]
     if (!m) { compCache.set(q, null); return null }
-    const out: AddrComponents = { city: m.addressComponents?.city ?? null, zip: m.addressComponents?.zip ?? null, lat: m.coordinates?.y ?? null, lng: m.coordinates?.x ?? null }
+    const out: AddrComponents = {
+      city:   m.addressComponents?.city ?? null,
+      zip:    m.addressComponents?.zip ?? null,
+      county: m.geographies?.Counties?.[0]?.NAME ?? null,
+      lat:    m.coordinates?.y ?? null,
+      lng:    m.coordinates?.x ?? null,
+    }
     compCache.set(q, out)
     return out
   } catch { compCache.set(q, null); return null }

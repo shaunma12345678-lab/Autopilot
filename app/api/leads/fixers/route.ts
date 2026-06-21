@@ -14,7 +14,7 @@ import { deepSearch, type DeepSearchParams } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
 import { analyzeFixer, type FixerDeal } from "@/lib/fixer"
-import { geocodeAddressComponents } from "@/lib/geocode"
+import { geocodeAddressComponents, type AddrComponents } from "@/lib/geocode"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 const GEOCODE_CAP = 70   // resolve real city/zip for at most this many top candidates
@@ -26,30 +26,36 @@ function isAuthorized(request: NextRequest, user: unknown): boolean {
 }
 
 const norm = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[^a-z ]/g, "").trim()
-// Two place names refer to the same city (exact, or one fully contains the other).
-function sameCity(a: string, b: string): boolean {
+const normCounty = (s: string | null | undefined) => norm(s).replace(/\s+county\s*$/, "").trim()
+// Two place names refer to the same place (exact, or one fully contains the other).
+function samePlace(a: string, b: string): boolean {
   if (!a || !b) return false
   if (a === b) return true
   return a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a))
 }
 
-// Resolve each candidate's real city + ZIP from its bare address (Census),
-// bounded by a concurrency pool and a hard time budget. Fills lead.city/zip.
-async function resolveCities(items: FixerDeal[], state: string): Promise<void> {
+// Resolve each candidate's real city + ZIP + county from its bare address
+// (Census), bounded by a concurrency pool and a hard time budget. Fills
+// lead.city/zip and returns the resolved components per deal.
+async function resolveAreas(items: FixerDeal[], state: string): Promise<Map<FixerDeal, AddrComponents>> {
+  const out = new Map<FixerDeal, AddrComponents>()
   let i = 0
   const worker = async () => {
     while (i < items.length) {
       const f = items[i++]
-      if (f.lead.city) continue
       const comp = await geocodeAddressComponents(f.lead.address, state).catch(() => null)
-      if (comp?.city) f.lead.city = comp.city
-      if (comp?.zip && !f.lead.zip) f.lead.zip = comp.zip
+      if (comp) {
+        out.set(f, comp)
+        if (comp.city) f.lead.city = comp.city
+        if (comp.zip && !f.lead.zip) f.lead.zip = comp.zip
+      }
     }
   }
   await Promise.race([
     Promise.all(Array.from({ length: 8 }, worker)),
     new Promise<void>((r) => setTimeout(r, GEOCODE_BUDGET_MS)),
   ])
+  return out
 }
 
 export async function POST(request: NextRequest) {
@@ -88,24 +94,30 @@ export async function POST(request: NextRequest) {
       .filter((f) => (body.condition ? f.conditionSignals.length > 0 : true))
       .sort((a, b) => b.fixerScore - a.fixerScore || b.deal.flipProfit - a.deal.flipProfit)
 
-    // Resolve real city/ZIP for the top candidates (CA-DOJ gives bare addresses).
+    // Resolve real city/ZIP/county for the top candidates (CA-DOJ gives bare addresses).
     const head = scored.slice(0, GEOCODE_CAP)
-    await resolveCities(head, state)
+    const areas = await resolveAreas(head, state)
 
-    // City mode — be specific to the searched city. Show confirmed-in-city plus
-    // addresses we couldn't resolve (which may be in-city); DROP confirmed-wrong
-    // neighbors (El Monte/Rosemead for Temple City). Only if nothing in-city
-    // resolves do we fall back to nearby so the page isn't empty.
+    // Scope to the searched area — drop leads Census confirms are in a different
+    // city (city mode) or a different county (county mode); keep can't-resolve
+    // ones; only fall back to nearby if nothing in-area resolves.
     let chosen = head
-    const tCity = norm(city)
     let exactCount = head.length
     let fellBack = false
-    if (searchType === "city" && tCity) {
-      const inCity  = head.filter((f) => sameCity(norm(f.lead.city), tCity))
-      const unknown = head.filter((f) => !norm(f.lead.city))
-      exactCount = inCity.length
-      chosen = [...inCity, ...unknown]
-      if (chosen.length === 0) { chosen = head; fellBack = true }  // nothing in-city — show nearby
+    if (searchType === "city" && norm(city)) {
+      const tCity = norm(city)
+      const inArea  = head.filter((f) => samePlace(norm(areas.get(f)?.city), tCity))
+      const unknown = head.filter((f) => !norm(areas.get(f)?.city))
+      exactCount = inArea.length
+      chosen = [...inArea, ...unknown]
+      if (chosen.length === 0) { chosen = head; fellBack = true }
+    } else if (searchType === "county" && normCounty(county)) {
+      const tCounty = normCounty(county)
+      const inArea  = head.filter((f) => samePlace(normCounty(areas.get(f)?.county), tCounty))
+      const unknown = head.filter((f) => !normCounty(areas.get(f)?.county))
+      exactCount = inArea.length
+      chosen = [...inArea, ...unknown]
+      if (chosen.length === 0) { chosen = head; fellBack = true }
     }
 
     const fixers = chosen.slice(0, 40)
