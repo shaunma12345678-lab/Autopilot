@@ -7,6 +7,7 @@ import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { bestStrategy, carryingCosts } from "@/lib/strategy"
+import { yellowLetter, coldCallScript, smsScript, financingFit, recorderLink } from "@/lib/outreach"
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!))
@@ -78,6 +79,35 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
       <p style="margin:8px 0 0;color:#64748b;font-size:11px">Offer at or below the MAO to keep the full projected profit. Renovation = ${esc(a.repairLevel)} rehab.</p>
     </div>` : ""
 
+  const br = a.brrrr
+  const brrrrBlock = br ? `
+    <div class="card" style="border-color:#bbf7d0;background:#f0fdf4">
+      <div class="h">BRRRR — Buy · Rehab · Rent · Refinance · Repeat</div>
+      <div class="grid" style="margin:0">
+        <div class="cell"><div class="k">ARV</div><div class="v">${m(br.arv)}</div></div>
+        <div class="cell"><div class="k">All-in (buy + rehab)</div><div class="v">${m(br.allIn)}</div></div>
+        <div class="cell"><div class="k">Refi @ 75% ARV</div><div class="v">${m(br.refiLoan)}</div></div>
+        <div class="cell"><div class="k">Cash left in deal</div><div class="v" style="color:${br.infinite ? "#16a34a" : "#0f172a"}">${m(br.cashLeftInDeal)}${br.infinite ? " ♾️" : ""}</div></div>
+        <div class="cell"><div class="k">Forced equity</div><div class="v" style="color:#16a34a">${m(br.forcedEquity)}</div></div>
+        <div class="cell"><div class="k">Discount to ARV</div><div class="v">${br.discountToArvPct}%</div></div>
+      </div>
+      <p style="margin:8px 0 0;color:#475569;font-size:12px">${br.infinite ? `<b>Capital fully recycled</b> — refinancing at 75% of ARV pulls back your entire ${m(br.allIn)} all-in. A (nearly) free rental.` : `Buy at or below <b>${m(br.maxBuyForFullPull)}</b> to recover all your capital on the refinance.`}</p>
+    </div>` : ""
+
+  const rec = recorderLink(lead)
+  const outreachBlock = `
+    <div class="card" style="border-color:#fde68a;background:#fffbeb">
+      <div class="h">Ready-to-Send Seller Outreach</div>
+      <p style="margin:0 0 8px;color:#92400e;font-size:12px">Multi-channel wins: mail + call + text, 3 touches. Reach out fast — competition jumps after the first weeks. Replace [Your Name]/[Your Phone] before sending.</p>
+      <p style="margin:10px 0 4px;font-weight:700;font-size:12px">📬 Yellow letter</p>
+      <pre class="ltr">${esc(yellowLetter(lead))}</pre>
+      <p style="margin:14px 0 4px;font-weight:700;font-size:12px">📞 Cold-call script <span style="font-weight:400;color:#64748b">(best Tue–Thu, 5–7:30pm)</span></p>
+      <pre class="ltr">${esc(coldCallScript(lead))}</pre>
+      <p style="margin:14px 0 4px;font-weight:700;font-size:12px">💬 Text message</p>
+      <pre class="ltr">${esc(smsScript(lead))}</pre>
+      <p style="margin:14px 0 0;font-size:12px"><b>💵 Financing fit:</b> ${esc(financingFit(a))}</p>
+    </div>`
+
   const strat = bestStrategy(lead)
   const cc    = carryingCosts(lead)
   const carryBlock = (cc.propertyTaxYr != null || cc.insuranceYr != null) ? `
@@ -116,6 +146,7 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
   .foot{margin-top:22px;border-top:1px solid #e2e8f0;padding-top:12px;color:#94a3b8;font-size:11px;display:flex;justify-content:space-between}
   .btns{position:fixed;top:12px;right:12px;display:flex;gap:8px}
   .btns button{font:inherit;font-weight:700;font-size:13px;padding:8px 14px;border-radius:8px;border:0;cursor:pointer}
+  pre.ltr{white-space:pre-wrap;word-wrap:break-word;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin:0;color:#1f2937}
   @media print{.btns{display:none} body{background:#fff} .page{padding:0}}
 </style></head>
 <body>
@@ -157,6 +188,8 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
 
     ${maoBlock}
 
+    ${brrrrBlock}
+
     ${carryBlock}
 
     ${predBlock}
@@ -171,8 +204,11 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
       <div class="h">Owner & Foreclosure</div>
       <p style="margin:0 0 6px"><b>${esc(lead.ownerName || "Owner Unknown")}</b>${lead.isAbsentee ? ' · <span style="color:#7c3aed">Absentee</span>' : ""}${lead.taxDelinquent ? ' · <span style="color:#dc2626">Tax delinquent</span>' : ""}</p>
       <p style="margin:0 0 6px">${contactHtml}</p>
-      <p style="margin:0;color:#475569;font-size:13px">${lead.auctionDate ? `Auction: ${esc(lead.auctionDate)}${typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0 ? ` (${lead.daysUntilAuction} days)` : ""} · ` : ""}${lead.defaultAmount ? `Default: ${m(lead.defaultAmount)} · ` : ""}${lead.estimatedValue ? `Listed/Value: ${m(lead.estimatedValue)}` : ""}</p>
+      <p style="margin:0 0 6px;color:#475569;font-size:13px">${lead.auctionDate ? `Auction: ${esc(lead.auctionDate)}${typeof lead.daysUntilAuction === "number" && lead.daysUntilAuction >= 0 ? ` (${lead.daysUntilAuction} days)` : ""} · ` : ""}${lead.defaultAmount ? `Default: ${m(lead.defaultAmount)} · ` : ""}${lead.estimatedValue ? `Listed/Value: ${m(lead.estimatedValue)}` : ""}</p>
+      <p style="margin:0;font-size:12px">✅ Verify the filing (free, same-day): <a href="${esc(rec.url)}" target="_blank" style="color:#1d4ed8">${esc(rec.label)}</a></p>
     </div>
+
+    ${outreachBlock}
 
     <div class="foot">
       <span>Generated by AutoPilot — figures are estimates for investor underwriting, not an appraisal.</span>

@@ -165,6 +165,7 @@ export interface DealAnalysis {
   totalDebt:       number
   mao:             number          // max allowable offer (70% rule − repairs)
   maoDetail:       MaoBreakdown | null  // explicit MAO formula, line by line (flip/fixer)
+  brrrr:           BrrrrAnalysis | null // buy-rehab-rent-refinance-repeat numbers
   equityAvailable: number          // arv − totalDebt
   equityPercent:   number          // 0-100
   wholesaleSpread: number          // mao − totalDebt (assignable room)
@@ -199,6 +200,44 @@ export interface RentalAnalysis {
   cashFlowMo: number   // monthly cash flow after a 75% LTV loan
   dscr:       number   // NOI / annual debt service
   onePercent: boolean  // passes the 1% rule
+}
+
+// BRRRR — Buy, Rehab, Rent, Refinance, Repeat. The pre-foreclosure investor's
+// core play: buy distressed, force equity, refinance at ~75% ARV to pull capital
+// back out, and recycle it into the next deal. "Cash left in deal" is the number
+// that matters — near zero = a (nearly) free, infinitely-returning rental.
+const REFI_LTV = 0.75
+
+export interface BrrrrAnalysis {
+  arv:              number
+  rehab:            number
+  refiLtv:          number   // 0.75
+  refiLoan:         number   // 75% of ARV — what you pull out on refinance
+  maxBuyForFullPull: number  // pay at/below this to recover ALL capital (0.75·ARV − rehab)
+  purchase:         number   // modeled purchase = your MAO
+  allIn:            number   // purchase + rehab
+  cashLeftInDeal:   number   // max(0, allIn − refiLoan)
+  capitalRecovered: number   // min(refiLoan, allIn)
+  forcedEquity:     number   // ARV − allIn
+  equityAfterRefi:  number   // ARV − refiLoan
+  discountToArvPct: number   // (ARV − purchase) / ARV
+  infinite:         boolean  // cashLeftInDeal ≈ 0 → infinite cash-on-cash
+}
+
+function brrrrAnalysis(arv: number, mao: number, repairCost: number): BrrrrAnalysis {
+  const refiLoan = Math.round(arv * REFI_LTV)
+  const allIn = mao + repairCost
+  const cashLeftInDeal = Math.max(0, allIn - refiLoan)
+  return {
+    arv, rehab: repairCost, refiLtv: REFI_LTV, refiLoan,
+    maxBuyForFullPull: Math.max(0, refiLoan - repairCost),
+    purchase: mao, allIn, cashLeftInDeal,
+    capitalRecovered: Math.min(refiLoan, allIn),
+    forcedEquity: arv - allIn,
+    equityAfterRefi: arv - refiLoan,
+    discountToArvPct: arv > 0 ? Math.round(((arv - mao) / arv) * 100) : 0,
+    infinite: cashLeftInDeal <= 0,
+  }
 }
 
 export interface AnalyzeOpts { fallbackPsf?: number; maoPct?: number; assignmentFee?: number; repairCap?: number }
@@ -278,6 +317,8 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?
   const mao = hasValue ? Math.max(0, Math.round(arv * maoPct - repairCost - assignmentFee)) : 0
   // Explicit fix-&-flip MAO (the full investor formula, line by line).
   const maoDetail = hasValue ? flipMaoBreakdown(lead, arv, repairCost) : null
+  // BRRRR refinance math (buy-rehab-rent-refi-repeat).
+  const brrrr = hasValue ? brrrrAnalysis(arv, mao, repairCost) : null
   const equityAvailable = hasValue ? Math.max(0, arv - totalDebt) : 0
   const equityPercent = hasValue ? Math.round((equityAvailable / arv) * 100) : (lead.equityPercent ?? 0)
   const wholesaleSpread = hasValue ? mao - totalDebt : 0
@@ -410,7 +451,7 @@ export function analyzeDeal(lead: ForeclosureLead, levelArg?: RepairLevel, opts?
   else verdict = { call: "Pass", reason: "Margin too thin at current numbers." }
 
   return {
-    hasValue, arv, repairLevel, repairCost, totalDebt, mao, maoDetail,
+    hasValue, arv, repairLevel, repairCost, totalDebt, mao, maoDetail, brrrr,
     equityAvailable, equityPercent, wholesaleSpread, flipProfit,
     grade, motivation, exit, risks, scoreParts, narrative,
     debtEstimated, estimatedPayoff: payoff?.balance ?? null, bankruptcy, chronic,
