@@ -20,7 +20,7 @@ export interface HasLead { lead: ForeclosureLead }
 
 // Resolve real city/ZIP/county for the items' leads (Census), bounded by a
 // concurrency pool and a time budget. Fills lead.city/zip; returns components.
-export async function resolveAreas<T extends HasLead>(items: T[], state: string, budgetMs = 16000): Promise<Map<T, AddrComponents>> {
+export async function resolveAreas<T extends HasLead>(items: T[], state: string, budgetMs = 16000, concurrency = 8): Promise<Map<T, AddrComponents>> {
   const out = new Map<T, AddrComponents>()
   let i = 0
   const worker = async () => {
@@ -35,7 +35,7 @@ export async function resolveAreas<T extends HasLead>(items: T[], state: string,
     }
   }
   await Promise.race([
-    Promise.all(Array.from({ length: 8 }, worker)),
+    Promise.all(Array.from({ length: concurrency }, worker)),
     new Promise<void>((r) => setTimeout(r, budgetMs)),
   ])
   return out

@@ -37,28 +37,35 @@ export default function FixerUppers({ password }: { password: string }) {
   const [depth, setDepth] = useState(250)
   const [condition, setCondition] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fixers, setFixers] = useState<FixerDeal[] | null>(null)
   const [meta, setMeta]   = useState<{ total: number; scanned: number; area: string; exactCount: number; shown: number; fellBack: boolean; searchType: Mode } | null>(null)
   const [open, setOpen]   = useState<number | null>(null)
+  const [effDepth, setEffDepth] = useState(250)
+  const [effLimit, setEffLimit] = useState(60)
 
-  const search = async () => {
+  const search = async (opts?: { depth?: number; limit?: number; more?: boolean }) => {
     if (mode === "city" && !city.trim())   { setError("Enter a city."); return }
     if (mode === "county" && !county.trim()) { setError("Enter a county."); return }
     if (mode === "zip" && !zip.trim())     { setError("Enter a ZIP code."); return }
-    setLoading(true); setError(null)
+    const d = opts?.depth ?? depth
+    const l = opts?.limit ?? 60
+    if (opts?.more) setLoadingMore(true); else setLoading(true)
+    setError(null)
     try {
       const res = await fetch("/api/leads/fixers", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-password": password },
-        body: JSON.stringify({ searchType: mode, city: city.trim(), county: county.trim(), state: state.trim(), zip: zip.trim(), depth, condition }),
+        body: JSON.stringify({ searchType: mode, city: city.trim(), county: county.trim(), state: state.trim(), zip: zip.trim(), depth: d, limit: l, condition }),
       })
       const data = await res.json()
-      if (data?.error) { setError(data.error); setFixers(null) }
-      else { setFixers(data.fixers ?? []); setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, shown: data.shown ?? (data.fixers?.length ?? 0), fellBack: !!data.fellBack, searchType: data.searchType ?? mode }) }
-    } catch { setError("Search failed — try again."); setFixers(null) }
-    setLoading(false)
+      if (data?.error) { setError(data.error); if (!opts?.more) setFixers(null) }
+      else { setFixers(data.fixers ?? []); setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, shown: data.shown ?? (data.fixers?.length ?? 0), fellBack: !!data.fellBack, searchType: data.searchType ?? mode }); setEffDepth(d); setEffLimit(l) }
+    } catch { setError("Search failed — try again."); if (!opts?.more) setFixers(null) }
+    setLoading(false); setLoadingMore(false)
   }
+  const loadMore = () => search({ depth: Math.min(effDepth * 2, 1000), limit: Math.min(effLimit + 60, 200), more: true })
 
   return (
     <div className="space-y-4">
@@ -98,7 +105,7 @@ export default function FixerUppers({ password }: { password: string }) {
             <input type="checkbox" checked={condition} onChange={(e) => setCondition(e.target.checked)} className="accent-indigo-500" />
             Only show houses with explicit condition signals (as-is / TLC / needs work)
           </label>
-          <button onClick={search} disabled={loading} className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white">
+          <button onClick={() => search()} disabled={loading} className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white">
             {loading ? "Searching…" : "🔍 Find fixer-uppers"}
           </button>
         </div>
@@ -190,6 +197,12 @@ export default function FixerUppers({ password }: { password: string }) {
           )
         })}
       </div>
+
+      {fixers && fixers.length > 0 && fixers.length >= effLimit && effLimit < 200 && (
+        <button onClick={loadMore} disabled={loadingMore} className="w-full text-sm font-semibold py-2.5 rounded-xl border border-indigo-500/40 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-200 disabled:opacity-50">
+          {loadingMore ? "Searching deeper…" : `↓ Load more — search deeper (${effLimit} → ${Math.min(effLimit + 60, 200)})`}
+        </button>
+      )}
     </div>
   )
 }

@@ -15,7 +15,6 @@ import { resolveAreas, scopeToArea } from "@/lib/area-scope"
 import { fetchFundamentals } from "@/lib/market-fundamentals"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
-const GEOCODE_CAP = 70
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
@@ -27,7 +26,7 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  let body: { searchType?: string; city?: string; state?: string; county?: string; zip?: string; depth?: number; minScore?: number }
+  let body: { searchType?: string; city?: string; state?: string; county?: string; zip?: string; depth?: number; minScore?: number; limit?: number }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
 
   const searchType: "city" | "county" | "zip" =
@@ -40,6 +39,8 @@ export async function POST(request: NextRequest) {
   if (searchType === "city" && !city) return Response.json({ error: "City is required" }, { status: 400 })
   const depth = Math.min(Math.max(body.depth ?? 300, 50), 1000)
   const minScore = Math.min(Math.max(body.minScore ?? 0, 0), 100)
+  const limit = Math.min(Math.max(body.limit ?? 60, 20), 200)
+  const geocodeCap = Math.min(limit + 50, 160)
 
   try {
     const params: DeepSearchParams =
@@ -58,11 +59,11 @@ export async function POST(request: NextRequest) {
 
     const scored = rankBestDeals(leads, { fallbackValue }).filter((d) => d.score >= minScore)
 
-    const head = scored.slice(0, GEOCODE_CAP)
-    const areas = await resolveAreas(head, state)
+    const head = scored.slice(0, geocodeCap)
+    const areas = await resolveAreas(head, state, 22000, 12)
     const { chosen, exactCount, fellBack } = scopeToArea<BestDeal>(head, areas, searchType, city, county)
 
-    const deals = chosen.slice(0, 40)
+    const deals = chosen.slice(0, limit)
     const eliteCount = deals.filter((d) => d.tier === "elite").length
     const area = searchType === "zip" ? `ZIP ${zip}` : searchType === "county" ? `${county} County${state ? `, ${state}` : ""}` : `${city}${state ? `, ${state}` : ""}`
     return Response.json({ deals, total: scored.length, scanned: ds?.leads.length ?? 0, eliteCount, area, searchType, exactCount, shown: deals.length, fellBack })

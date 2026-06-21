@@ -13,7 +13,6 @@ import { analyzeFixer, type FixerDeal } from "@/lib/fixer"
 import { resolveAreas, scopeToArea } from "@/lib/area-scope"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
-const GEOCODE_CAP = 70   // resolve real city/zip for at most this many top candidates
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
@@ -25,7 +24,7 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  let body: { searchType?: string; city?: string; state?: string; county?: string; zip?: string; depth?: number; condition?: boolean }
+  let body: { searchType?: string; city?: string; state?: string; county?: string; zip?: string; depth?: number; condition?: boolean; limit?: number }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
 
   const searchType: "city" | "county" | "zip" =
@@ -37,6 +36,9 @@ export async function POST(request: NextRequest) {
   if (searchType === "county" && !county) return Response.json({ error: "County is required" }, { status: 400 })
   if (searchType === "city" && !city) return Response.json({ error: "City is required" }, { status: 400 })
   const depth = Math.min(Math.max(body.depth ?? 250, 50), 1000)
+  const limit = Math.min(Math.max(body.limit ?? 60, 20), 200)
+  // Geocode enough top candidates to still fill `limit` after dropping out-of-area ones.
+  const geocodeCap = Math.min(limit + 50, 160)
 
   try {
     const params: DeepSearchParams =
@@ -53,11 +55,11 @@ export async function POST(request: NextRequest) {
       .filter((f) => (body.condition ? f.conditionSignals.length > 0 : true))
       .sort((a, b) => b.fixerScore - a.fixerScore || b.deal.flipProfit - a.deal.flipProfit)
 
-    const head = scored.slice(0, GEOCODE_CAP)
-    const areas = await resolveAreas(head, state)
+    const head = scored.slice(0, geocodeCap)
+    const areas = await resolveAreas(head, state, 22000, 12)
     const { chosen, exactCount, fellBack } = scopeToArea(head, areas, searchType, city, county)
 
-    const fixers = chosen.slice(0, 40)
+    const fixers = chosen.slice(0, limit)
     const area = searchType === "zip" ? `ZIP ${zip}` : searchType === "county" ? `${county} County${state ? `, ${state}` : ""}` : `${city}${state ? `, ${state}` : ""}`
     return Response.json({ fixers, total: scored.length, scanned: ds?.leads.length ?? 0, area, searchType, exactCount, shown: fixers.length, fellBack })
   } catch (err) {
