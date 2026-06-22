@@ -8,6 +8,7 @@ import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { bestStrategy, carryingCosts } from "@/lib/strategy"
 import { yellowLetter, coldCallScript, smsScript, financingFit, recorderLink } from "@/lib/outreach"
+import { predictLikelyToSell } from "@/lib/sell-predictor"
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!))
@@ -92,6 +93,14 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
         <div class="cell"><div class="k">Discount to ARV</div><div class="v">${br.discountToArvPct}%</div></div>
       </div>
       <p style="margin:8px 0 0;color:#475569;font-size:12px">${br.infinite ? `<b>Capital fully recycled</b> — refinancing at 75% of ARV pulls back your entire ${m(br.allIn)} all-in. A (nearly) free rental.` : `Buy at or below <b>${m(br.maxBuyForFullPull)}</b> to recover all your capital on the refinance.`}</p>
+    </div>` : ""
+
+  const sell = predictLikelyToSell(lead)
+  const sellBlock = sell.score >= 30 ? `
+    <div class="card" style="border-color:#fbcfe8;background:#fdf2f8">
+      <div class="h">🎯 Likely to Sell — ${sell.score}% (${esc(sell.band)})</div>
+      <p style="margin:0 0 6px;font-size:13px">Forward-looking owner intent · est. timeframe <b>${esc(sell.timeframe)}</b></p>
+      <ul>${sell.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
     </div>` : ""
 
   const rec = recorderLink(lead)
@@ -189,6 +198,8 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
     ${maoBlock}
 
     ${brrrrBlock}
+
+    ${sellBlock}
 
     ${carryBlock}
 

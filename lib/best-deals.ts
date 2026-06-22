@@ -15,6 +15,7 @@ import { analyzeDeal, fmtMoney, type DealAnalysis } from "@/lib/deal-analysis"
 import { opportunityScore } from "@/lib/opportunity"
 import { fuseSignals } from "@/lib/signal-fusion"
 import { predictPreForeclosure } from "@/lib/predictive"
+import { predictLikelyToSell, type SellPrediction } from "@/lib/sell-predictor"
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
@@ -25,6 +26,7 @@ export interface BestDeal {
   score:   number        // 0-100 unified elite score
   tier:    DealTier
   reasons: string[]      // the specific edges, strongest first
+  sell:    SellPrediction // forward-looking "likely to sell" read
 }
 
 export interface BestDealOpts { fallbackPsf?: number; fallbackValue?: number }
@@ -76,12 +78,17 @@ export function bestDealScore(lead: ForeclosureLead, opts?: BestDealOpts): BestD
 
   // 6. Predictive pre-foreclosure probability (up to 8) — get ahead of the market.
   if (pred.predicted) { s += clamp(pred.probability * (realValue ? 0.04 : 0.08), 0, realValue ? 4 : 8); reasons.push(`Predicted pre-foreclosure (${pred.probability}%)`) }
+
+  // 7. Likely-to-sell — forward-looking owner intent (up to 10).
+  const sell = predictLikelyToSell(lead)
+  s += clamp(sell.score * 0.1, 0, 10)
+  if (sell.score >= 50) reasons.push(`🎯 ${sell.band} likelihood to sell (${sell.timeframe})`)
   if (deal.distressType) reasons.push(deal.distressType)
 
   const score = clamp(Math.round(s), 0, 100)
   if (score <= 0) return null
   const tier: DealTier = score >= 75 ? "elite" : score >= 55 ? "strong" : "solid"
-  return { lead, deal, score, tier, reasons: Array.from(new Set(reasons)).slice(0, 5) }
+  return { lead, deal, score, tier, reasons: Array.from(new Set(reasons)).slice(0, 5), sell }
 }
 
 // Rank a set of leads into the best deals, best first.

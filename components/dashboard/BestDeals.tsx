@@ -172,6 +172,9 @@ export default function BestDeals({ password }: { password: string }) {
               </div>
 
               <p className={`text-xs font-semibold mt-1.5 ${VERDICT_CLR[dl.verdict.call] ?? "text-gray-300"}`}>{dl.verdict.call} — <span className="font-normal text-gray-400">{dl.verdict.reason}</span></p>
+              {d.sell && d.sell.score >= 30 && (
+                <p className="text-[11px] mt-1 text-rose-300">🎯 Likely to sell: <b>{d.sell.score}%</b> ({d.sell.band}, {d.sell.timeframe})</p>
+              )}
 
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
                 {[
