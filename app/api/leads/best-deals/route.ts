@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
     const deals = chosen.slice(0, limit)
     const eliteCount = deals.filter((d) => d.tier === "elite").length
     const area = searchType === "zip" ? `ZIP ${zip}` : searchType === "county" ? `${county} County${state ? `, ${state}` : ""}` : `${city}${state ? `, ${state}` : ""}`
-    return Response.json({ deals, total: scored.length, scanned: ds?.leads.length ?? 0, eliteCount, area, searchType, exactCount, shown: deals.length, fellBack })
+    return Response.json({ deals, total: scored.length, scanned: ds?.leads.length ?? 0, eliteCount, area, searchType, exactCount, shown: deals.length, fellBack, medianValue: fallbackValue ?? null })
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : "Best-deals search failed" }, { status: 500 })
   }

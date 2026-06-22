@@ -6,9 +6,11 @@
 // each one elite.
 
 import { useState } from "react"
-import type { BestDeal } from "@/lib/best-deals"
+import { bestDealScore, type BestDeal } from "@/lib/best-deals"
 import { fmtMoney } from "@/lib/deal-analysis"
 import { openDealSheet } from "@/lib/deal-sheet"
+import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
+import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 type Mode = "city" | "county" | "zip"
 const MODES: { id: Mode; label: string }[] = [
@@ -34,9 +36,38 @@ export default function BestDeals({ password }: { password: string }) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deals, setDeals] = useState<BestDeal[] | null>(null)
-  const [meta, setMeta]   = useState<{ scanned: number; eliteCount: number; area: string; exactCount: number; fellBack: boolean; searchType: Mode } | null>(null)
+  const [meta, setMeta]   = useState<{ scanned: number; eliteCount: number; area: string; exactCount: number; fellBack: boolean; searchType: Mode; medianValue: number | null } | null>(null)
   const [effDepth, setEffDepth] = useState(300)
   const [effLimit, setEffLimit] = useState(60)
+  const [enriching, setEnriching] = useState<Set<string>>(new Set())
+  const [enrichedKeys, setEnrichedKeys] = useState<Set<string>>(new Set())
+  const [autoEnriching, setAutoEnriching] = useState(false)
+
+  // Merge an enrichment patch into a deal's lead and re-score it live.
+  const applyPatch = (medianValue: number | null) => (lead: ForeclosureLead, patch: Partial<ForeclosureLead>) => {
+    const merged = { ...lead, ...patch }
+    const rescored = bestDealScore(merged, { fallbackValue: medianValue ?? undefined })
+    setDeals((prev) => prev ? prev.map((x) => x.lead.address === lead.address ? (rescored ?? { ...x, lead: merged }) : x) : prev)
+    setEnrichedKeys((prev) => new Set(prev).add(lead.address))
+  }
+
+  // Manually (re-)enrich one deal.
+  const enrichOne = async (lead: ForeclosureLead) => {
+    setEnriching((p) => new Set(p).add(lead.address))
+    const r = await enrichLeadClient(lead, password)
+    if (r) applyPatch(meta?.medianValue ?? null)(lead, r.patch)
+    setEnriching((p) => { const n = new Set(p); n.delete(lead.address); return n })
+  }
+
+  // Enrich all currently-shown deals (with bounded concurrency).
+  const enrichAll = async (list: BestDeal[], medianValue: number | null) => {
+    setAutoEnriching(true)
+    const leads = list.map((d) => d.lead)
+    setEnriching(new Set(leads.map((l) => l.address)))
+    await enrichMany(leads, password, applyPatch(medianValue), 3)
+    setEnriching(new Set())
+    setAutoEnriching(false)
+  }
 
   const search = async (opts?: { depth?: number; limit?: number; more?: boolean }) => {
     if (mode === "city" && !city.trim())   { setError("Enter a city."); return }
@@ -54,7 +85,15 @@ export default function BestDeals({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error) { setError(data.error); if (!opts?.more) setDeals(null) }
-      else { setDeals(data.deals ?? []); setMeta({ scanned: data.scanned ?? 0, eliteCount: data.eliteCount ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, fellBack: !!data.fellBack, searchType: data.searchType ?? mode }); setEffDepth(dp); setEffLimit(l) }
+      else {
+        const list = (data.deals ?? []) as BestDeal[]
+        const mv = (data.medianValue ?? null) as number | null
+        setDeals(list)
+        setMeta({ scanned: data.scanned ?? 0, eliteCount: data.eliteCount ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, fellBack: !!data.fellBack, searchType: data.searchType ?? mode, medianValue: mv })
+        setEffDepth(dp); setEffLimit(l); setEnrichedKeys(new Set())
+        // Auto-enrich the top finds in the background so the numbers fill in live.
+        void enrichAll(list.slice(0, 12), mv)
+      }
     } catch { setError("Search failed — try again."); if (!opts?.more) setDeals(null) }
     setLoading(false); setLoadingMore(false)
   }
@@ -99,11 +138,19 @@ export default function BestDeals({ password }: { password: string }) {
       </div>
 
       {meta && deals && (
-        <p className="text-xs text-gray-500">
-          {deals.length} ranked in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.eliteCount} elite · {meta.scanned} scanned
-          {meta.searchType !== "zip" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in-area</span>}
-          {meta.fellBack && <span className="text-amber-400"> · none confirmed in-area this scan — showing nearest</span>}
-        </p>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <p className="text-xs text-gray-500">
+            {deals.length} ranked in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.eliteCount} elite · {meta.scanned} scanned
+            {meta.searchType !== "zip" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in-area</span>}
+            {meta.fellBack && <span className="text-amber-400"> · none confirmed in-area this scan — showing nearest</span>}
+            {autoEnriching && <span className="text-indigo-300"> · ✨ enriching top deals…</span>}
+          </p>
+          {deals.length > 0 && (
+            <button onClick={() => enrichAll(deals, meta.medianValue)} disabled={autoEnriching} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-200 disabled:opacity-50">
+              {autoEnriching ? "Enriching…" : "✨ Enrich all shown"}
+            </button>
+          )}
+        </div>
       )}
 
       {deals && deals.length === 0 && !loading && <p className="text-sm text-gray-400">No deals cleared the bar here — try a larger scan, County mode, or turn off Elite-only.</p>}
@@ -149,6 +196,10 @@ export default function BestDeals({ password }: { password: string }) {
 
               <div className="flex items-center gap-3 mt-3">
                 <button onClick={() => openDealSheet(d.lead)} className="text-xs font-semibold text-emerald-400 hover:text-emerald-300">📄 Deal Sheet (BRRRR + outreach)</button>
+                <button onClick={() => enrichOne(d.lead)} disabled={enriching.has(d.lead.address)} className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-50">
+                  {enriching.has(d.lead.address) ? "✨ Enriching…" : enrichedKeys.has(d.lead.address) ? "↻ Re-enrich" : "✨ Enrich"}
+                </button>
+                {d.lead.ownerName && <span className="text-[11px] text-gray-500">👤 {d.lead.ownerName}{d.lead.phone ? ` · 📞 ${d.lead.phone}` : ""}</span>}
               </div>
             </div>
           )

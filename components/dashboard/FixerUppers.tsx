@@ -5,9 +5,11 @@
 // breakdown so the user sees exactly how the max offer is built.
 
 import { useState } from "react"
-import type { FixerDeal } from "@/lib/fixer"
+import { analyzeFixer, type FixerDeal } from "@/lib/fixer"
 import { fmtMoney } from "@/lib/deal-analysis"
 import { openDealSheet } from "@/lib/deal-sheet"
+import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
+import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 const GRADE_CLR: Record<string, string> = {
   A: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
@@ -44,6 +46,30 @@ export default function FixerUppers({ password }: { password: string }) {
   const [open, setOpen]   = useState<number | null>(null)
   const [effDepth, setEffDepth] = useState(250)
   const [effLimit, setEffLimit] = useState(60)
+  const [enriching, setEnriching] = useState<Set<string>>(new Set())
+  const [enrichedKeys, setEnrichedKeys] = useState<Set<string>>(new Set())
+  const [autoEnriching, setAutoEnriching] = useState(false)
+
+  const applyPatch = (lead: ForeclosureLead, patch: Partial<ForeclosureLead>) => {
+    const merged = { ...lead, ...patch }
+    const refixed = analyzeFixer(merged)
+    setFixers((prev) => prev ? prev.map((x) => x.lead.address === lead.address ? (refixed ?? { ...x, lead: merged }) : x) : prev)
+    setEnrichedKeys((p) => new Set(p).add(lead.address))
+  }
+  const enrichOne = async (lead: ForeclosureLead) => {
+    setEnriching((p) => new Set(p).add(lead.address))
+    const r = await enrichLeadClient(lead, password)
+    if (r) applyPatch(lead, r.patch)
+    setEnriching((p) => { const n = new Set(p); n.delete(lead.address); return n })
+  }
+  const enrichAll = async (list: FixerDeal[]) => {
+    setAutoEnriching(true)
+    const leads = list.map((d) => d.lead)
+    setEnriching(new Set(leads.map((l) => l.address)))
+    await enrichMany(leads, password, applyPatch, 3)
+    setEnriching(new Set())
+    setAutoEnriching(false)
+  }
 
   const search = async (opts?: { depth?: number; limit?: number; more?: boolean }) => {
     if (mode === "city" && !city.trim())   { setError("Enter a city."); return }
@@ -61,7 +87,13 @@ export default function FixerUppers({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error) { setError(data.error); if (!opts?.more) setFixers(null) }
-      else { setFixers(data.fixers ?? []); setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, shown: data.shown ?? (data.fixers?.length ?? 0), fellBack: !!data.fellBack, searchType: data.searchType ?? mode }); setEffDepth(d); setEffLimit(l) }
+      else {
+        const list = (data.fixers ?? []) as FixerDeal[]
+        setFixers(list)
+        setMeta({ total: data.total ?? 0, scanned: data.scanned ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, shown: data.shown ?? list.length, fellBack: !!data.fellBack, searchType: data.searchType ?? mode })
+        setEffDepth(d); setEffLimit(l); setEnrichedKeys(new Set())
+        void enrichAll(list.slice(0, 12))
+      }
     } catch { setError("Search failed — try again."); if (!opts?.more) setFixers(null) }
     setLoading(false); setLoadingMore(false)
   }
@@ -113,13 +145,21 @@ export default function FixerUppers({ password }: { password: string }) {
       </div>
 
       {meta && fixers && (
-        <p className="text-xs text-gray-500">
-          {fixers.length} flip{fixers.length === 1 ? "" : "s"} in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.scanned} scanned
-          {meta.searchType === "city" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in {meta.area.split(",")[0]}{fixers.length > meta.exactCount ? ` (+${fixers.length - meta.exactCount} unconfirmed addresses)` : ""} — use County mode for more volume</span>}
-          {meta.searchType === "city" && meta.fellBack && <span className="text-amber-400"> · none confirmed in {meta.area.split(",")[0]} this scan — showing nearby; try County mode</span>}
-          {meta.searchType === "county" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in {meta.area.split(",")[0]}{fixers.length > meta.exactCount ? ` (+${fixers.length - meta.exactCount} unconfirmed)` : ""}, spanning its cities</span>}
-          {meta.searchType === "county" && meta.fellBack && <span className="text-amber-400"> · none confirmed in {meta.area.split(",")[0]} this scan — showing nearest</span>}
-        </p>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <p className="text-xs text-gray-500">
+            {fixers.length} flip{fixers.length === 1 ? "" : "s"} in <span className="text-gray-300 font-semibold">{meta.area}</span> · {meta.scanned} scanned
+            {meta.searchType === "city" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in {meta.area.split(",")[0]}{fixers.length > meta.exactCount ? ` (+${fixers.length - meta.exactCount} unconfirmed)` : ""} — County mode for more</span>}
+            {meta.searchType === "city" && meta.fellBack && <span className="text-amber-400"> · none confirmed in {meta.area.split(",")[0]} — showing nearby; try County mode</span>}
+            {meta.searchType === "county" && !meta.fellBack && <span className="text-emerald-400"> · {meta.exactCount} confirmed in {meta.area.split(",")[0]}{fixers.length > meta.exactCount ? ` (+${fixers.length - meta.exactCount} unconfirmed)` : ""}, spanning its cities</span>}
+            {meta.searchType === "county" && meta.fellBack && <span className="text-amber-400"> · none confirmed in {meta.area.split(",")[0]} — showing nearest</span>}
+            {autoEnriching && <span className="text-indigo-300"> · ✨ enriching top flips…</span>}
+          </p>
+          {fixers.length > 0 && (
+            <button onClick={() => enrichAll(fixers)} disabled={autoEnriching} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-200 disabled:opacity-50">
+              {autoEnriching ? "Enriching…" : "✨ Enrich all shown"}
+            </button>
+          )}
+        </div>
       )}
 
       {fixers && fixers.length === 0 && !loading && (
@@ -173,6 +213,10 @@ export default function FixerUppers({ password }: { password: string }) {
                   {open === i ? "▲ Hide MAO math" : "▼ Show MAO math"}
                 </button>
                 <button onClick={() => openDealSheet(f.lead)} className="text-xs font-semibold text-emerald-400 hover:text-emerald-300">📄 Deal Sheet</button>
+                <button onClick={() => enrichOne(f.lead)} disabled={enriching.has(f.lead.address)} className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-50">
+                  {enriching.has(f.lead.address) ? "✨ Enriching…" : enrichedKeys.has(f.lead.address) ? "↻ Re-enrich" : "✨ Enrich"}
+                </button>
+                {f.lead.ownerName && <span className="text-[11px] text-gray-500">👤 {f.lead.ownerName}</span>}
               </div>
 
               {open === i && mao && (
