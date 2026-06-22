@@ -10,6 +10,7 @@ import { fmtMoney } from "@/lib/deal-analysis"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
+import PhotoRehab from "@/components/dashboard/PhotoRehab"
 
 const GRADE_CLR: Record<string, string> = {
   A: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
@@ -105,6 +106,8 @@ export default function FixerUppers({ password }: { password: string }) {
         <h3 className="text-lg font-bold text-white">🔧 Fixer-Upper Finder</h3>
         <p className="text-sm text-gray-400 mt-0.5">Finds distressed-condition houses, comps the after-repair value, and runs the full Max-Allowable-Offer formula (ARV − commission − closing − holding − renovation − profit) on each. Search a single city, a whole county, or one ZIP.</p>
       </div>
+
+      <PhotoRehab password={password} />
 
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-3">
         <div className="flex gap-1.5">
