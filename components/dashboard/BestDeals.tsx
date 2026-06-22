@@ -11,6 +11,7 @@ import { fmtMoney } from "@/lib/deal-analysis"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
+import AINegotiator from "@/components/dashboard/AINegotiator"
 
 type Mode = "city" | "county" | "zip"
 const MODES: { id: Mode; label: string }[] = [
@@ -42,6 +43,8 @@ export default function BestDeals({ password }: { password: string }) {
   const [enriching, setEnriching] = useState<Set<string>>(new Set())
   const [enrichedKeys, setEnrichedKeys] = useState<Set<string>>(new Set())
   const [autoEnriching, setAutoEnriching] = useState(false)
+  const [negotiate, setNegotiate] = useState<Set<string>>(new Set())
+  const toggleNegotiate = (key: string) => setNegotiate((p) => { const n = new Set(p); if (n.has(key)) n.delete(key); else n.add(key); return n })
 
   // Merge an enrichment patch into a deal's lead and re-score it live.
   const applyPatch = (medianValue: number | null) => (lead: ForeclosureLead, patch: Partial<ForeclosureLead>) => {
@@ -239,8 +242,11 @@ export default function BestDeals({ password }: { password: string }) {
                 <button onClick={() => enrichOne(d.lead)} disabled={enriching.has(d.lead.address)} className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-50">
                   {enriching.has(d.lead.address) ? "✨ Enriching…" : enrichedKeys.has(d.lead.address) ? "↻ Re-enrich" : "✨ Enrich"}
                 </button>
+                <button onClick={() => toggleNegotiate(d.lead.address)} className="text-xs font-semibold text-violet-400 hover:text-violet-300">💬 AI Negotiator</button>
                 {d.lead.ownerName && <span className="text-[11px] text-gray-500">👤 {d.lead.ownerName}{d.lead.phone ? ` · 📞 ${d.lead.phone}` : ""}</span>}
               </div>
+
+              {negotiate.has(d.lead.address) && <AINegotiator lead={d.lead} password={password} />}
             </div>
           )
         })}
