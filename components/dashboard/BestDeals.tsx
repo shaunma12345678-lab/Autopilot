@@ -69,10 +69,13 @@ export default function BestDeals({ password }: { password: string }) {
     setAutoEnriching(false)
   }
 
-  const search = async (opts?: { depth?: number; limit?: number; more?: boolean }) => {
-    if (mode === "city" && !city.trim())   { setError("Enter a city."); return }
-    if (mode === "county" && !county.trim()) { setError("Enter a county."); return }
-    if (mode === "zip" && !zip.trim())     { setError("Enter a ZIP code."); return }
+  const search = async (opts?: { depth?: number; limit?: number; more?: boolean; searchType?: Mode; city?: string; county?: string; zip?: string; state?: string }) => {
+    const sType = opts?.searchType ?? mode
+    const c = (opts?.city ?? city).trim(), co = (opts?.county ?? county).trim()
+    const z = (opts?.zip ?? zip).trim(), st = (opts?.state ?? state).trim()
+    if (sType === "city" && !c)   { setError("Enter a city."); return }
+    if (sType === "county" && !co) { setError("Enter a county."); return }
+    if (sType === "zip" && !z)     { setError("Enter a ZIP code."); return }
     const dp = opts?.depth ?? depth
     const l = opts?.limit ?? 60
     if (opts?.more) setLoadingMore(true); else setLoading(true)
@@ -81,7 +84,7 @@ export default function BestDeals({ password }: { password: string }) {
       const res = await fetch("/api/leads/best-deals", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-password": password },
-        body: JSON.stringify({ searchType: mode, city: city.trim(), county: county.trim(), state: state.trim(), zip: zip.trim(), depth: dp, limit: l, minScore: eliteOnly ? 75 : 0 }),
+        body: JSON.stringify({ searchType: sType, city: c, county: co, state: st, zip: z, depth: dp, limit: l, minScore: eliteOnly ? 75 : 0 }),
       })
       const data = await res.json()
       if (data?.error) { setError(data.error); if (!opts?.more) setDeals(null) }
@@ -89,7 +92,7 @@ export default function BestDeals({ password }: { password: string }) {
         const list = (data.deals ?? []) as BestDeal[]
         const mv = (data.medianValue ?? null) as number | null
         setDeals(list)
-        setMeta({ scanned: data.scanned ?? 0, eliteCount: data.eliteCount ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, fellBack: !!data.fellBack, searchType: data.searchType ?? mode, medianValue: mv })
+        setMeta({ scanned: data.scanned ?? 0, eliteCount: data.eliteCount ?? 0, area: data.area ?? "", exactCount: data.exactCount ?? 0, fellBack: !!data.fellBack, searchType: data.searchType ?? sType, medianValue: mv })
         setEffDepth(dp); setEffLimit(l); setEnrichedKeys(new Set())
         // Auto-enrich the top finds in the background so the numbers fill in live.
         void enrichAll(list.slice(0, 12), mv)
@@ -99,11 +102,45 @@ export default function BestDeals({ password }: { password: string }) {
   }
   const loadMore = () => search({ depth: Math.min(effDepth * 2, 1000), limit: Math.min(effLimit + 60, 200), more: true })
 
+  // ── AI Deal Copilot — natural language → a real search ──────────────────────
+  const [copilot, setCopilot] = useState("")
+  const [copilotAnswer, setCopilotAnswer] = useState<string | null>(null)
+  const [copilotLoading, setCopilotLoading] = useState(false)
+  const runCopilot = async () => {
+    if (!copilot.trim()) return
+    setCopilotLoading(true); setCopilotAnswer(null); setError(null)
+    try {
+      const res = await fetch("/api/leads/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-password": password },
+        body: JSON.stringify({ question: copilot.trim(), count: deals?.length ?? 0 }),
+      })
+      const data = await res.json()
+      setCopilotAnswer(data.answer ?? null)
+      const s = data.search as { type?: string; city?: string; county?: string; zip?: string; state?: string } | null
+      if (s && (s.city || s.county || s.zip)) {
+        const sType: Mode = s.type === "county" ? "county" : s.type === "zip" ? "zip" : "city"
+        setMode(sType); setCity(s.city ?? ""); setCounty(s.county ?? ""); setZip(s.zip ?? ""); if (s.state) setState(s.state)
+        await search({ searchType: sType, city: s.city ?? "", county: s.county ?? "", zip: s.zip ?? "", state: s.state ?? state })
+      }
+    } catch { setCopilotAnswer("Copilot is unavailable — try again.") }
+    setCopilotLoading(false)
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <h3 className="text-lg font-bold text-white">💎 Best Deals on the Market</h3>
-        <p className="text-sm text-gray-400 mt-0.5">One elite ranking that fuses every signal — profit margin, BRRRR capital recovery, equity, seller motivation, hidden-gem corroboration, and predictive pre-foreclosure — so the very best deals rise to the top.</p>
+        <p className="text-sm text-gray-400 mt-0.5">One elite ranking that fuses every signal — profit margin, BRRRR capital recovery, equity, seller motivation, hidden-gem corroboration, predictive pre-foreclosure, and likely-to-sell — so the very best deals rise to the top.</p>
+      </div>
+
+      {/* AI Deal Copilot */}
+      <div className="bg-gradient-to-r from-violet-950/50 to-indigo-950/40 border border-violet-500/30 rounded-2xl p-3">
+        <div className="flex gap-2">
+          <input value={copilot} onChange={(e) => setCopilot(e.target.value)} onKeyDown={(e) => e.key === "Enter" && runCopilot()} placeholder="🤖 Ask the copilot — e.g. 'best BRRRR deals in Kansas City MO' or 'fixer-uppers in Marion County IN'" className="flex-1 bg-gray-900/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
+          <button onClick={runCopilot} disabled={copilotLoading} className="text-sm font-semibold px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white">{copilotLoading ? "Thinking…" : "Ask"}</button>
+        </div>
+        {copilotAnswer && <p className="text-xs text-violet-200 mt-2">{copilotAnswer}</p>}
       </div>
 
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-3">
