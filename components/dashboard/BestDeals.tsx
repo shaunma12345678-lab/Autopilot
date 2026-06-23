@@ -12,6 +12,7 @@ import { openDealSheet } from "@/lib/deal-sheet"
 import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import AINegotiator from "@/components/dashboard/AINegotiator"
+import PhotoRehab from "@/components/dashboard/PhotoRehab"
 
 type Mode = "city" | "county" | "zip"
 const MODES: { id: Mode; label: string }[] = [
@@ -145,6 +146,8 @@ export default function BestDeals({ password }: { password: string }) {
         </div>
         {copilotAnswer && <p className="text-xs text-violet-200 mt-2">{copilotAnswer}</p>}
       </div>
+
+      <PhotoRehab password={password} />
 
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-3">
         <div className="flex gap-1.5">

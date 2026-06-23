@@ -11,6 +11,8 @@ import { openDealSheet } from "@/lib/deal-sheet"
 import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import PhotoRehab from "@/components/dashboard/PhotoRehab"
+import AINegotiator from "@/components/dashboard/AINegotiator"
+import { predictLikelyToSell } from "@/lib/sell-predictor"
 
 const GRADE_CLR: Record<string, string> = {
   A: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
@@ -50,6 +52,8 @@ export default function FixerUppers({ password }: { password: string }) {
   const [enriching, setEnriching] = useState<Set<string>>(new Set())
   const [enrichedKeys, setEnrichedKeys] = useState<Set<string>>(new Set())
   const [autoEnriching, setAutoEnriching] = useState(false)
+  const [negotiate, setNegotiate] = useState<Set<string>>(new Set())
+  const toggleNegotiate = (key: string) => setNegotiate((p) => { const n = new Set(p); if (n.has(key)) n.delete(key); else n.add(key); return n })
 
   const applyPatch = (lead: ForeclosureLead, patch: Partial<ForeclosureLead>) => {
     const merged = { ...lead, ...patch }
@@ -187,6 +191,7 @@ export default function FixerUppers({ password }: { password: string }) {
               </div>
 
               <p className={`text-xs font-semibold mt-1.5 ${VERDICT_CLR[d.verdict.call] ?? "text-gray-300"}`}>{d.verdict.call} — <span className="font-normal text-gray-400">{d.verdict.reason}</span></p>
+              {(() => { const sell = predictLikelyToSell(f.lead); return sell.score >= 30 ? <p className="text-[11px] mt-1 text-rose-300">🎯 Likely to sell: <b>{sell.score}%</b> ({sell.band}, {sell.timeframe})</p> : null })()}
 
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
                 {[
@@ -219,8 +224,11 @@ export default function FixerUppers({ password }: { password: string }) {
                 <button onClick={() => enrichOne(f.lead)} disabled={enriching.has(f.lead.address)} className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-50">
                   {enriching.has(f.lead.address) ? "✨ Enriching…" : enrichedKeys.has(f.lead.address) ? "↻ Re-enrich" : "✨ Enrich"}
                 </button>
+                <button onClick={() => toggleNegotiate(f.lead.address)} className="text-xs font-semibold text-violet-400 hover:text-violet-300">💬 AI Negotiator</button>
                 {f.lead.ownerName && <span className="text-[11px] text-gray-500">👤 {f.lead.ownerName}</span>}
               </div>
+
+              {negotiate.has(f.lead.address) && <AINegotiator lead={f.lead} password={password} />}
 
               {open === i && mao && (
                 <div className="mt-2.5 bg-blue-950/20 border border-blue-500/20 rounded-xl p-3">
