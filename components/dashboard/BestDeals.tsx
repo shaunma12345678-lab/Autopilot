@@ -50,7 +50,9 @@ export default function BestDeals({ password }: { password: string }) {
   // Merge an enrichment patch into a deal's lead and re-score it live.
   const applyPatch = (medianValue: number | null) => (lead: ForeclosureLead, patch: Partial<ForeclosureLead>) => {
     const merged = { ...lead, ...patch }
-    const rescored = bestDealScore(merged, { fallbackValue: medianValue ?? undefined })
+    // Real sqft (from county parcel data) × an area $/sqft derived from the
+    // median home value → a size-adjusted per-property value, not a flat anchor.
+    const rescored = bestDealScore(merged, { fallbackValue: medianValue ?? undefined, fallbackPsf: medianValue ? Math.round(medianValue / 1700) : undefined })
     setDeals((prev) => prev ? prev.map((x) => x.lead.address === lead.address ? (rescored ?? { ...x, lead: merged }) : x) : prev)
     setEnrichedKeys((prev) => new Set(prev).add(lead.address))
   }

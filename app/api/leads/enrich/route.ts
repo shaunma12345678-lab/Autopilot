@@ -9,6 +9,7 @@ import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { fetchPropertyRecord, valuateProperty, isValuationConfigured } from "@/lib/property-valuation"
 import { enrichPropertyFromWeb } from "@/lib/property-enrichment"
+import { enrichFromParcel } from "@/lib/parcel-enrich"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 
@@ -40,13 +41,14 @@ export async function POST(request: NextRequest) {
   try {
     // Our own free web+AI enrichment runs ALWAYS; RentCast (if configured) is
     // layered on top for accuracy. RentCast values win on overlap.
-    const [web, record, valuation] = await Promise.all([
+    const [web, record, valuation, parcel] = await Promise.all([
       enrichPropertyFromWeb(p).catch(() => null),
       isValuationConfigured() ? fetchPropertyRecord(p).catch(() => null) : Promise.resolve(null),
       isValuationConfigured() ? valuateProperty(p).catch(() => null) : Promise.resolve(null),
+      enrichFromParcel(p.address, p.state).catch(() => null),
     ])
 
-    if (!web && !record && !valuation) {
+    if (!web && !record && !valuation && !parcel) {
       return Response.json({ configured: true, found: false, note: "Couldn't find public details for this address. Try a more complete address." })
     }
 
@@ -64,6 +66,16 @@ export async function POST(request: NextRequest) {
         const absentee = !norm(record.mailingAddress).includes(norm(p.address))
         set(patch, "isAbsentee", absentee)
       }
+    }
+
+    // Our own keyless county-parcel data (real public assessor facts) — fills
+    // before the weaker web extraction. We intentionally don't use assessed
+    // value as the market value (CA Prop-13 understates it); real sqft drives
+    // the comp-based ARV instead.
+    if (parcel) {
+      sources.push(parcel.source)
+      set(patch, "sqft", parcel.sqft); set(patch, "beds", parcel.beds); set(patch, "baths", parcel.baths)
+      set(patch, "yearBuilt", parcel.yearBuilt); set(patch, "propertyType", parcel.propertyType)
     }
 
     // Our own web extraction fills any remaining gaps.
