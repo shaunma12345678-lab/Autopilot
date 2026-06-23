@@ -50,11 +50,20 @@ export async function enrichFromParcel(address: string, state: string): Promise<
     if (!layer) return null
 
     const outFields = [layer.f.sqft, layer.f.beds, layer.f.baths, layer.f.year, layer.f.use, layer.f.units, layer.f.land, layer.f.imp].filter(Boolean).join(",")
-    const url = `${layer.url}?geometry=${comp.lng},${comp.lat}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${encodeURIComponent(outFields)}&returnGeometry=false&f=json`
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) })
-    if (!res.ok) return null
-    const data = (await res.json()) as { features?: Array<{ attributes?: Record<string, unknown> }> }
-    const a = data.features?.[0]?.attributes
+    const base = `${layer.url}?outFields=${encodeURIComponent(outFields)}&returnGeometry=false&inSR=4326&spatialRel=esriSpatialRelIntersects&f=json`
+    const runQuery = async (geometry: string, geometryType: string): Promise<Record<string, unknown> | null> => {
+      const res = await fetch(`${base}&geometryType=${geometryType}&geometry=${geometry}`, { signal: AbortSignal.timeout(10000) })
+      if (!res.ok) return null
+      const data = (await res.json()) as { features?: Array<{ attributes?: Record<string, unknown> }> }
+      return data.features?.[0]?.attributes ?? null
+    }
+    // Exact rooftop point first; if it lands just off the parcel polygon, retry
+    // with a ~25m envelope so we still catch the property.
+    let a = await runQuery(`${comp.lng},${comp.lat}`, "esriGeometryPoint")
+    if (!a) {
+      const dd = 0.00025
+      a = await runQuery(`${comp.lng - dd},${comp.lat - dd},${comp.lng + dd},${comp.lat + dd}`, "esriGeometryEnvelope")
+    }
     if (!a) return null
 
     const land = layer.f.land ? num(a[layer.f.land]) : null
