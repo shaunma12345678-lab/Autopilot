@@ -20,6 +20,8 @@ import { predictLikelyToSell, type SellPrediction } from "@/lib/sell-predictor"
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
 export type DealTier = "elite" | "strong" | "solid"
+export type ConfLevel = "high" | "medium" | "low"
+export interface DealConfidence { level: ConfLevel; label: string }
 export interface BestDeal {
   lead:    ForeclosureLead
   deal:    DealAnalysis
@@ -27,6 +29,20 @@ export interface BestDeal {
   tier:    DealTier
   reasons: string[]      // the specific edges, strongest first
   sell:    SellPrediction // forward-looking "likely to sell" read
+  confidence: DealConfidence  // how much to trust the numbers + why
+}
+
+// How trustworthy are this deal's numbers, and why — so the score is auditable.
+function dealConfidence(lead: ForeclosureLead, deal: DealAnalysis): DealConfidence {
+  const comps = lead.comps?.length ?? 0
+  const hasSqft = !!(lead.sqft && lead.sqft > 200)
+  if (deal.hasValue && !deal.valueEstimated && (hasSqft || comps >= 3))
+    return { level: "high", label: `real value${hasSqft ? ` · ${lead.sqft!.toLocaleString()} sqft` : ""}${comps ? ` · ${comps} comps` : ""}` }
+  if (deal.hasValue && !deal.valueEstimated)
+    return { level: "medium", label: "real value, thin comps — enrich to confirm" }
+  if (deal.hasValue && deal.valueEstimated)
+    return { level: "low", label: "estimated from area median — enrich for real numbers" }
+  return { level: "low", label: "no value yet — run enrich" }
 }
 
 export interface BestDealOpts { fallbackPsf?: number; fallbackValue?: number }
@@ -88,7 +104,7 @@ export function bestDealScore(lead: ForeclosureLead, opts?: BestDealOpts): BestD
   const score = clamp(Math.round(s), 0, 100)
   if (score <= 0) return null
   const tier: DealTier = score >= 75 ? "elite" : score >= 55 ? "strong" : "solid"
-  return { lead, deal, score, tier, reasons: Array.from(new Set(reasons)).slice(0, 5), sell }
+  return { lead, deal, score, tier, reasons: Array.from(new Set(reasons)).slice(0, 5), sell, confidence: dealConfidence(lead, deal) }
 }
 
 // Rank a set of leads into the best deals, best first.

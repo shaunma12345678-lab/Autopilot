@@ -5,8 +5,9 @@
 // deals (flip, BRRRR, fixer, wholesale) first with the exact edges that make
 // each one elite.
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { bestDealScore, type BestDeal } from "@/lib/best-deals"
+import { learnPreferences, fitScore } from "@/lib/personalize"
 import { fmtMoney } from "@/lib/deal-analysis"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
@@ -46,6 +47,25 @@ export default function BestDeals({ password }: { password: string }) {
   const [autoEnriching, setAutoEnriching] = useState(false)
   const [negotiate, setNegotiate] = useState<Set<string>>(new Set())
   const toggleNegotiate = (key: string) => setNegotiate((p) => { const n = new Set(p); if (n.has(key)) n.delete(key); else n.add(key); return n })
+
+  // ── Self-learning personalization — learn from saved deals ──────────────────
+  // Lazy init — this section only mounts client-side (after the tab is opened),
+  // so reading localStorage here is safe and avoids a load-effect.
+  const [saved, setSaved] = useState<BestDeal[]>(() => {
+    if (typeof window === "undefined") return []
+    try { const raw = localStorage.getItem("dp_saved_v1"); return raw ? JSON.parse(raw) : [] } catch { return [] }
+  })
+  const [forYou, setForYou] = useState(false)
+  const persistSaved = (next: BestDeal[]) => { setSaved(next); try { localStorage.setItem("dp_saved_v1", JSON.stringify(next)) } catch { /* ignore */ } }
+  const isSaved = (addr: string) => saved.some((s) => s.lead.address === addr)
+  const toggleSave = (d: BestDeal) => persistSaved(isSaved(d.lead.address) ? saved.filter((s) => s.lead.address !== d.lead.address) : [...saved, d])
+  const prefs = useMemo(() => learnPreferences(saved), [saved])
+  // The list to render — re-ranked toward the learned taste when "For You" is on.
+  const shown = useMemo(() => {
+    const list = deals ?? []
+    if (!forYou || !prefs) return list
+    return [...list].sort((a, b) => (fitScore(b, prefs).score * 0.5 + b.score * 0.5) - (fitScore(a, prefs).score * 0.5 + a.score * 0.5))
+  }, [deals, forYou, prefs])
 
   // Merge an enrichment patch into a deal's lead and re-score it live.
   const applyPatch = (medianValue: number | null) => (lead: ForeclosureLead, patch: Partial<ForeclosureLead>) => {
@@ -190,19 +210,29 @@ export default function BestDeals({ password }: { password: string }) {
             {meta.fellBack && <span className="text-amber-400"> · none confirmed in-area this scan — showing nearest</span>}
             {autoEnriching && <span className="text-indigo-300"> · ✨ enriching top deals…</span>}
           </p>
-          {deals.length > 0 && (
-            <button onClick={() => enrichAll(deals, meta.medianValue)} disabled={autoEnriching} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-200 disabled:opacity-50">
-              {autoEnriching ? "Enriching…" : "✨ Enrich all shown"}
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {prefs ? (
+              <button onClick={() => setForYou(!forYou)} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${forYou ? "bg-rose-600/30 border-rose-400/50 text-rose-100" : "bg-gray-800/40 border-gray-700/50 text-gray-300 hover:text-white"}`}>
+                ★ For You{forYou ? ` · learned from ${prefs.n}` : ""}
+              </button>
+            ) : (
+              <span className="text-[11px] text-gray-600">★ Save deals to train your For-You ranking</span>
+            )}
+            {deals.length > 0 && (
+              <button onClick={() => enrichAll(deals, meta.medianValue)} disabled={autoEnriching} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-200 disabled:opacity-50">
+                {autoEnriching ? "Enriching…" : "✨ Enrich all shown"}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       {deals && deals.length === 0 && !loading && <p className="text-sm text-gray-400">No deals cleared the bar here — try a larger scan, County mode, or turn off Elite-only.</p>}
 
       <div className="space-y-3">
-        {(deals ?? []).map((d, i) => {
+        {shown.map((d, i) => {
           const dl = d.deal, t = TIER[d.tier] ?? TIER.solid
+          const fit = forYou && prefs ? fitScore(d, prefs) : null
           return (
             <div key={`${d.lead.address}-${i}`} className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -211,6 +241,7 @@ export default function BestDeals({ password }: { password: string }) {
                   <p className="text-xs text-gray-500">{[d.lead.city, d.lead.state, d.lead.zip].filter(Boolean).join(", ")}</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => toggleSave(d)} title={isSaved(d.lead.address) ? "Saved — trains your For-You ranking" : "Save (trains your For-You ranking)"} className={`text-sm ${isSaved(d.lead.address) ? "text-rose-400" : "text-gray-600 hover:text-rose-300"}`}>{isSaved(d.lead.address) ? "★" : "☆"}</button>
                   <span className="text-[11px] font-bold text-indigo-300">Score {d.score}/100</span>
                   <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded border ${t.cls}`}>{t.label}</span>
                 </div>
@@ -219,6 +250,14 @@ export default function BestDeals({ password }: { password: string }) {
               <p className={`text-xs font-semibold mt-1.5 ${VERDICT_CLR[dl.verdict.call] ?? "text-gray-300"}`}>{dl.verdict.call} — <span className="font-normal text-gray-400">{dl.verdict.reason}</span></p>
               {d.sell && d.sell.score >= 30 && (
                 <p className="text-[11px] mt-1 text-rose-300">🎯 Likely to sell: <b>{d.sell.score}%</b> ({d.sell.band}, {d.sell.timeframe})</p>
+              )}
+              {d.confidence && (
+                <p className="text-[11px] mt-1 text-gray-500">
+                  {d.confidence.level === "high" ? "🟢" : d.confidence.level === "medium" ? "🟡" : "🟠"} Confidence: <b className={d.confidence.level === "high" ? "text-emerald-300" : d.confidence.level === "medium" ? "text-amber-300" : "text-orange-300"}>{d.confidence.level}</b> — {d.confidence.label}
+                </p>
+              )}
+              {fit && fit.score >= 40 && (
+                <p className="text-[11px] mt-1 text-rose-300">★ For you {fit.score}% — {fit.reasons.join(" · ")}</p>
               )}
 
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
