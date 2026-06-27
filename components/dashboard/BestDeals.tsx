@@ -264,9 +264,11 @@ export default function BestDeals({ password }: { password: string }) {
                   {d.competition.level === "fresh" ? "🟢" : d.competition.level === "moderate" ? "🟡" : "🔴"} <span className={d.competition.level === "fresh" ? "text-emerald-300" : d.competition.level === "moderate" ? "text-amber-300" : "text-red-300"}>{d.competition.label}</span>
                 </p>
               )}
-              {d.negotiation && (
+              {d.negotiation && (d.negotiation.fitsMao ? (
                 <p className="text-[11px] mt-1 text-sky-300">🤝 Likely accepts <b>{m(d.negotiation.acceptLow)}–{m(d.negotiation.acceptHigh)}</b> · open at <b>{m(d.negotiation.opening)}</b>{d.negotiation.note ? ` · ${d.negotiation.note}` : ""}</p>
-              )}
+              ) : (
+                <p className="text-[11px] mt-1 text-orange-300">🤝 Seller likely wants <b>{m(d.negotiation.acceptLow)}–{m(d.negotiation.acceptHigh)}</b> — above your max offer ({m(dl.maoDetail ? dl.maoDetail.mao : dl.mao)}); only a deal if they&apos;re far more motivated.</p>
+              ))}
 
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
                 {[

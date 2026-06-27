@@ -106,9 +106,11 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
       <div class="h">Competition & Negotiation</div>
       <p style="margin:0 0 6px;font-size:14px"><b style="color:${dealColor}">${comp.level === "fresh" ? "🟢" : comp.level === "moderate" ? "🟡" : "🔴"} ${esc(comp.label)}</b></p>
       ${comp.reasons.length ? `<ul style="margin:0 0 8px">${comp.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
-      ${nego ? `<p style="margin:6px 0 0;font-size:13px">🤝 <b>Likely accepts ${m(nego.acceptLow)}–${m(nego.acceptHigh)}</b> (~${nego.discountPct}% off) · suggested opening offer <b>${m(nego.opening)}</b></p>
-      ${nego.reasons.length ? `<p style="margin:4px 0 0;color:#475569;font-size:12px">${nego.reasons.map(esc).join(" · ")}</p>` : ""}
-      ${nego.note ? `<p style="margin:4px 0 0;color:#b45309;font-size:12px">⚠ ${esc(nego.note)}</p>` : ""}` : ""}
+      ${nego ? (nego.fitsMao
+        ? `<p style="margin:6px 0 0;font-size:13px">🤝 <b>Likely accepts ${m(nego.acceptLow)}–${m(nego.acceptHigh)}</b> (~${nego.discountPct}% off) · suggested opening offer <b>${m(nego.opening)}</b></p>`
+        : `<p style="margin:6px 0 0;font-size:13px;color:#b45309">🤝 Seller likely wants <b>${m(nego.acceptLow)}–${m(nego.acceptHigh)}</b> — above your max offer (${m(a.maoDetail ? a.maoDetail.mao : a.mao)}). Only a deal if they're far more motivated than they appear.</p>`)
+        + (nego.reasons.length ? `<p style="margin:4px 0 0;color:#475569;font-size:12px">${nego.reasons.map(esc).join(" · ")}</p>` : "")
+        + (nego.note ? `<p style="margin:4px 0 0;color:#b45309;font-size:12px">⚠ ${esc(nego.note)}</p>` : "") : ""}
       <p style="margin:8px 0 0;color:#94a3b8;font-size:11px">Estimates from the seller's situation — confirm in conversation.</p>
     </div>`
 

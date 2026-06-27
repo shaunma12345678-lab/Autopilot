@@ -13,8 +13,9 @@ export interface NegotiationRead {
   acceptMid:   number
   acceptHigh:  number
   opening:     number   // suggested opening offer (below the accept, room to rise)
+  fitsMao:     boolean  // can you actually acquire at/below your max offer?
   reasons:     string[]
-  note:        string | null   // short-sale / above-MAO caveat
+  note:        string | null   // short-sale caveat
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
@@ -46,11 +47,14 @@ export function predictNegotiation(lead: ForeclosureLead, deal: DealAnalysis): N
   const acceptMid = Math.round(arv * (1 - discount))
   const acceptLow = Math.round(acceptMid * 0.95)
   const acceptHigh = Math.round(acceptMid * 1.05)
-  let opening = Math.round(acceptMid * 0.9)   // start below, leave negotiating room
 
-  // Never open above your own max allowable offer.
-  if (deal.mao > 0 && opening > deal.mao) opening = deal.mao
-  if (deal.mao > 0 && acceptMid > deal.mao) note = (note ? note + " · " : "") + "Predicted accept is above your MAO — negotiate hard or pass"
+  // Does it pencil — is the likely accept at/below your max allowable offer?
+  const fitsMao = deal.mao <= 0 || acceptMid <= deal.mao * 1.05
+  // If it pencils, open below the accept (room to rise) but never above MAO. If
+  // it doesn't, your best shot is your MAO — the seller's price is above it.
+  const opening = fitsMao
+    ? (deal.mao > 0 ? Math.min(Math.round(acceptMid * 0.9), deal.mao) : Math.round(acceptMid * 0.9))
+    : (deal.mao > 0 ? deal.mao : Math.round(acceptMid * 0.9))
 
-  return { discountPct: Math.round(discount * 100), acceptLow, acceptMid, acceptHigh, opening, reasons: reasons.slice(0, 3), note }
+  return { discountPct: Math.round(discount * 100), acceptLow, acceptMid, acceptHigh, opening, fitsMao, reasons: reasons.slice(0, 3), note }
 }
