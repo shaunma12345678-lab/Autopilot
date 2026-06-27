@@ -259,6 +259,14 @@ export default function BestDeals({ password }: { password: string }) {
               {fit && fit.score >= 40 && (
                 <p className="text-[11px] mt-1 text-rose-300">★ For you {fit.score}% — {fit.reasons.join(" · ")}</p>
               )}
+              {d.competition && (
+                <p className="text-[11px] mt-1" title={d.competition.reasons.join(" · ")}>
+                  {d.competition.level === "fresh" ? "🟢" : d.competition.level === "moderate" ? "🟡" : "🔴"} <span className={d.competition.level === "fresh" ? "text-emerald-300" : d.competition.level === "moderate" ? "text-amber-300" : "text-red-300"}>{d.competition.label}</span>
+                </p>
+              )}
+              {d.negotiation && (
+                <p className="text-[11px] mt-1 text-sky-300">🤝 Likely accepts <b>{m(d.negotiation.acceptLow)}–{m(d.negotiation.acceptHigh)}</b> · open at <b>{m(d.negotiation.opening)}</b>{d.negotiation.note ? ` · ${d.negotiation.note}` : ""}</p>
+              )}
 
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
                 {[

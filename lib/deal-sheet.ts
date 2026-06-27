@@ -9,6 +9,9 @@ import { predictPreForeclosure } from "@/lib/predictive"
 import { bestStrategy, carryingCosts } from "@/lib/strategy"
 import { yellowLetter, coldCallScript, smsScript, financingFit, recorderLink } from "@/lib/outreach"
 import { predictLikelyToSell } from "@/lib/sell-predictor"
+import { competitionRadar } from "@/lib/competition"
+import { predictNegotiation } from "@/lib/negotiation"
+import { opportunityScore } from "@/lib/opportunity"
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!))
@@ -94,6 +97,20 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
       </div>
       <p style="margin:8px 0 0;color:#475569;font-size:12px">${br.infinite ? `<b>Capital fully recycled</b> — refinancing at 75% of ARV pulls back your entire ${m(br.allIn)} all-in. A (nearly) free rental.` : `Buy at or below <b>${m(br.maxBuyForFullPull)}</b> to recover all your capital on the refinance.`}</p>
     </div>` : ""
+
+  const comp = competitionRadar(lead, pred.predicted, opportunityScore(lead).tier === "gem")
+  const nego = predictNegotiation(lead, a)
+  const dealColor = comp.level === "fresh" ? "#16a34a" : comp.level === "moderate" ? "#d97706" : "#dc2626"
+  const compBlock = `
+    <div class="card">
+      <div class="h">Competition & Negotiation</div>
+      <p style="margin:0 0 6px;font-size:14px"><b style="color:${dealColor}">${comp.level === "fresh" ? "🟢" : comp.level === "moderate" ? "🟡" : "🔴"} ${esc(comp.label)}</b></p>
+      ${comp.reasons.length ? `<ul style="margin:0 0 8px">${comp.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+      ${nego ? `<p style="margin:6px 0 0;font-size:13px">🤝 <b>Likely accepts ${m(nego.acceptLow)}–${m(nego.acceptHigh)}</b> (~${nego.discountPct}% off) · suggested opening offer <b>${m(nego.opening)}</b></p>
+      ${nego.reasons.length ? `<p style="margin:4px 0 0;color:#475569;font-size:12px">${nego.reasons.map(esc).join(" · ")}</p>` : ""}
+      ${nego.note ? `<p style="margin:4px 0 0;color:#b45309;font-size:12px">⚠ ${esc(nego.note)}</p>` : ""}` : ""}
+      <p style="margin:8px 0 0;color:#94a3b8;font-size:11px">Estimates from the seller's situation — confirm in conversation.</p>
+    </div>`
 
   const sell = predictLikelyToSell(lead)
   const sellBlock = sell.score >= 30 ? `
@@ -198,6 +215,8 @@ export function dealSheetHtml(lead: ForeclosureLead, fallbackPsf?: number): stri
     ${maoBlock}
 
     ${brrrrBlock}
+
+    ${compBlock}
 
     ${sellBlock}
 

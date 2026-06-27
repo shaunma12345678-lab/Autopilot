@@ -16,6 +16,8 @@ import { opportunityScore } from "@/lib/opportunity"
 import { fuseSignals } from "@/lib/signal-fusion"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { predictLikelyToSell, type SellPrediction } from "@/lib/sell-predictor"
+import { competitionRadar, type CompetitionRead } from "@/lib/competition"
+import { predictNegotiation, type NegotiationRead } from "@/lib/negotiation"
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
@@ -30,6 +32,8 @@ export interface BestDeal {
   reasons: string[]      // the specific edges, strongest first
   sell:    SellPrediction // forward-looking "likely to sell" read
   confidence: DealConfidence  // how much to trust the numbers + why
+  competition: CompetitionRead     // how early / winnable the lead is
+  negotiation: NegotiationRead | null // likely accepted price + opening offer
 }
 
 // How trustworthy are this deal's numbers, and why — so the score is auditable.
@@ -99,12 +103,19 @@ export function bestDealScore(lead: ForeclosureLead, opts?: BestDealOpts): BestD
   const sell = predictLikelyToSell(lead)
   s += clamp(sell.score * 0.1, 0, 10)
   if (sell.score >= 50) reasons.push(`🎯 ${sell.band} likelihood to sell (${sell.timeframe})`)
+
+  // 8. Competition radar — boost fresh, winnable leads (additive only, up to 8).
+  const competition = competitionRadar(lead, pred.predicted, opp.tier === "gem")
+  s += clamp((competition.earlyScore - 50) * 0.16, 0, 8)
+  if (competition.level === "fresh") reasons.push("🟢 Fresh — low competition")
   if (deal.distressType) reasons.push(deal.distressType)
+
+  const negotiation = predictNegotiation(lead, deal)
 
   const score = clamp(Math.round(s), 0, 100)
   if (score <= 0) return null
   const tier: DealTier = score >= 75 ? "elite" : score >= 55 ? "strong" : "solid"
-  return { lead, deal, score, tier, reasons: Array.from(new Set(reasons)).slice(0, 5), sell, confidence: dealConfidence(lead, deal) }
+  return { lead, deal, score, tier, reasons: Array.from(new Set(reasons)).slice(0, 5), sell, confidence: dealConfidence(lead, deal), competition, negotiation }
 }
 
 // Rank a set of leads into the best deals, best first.
