@@ -10,14 +10,18 @@ type Row = Record<string, unknown>
 interface BuiltLead { address: string; date?: string; signal: string; vacant?: boolean; zip?: string }
 
 interface DistressDataset {
-  domain:    string   // Socrata host, e.g. data.cityofchicago.org
-  resource:  string   // dataset id
-  vector:    string   // human label, e.g. "Code violation"
-  city:      string
-  state:     string
-  where?:    string   // optional Socrata $where filter (active/open only)
-  build:     (r: Row) => BuiltLead | null
+  domain:      string   // Socrata host, e.g. data.cityofchicago.org
+  resource:    string   // dataset id
+  vector:      string   // human label, e.g. "Code violation"
+  city:        string
+  state:       string
+  where?:      string   // optional Socrata $where filter (active/open only)
+  recentField?: string  // date field to constrain to recent records (actionable only)
+  build:       (r: Row) => BuiltLead | null
 }
+
+// Only pull records from the last ~18 months so leads are actionable, not stale.
+const RECENT_CUTOFF = new Date(Date.now() - 548 * 86400_000).toISOString().slice(0, 10) + "T00:00:00"
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "")
 
@@ -26,12 +30,12 @@ const DISTRESS: Record<string, DistressDataset[]> = {
   "chicago:il": [
     {
       domain: "data.cityofchicago.org", resource: "22u3-xenr", vector: "Code violation",
-      city: "Chicago", state: "IL", where: "violation_status='OPEN'",
+      city: "Chicago", state: "IL", where: "violation_status='OPEN'", recentField: "violation_date",
       build: (r) => { const a = str(r.address); return a ? { address: a, date: str(r.violation_date).slice(0, 10), signal: `Code violation — ${str(r.violation_description) || "open"}` } : null },
     },
     {
       domain: "data.cityofchicago.org", resource: "7nii-7srd", vector: "Vacant/abandoned",
-      city: "Chicago", state: "IL",
+      city: "Chicago", state: "IL", recentField: "date_service_request_was_received",
       build: (r) => {
         const a = [str(r.address_street_number), str(r.address_street_direction), str(r.address_street_name), str(r.address_street_suffix)].filter(Boolean).join(" ")
         return a ? { address: a, date: str(r.date_service_request_was_received).slice(0, 10), signal: "Vacant/abandoned building (city registry)", vacant: true } : null
@@ -51,8 +55,10 @@ export async function fetchDistressLeads(city: string, state: string, limit = 20
   const out: FreeLead[] = []
   await Promise.all(sets.map(async (ds) => {
     try {
-      const where = ds.where ? `&$where=${encodeURIComponent(ds.where)}` : ""
-      const url = `https://${ds.domain}/resource/${ds.resource}.json?$limit=${Math.min(limit, 500)}${where}`
+      const clauses = [ds.where, ds.recentField ? `${ds.recentField} > '${RECENT_CUTOFF}'` : null].filter(Boolean)
+      const where = clauses.length ? `&$where=${encodeURIComponent(clauses.join(" AND "))}` : ""
+      const order = ds.recentField ? `&$order=${encodeURIComponent(ds.recentField)}+DESC` : ""
+      const url = `https://${ds.domain}/resource/${ds.resource}.json?$limit=${Math.min(limit, 500)}${where}${order}`
       const res = await fetch(url, { signal: AbortSignal.timeout(12000) })
       if (!res.ok) return
       const rows = (await res.json()) as Row[]
