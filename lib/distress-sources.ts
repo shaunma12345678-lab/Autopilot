@@ -1,0 +1,82 @@
+// County/city distress-data connectors — our own keyless index of distress
+// signals BEYOND foreclosure: code violations, vacant/abandoned registries, tax
+// delinquency, etc., pulled straight from government open-data (Socrata/ArcGIS).
+// Each city has a small registry of datasets + a row→lead builder. This is the
+// framework that grows the "owned index" one record-type at a time. Never throws.
+
+import type { FreeLead } from "@/lib/free-foreclosure-scraper"
+
+type Row = Record<string, unknown>
+interface BuiltLead { address: string; date?: string; signal: string; vacant?: boolean; zip?: string }
+
+interface DistressDataset {
+  domain:    string   // Socrata host, e.g. data.cityofchicago.org
+  resource:  string   // dataset id
+  vector:    string   // human label, e.g. "Code violation"
+  city:      string
+  state:     string
+  where?:    string   // optional Socrata $where filter (active/open only)
+  build:     (r: Row) => BuiltLead | null
+}
+
+const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "")
+
+// Verified keyless distress datasets, keyed by "city:state".
+const DISTRESS: Record<string, DistressDataset[]> = {
+  "chicago:il": [
+    {
+      domain: "data.cityofchicago.org", resource: "22u3-xenr", vector: "Code violation",
+      city: "Chicago", state: "IL", where: "violation_status='OPEN'",
+      build: (r) => { const a = str(r.address); return a ? { address: a, date: str(r.violation_date).slice(0, 10), signal: `Code violation — ${str(r.violation_description) || "open"}` } : null },
+    },
+    {
+      domain: "data.cityofchicago.org", resource: "7nii-7srd", vector: "Vacant/abandoned",
+      city: "Chicago", state: "IL",
+      build: (r) => {
+        const a = [str(r.address_street_number), str(r.address_street_direction), str(r.address_street_name), str(r.address_street_suffix)].filter(Boolean).join(" ")
+        return a ? { address: a, date: str(r.date_service_request_was_received).slice(0, 10), signal: "Vacant/abandoned building (city registry)", vacant: true } : null
+      },
+    },
+  ],
+}
+
+export function distressVectorsFor(city: string, state: string): string[] {
+  const sets = DISTRESS[`${city.toLowerCase().trim()}:${state.toLowerCase().trim()}`]
+  return sets ? Array.from(new Set(sets.map((d) => d.vector))) : []
+}
+
+export async function fetchDistressLeads(city: string, state: string, limit = 200): Promise<FreeLead[]> {
+  const sets = DISTRESS[`${city.toLowerCase().trim()}:${state.toLowerCase().trim()}`]
+  if (!sets) return []
+  const out: FreeLead[] = []
+  await Promise.all(sets.map(async (ds) => {
+    try {
+      const where = ds.where ? `&$where=${encodeURIComponent(ds.where)}` : ""
+      const url = `https://${ds.domain}/resource/${ds.resource}.json?$limit=${Math.min(limit, 500)}${where}`
+      const res = await fetch(url, { signal: AbortSignal.timeout(12000) })
+      if (!res.ok) return
+      const rows = (await res.json()) as Row[]
+      for (const r of rows) {
+        const b = ds.build(r)
+        if (!b || !b.address) continue
+        out.push({
+          address: b.address, city: ds.city, state: ds.state, zip: b.zip ?? "",
+          ownerName: "", foreclosureStage: "PRE_FORECLOSURE",
+          recordingDate: b.date ?? "", defaultAmount: null, lender: null, auctionDate: null, estimatedValue: null,
+          sourceUrl: `https://${ds.domain}/resource/${ds.resource}`, rawSignals: [b.signal],
+          ...(b.vacant ? { occupancy: "vacant" as const } : {}),
+        })
+      }
+    } catch { /* skip dataset */ }
+  }))
+  // Dedupe by address.
+  const seen = new Set<string>()
+  const dedup: FreeLead[] = []
+  for (const l of out) {
+    const k = l.address.toLowerCase().replace(/[\s,.#-]/g, "")
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    dedup.push(l)
+  }
+  return dedup
+}

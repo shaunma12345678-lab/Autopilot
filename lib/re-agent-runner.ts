@@ -10,6 +10,7 @@ import { fillComps } from "@/lib/comp-engine"
 import { rankBestDeals } from "@/lib/best-deals"
 import { fetchFundamentals } from "@/lib/market-fundamentals"
 import { resolveAreas, scopeToArea } from "@/lib/area-scope"
+import { fetchDistressLeads } from "@/lib/distress-sources"
 
 const BATCH = 2   // markets scanned per cycle (rotating), to stay within the time budget
 
@@ -35,11 +36,15 @@ export async function runAgentCycle(force = false): Promise<AgentCycleResult> {
       const params: DeepSearchParams = mk.searchType === "county"
         ? { searchType: "county", county: mk.county ?? "", state: mk.state, maxLeads: state.config.depth }
         : { searchType: "city", city: mk.city ?? "", state: mk.state, maxLeads: state.config.depth }
-      const [ds, fund] = await Promise.all([
+      const [ds, fund, distress] = await Promise.all([
         deepSearch(params).catch(() => null),
         fetchFundamentals(mk.city || mk.county || "", mk.state).catch(() => null),
+        mk.searchType === "city" ? fetchDistressLeads(mk.city ?? "", mk.state).catch(() => []) : Promise.resolve([]),
       ])
-      const all = ds ? fillComps(ds.leads.map(freeLeadToForeclosureLead)) : []
+      // Stack distress vectors (code violations, vacant registry, …) with the
+      // foreclosure deep search — more motivated leads no one else surfaces.
+      const rawLeads = [...(ds?.leads ?? []), ...distress]
+      const all = fillComps(rawLeads.map(freeLeadToForeclosureLead))
       // Cheap state guard — never surface an out-of-state lead for this market.
       const st = mk.state.toUpperCase()
       const leads = all.filter((l) => !l.state || (l.state || "").toUpperCase() === st)
