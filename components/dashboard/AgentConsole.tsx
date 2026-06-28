@@ -9,6 +9,7 @@ import { useState, useEffect } from "react"
 import type { AgentConfig, AgentFeedItem, Autonomy } from "@/lib/agent-store"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { enrichMany } from "@/lib/enrich-client"
+import { openMailMerge, downloadMailCsv } from "@/lib/mail-merge"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 const LEVELS: { id: Autonomy; label: string; desc: string; locked: boolean }[] = [
@@ -156,6 +157,8 @@ export default function AgentConsole({ password }: { password: string }) {
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={runNow} disabled={running || config.markets.length === 0} className="text-sm font-semibold px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white">{running ? "Hunting…" : "▶ Run now"}</button>
         {feed.length > 0 && <button onClick={enrichAllFeed} disabled={enrichingAll} className="text-sm font-semibold px-4 py-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-200 disabled:opacity-50">{enrichingAll ? "Skip-tracing…" : "✨ Skip-trace & enrich all"}</button>}
+        {feed.length > 0 && <button onClick={() => openMailMerge(feed.map((f) => f.lead))} className="text-sm font-semibold px-4 py-2 rounded-lg border border-amber-500/40 bg-amber-600/15 hover:bg-amber-600/30 text-amber-200">📬 Mail merge ({feed.length})</button>}
+        {feed.length > 0 && <button onClick={() => downloadMailCsv(feed.map((f) => f.lead))} className="text-xs font-semibold text-gray-400 hover:text-gray-200">⬇ CSV</button>}
         {feed.length > 0 && <button onClick={clearFeed} className="text-xs font-semibold text-gray-400 hover:text-gray-200">Clear feed</button>}
         {msg && <span className="text-xs text-violet-200">{msg}</span>}
       </div>
