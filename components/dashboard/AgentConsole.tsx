@@ -8,6 +8,8 @@
 import { useState, useEffect } from "react"
 import type { AgentConfig, AgentFeedItem, Autonomy } from "@/lib/agent-store"
 import { openDealSheet } from "@/lib/deal-sheet"
+import { enrichMany } from "@/lib/enrich-client"
+import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 const LEVELS: { id: Autonomy; label: string; desc: string; locked: boolean }[] = [
   { id: "find",       label: "Find & Surface", desc: "Finds & ranks new deals — active now",          locked: false },
@@ -29,6 +31,7 @@ export default function AgentConsole({ password }: { password: string }) {
   const [feed, setFeed]     = useState<AgentFeedItem[]>([])
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
+  const [enrichingAll, setEnrichingAll] = useState(false)
   const [msg, setMsg]       = useState<string | null>(null)
   const [mode, setMode]     = useState<"city" | "county">("city")
   const [place, setPlace]   = useState("")
@@ -67,6 +70,18 @@ export default function AgentConsole({ password }: { password: string }) {
     setRunning(false)
   }
   const clearFeed = async () => { setFeed([]); try { await fetch("/api/agent", { method: "POST", headers, body: JSON.stringify({ action: "clear" }) }) } catch { /* ignore */ } }
+
+  // Bulk: enrich + skip-trace every deal in the feed (parcel facts + owner where
+  // public + best-effort contact). Updates the visible feed as each completes.
+  const enrichAllFeed = async () => {
+    if (feed.length === 0) return
+    setEnrichingAll(true); setMsg(null)
+    const onEnriched = (lead: ForeclosureLead, patch: Partial<ForeclosureLead>) =>
+      setFeed((prev) => prev.map((it) => it.lead.address === lead.address ? { ...it, lead: { ...it.lead, ...patch } } : it))
+    await enrichMany(feed.map((f) => f.lead), password, onEnriched, 4)
+    setEnrichingAll(false)
+    setMsg("Enriched the feed — owner/contact shown where found. Phone/email needs a skip-trace source.")
+  }
 
   if (loading) return <p className="text-sm text-gray-400">Loading the agent…</p>
   if (!config) return <p className="text-sm text-red-300">Couldn&apos;t load the agent.</p>
@@ -140,6 +155,7 @@ export default function AgentConsole({ password }: { password: string }) {
       {/* Controls */}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={runNow} disabled={running || config.markets.length === 0} className="text-sm font-semibold px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white">{running ? "Hunting…" : "▶ Run now"}</button>
+        {feed.length > 0 && <button onClick={enrichAllFeed} disabled={enrichingAll} className="text-sm font-semibold px-4 py-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-200 disabled:opacity-50">{enrichingAll ? "Skip-tracing…" : "✨ Skip-trace & enrich all"}</button>}
         {feed.length > 0 && <button onClick={clearFeed} className="text-xs font-semibold text-gray-400 hover:text-gray-200">Clear feed</button>}
         {msg && <span className="text-xs text-violet-200">{msg}</span>}
       </div>
@@ -162,6 +178,11 @@ export default function AgentConsole({ password }: { password: string }) {
                 </div>
               </div>
               {it.reasons.length > 0 && <p className="text-[11px] text-gray-400 mt-1.5">{it.reasons.slice(0, 3).join(" · ")}</p>}
+              {(it.lead.ownerName || it.lead.phone || it.lead.email || it.lead.sqft) && (
+                <p className="text-[11px] text-gray-300 mt-1">
+                  {it.lead.ownerName ? `👤 ${it.lead.ownerName}` : ""}{it.lead.phone ? ` · 📞 ${it.lead.phone}` : ""}{it.lead.email ? ` · ✉ ${it.lead.email}` : ""}{it.lead.sqft ? ` · ${it.lead.sqft.toLocaleString()} sqft` : ""}{it.lead.yearBuilt ? ` · ${it.lead.yearBuilt}` : ""}
+                </p>
+              )}
               <button onClick={() => openDealSheet(it.lead)} className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 mt-2">📄 Deal Sheet</button>
             </div>
           ))}
