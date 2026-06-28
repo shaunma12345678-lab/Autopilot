@@ -11,6 +11,7 @@ import { learnPreferences, fitScore } from "@/lib/personalize"
 import { fmtMoney } from "@/lib/deal-analysis"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
+import { openMailMerge, downloadMailCsv } from "@/lib/mail-merge"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import AINegotiator from "@/components/dashboard/AINegotiator"
 import PhotoRehab from "@/components/dashboard/PhotoRehab"
@@ -222,6 +223,12 @@ export default function BestDeals({ password }: { password: string }) {
               <button onClick={() => enrichAll(deals, meta.medianValue)} disabled={autoEnriching} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-200 disabled:opacity-50">
                 {autoEnriching ? "Enriching…" : "✨ Enrich all shown"}
               </button>
+            )}
+            {deals.length > 0 && (
+              <button onClick={() => openMailMerge(deals.map((x) => x.lead))} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-600/15 hover:bg-amber-600/30 text-amber-200">📬 Mail merge</button>
+            )}
+            {deals.length > 0 && (
+              <button onClick={() => downloadMailCsv(deals.map((x) => x.lead))} className="text-xs font-semibold text-gray-400 hover:text-gray-200">⬇ CSV</button>
             )}
           </div>
         </div>
