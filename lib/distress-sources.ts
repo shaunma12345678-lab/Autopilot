@@ -34,8 +34,10 @@ const DISTRESS: Record<string, DistressDataset[]> = {
       build: (r) => { const a = str(r.address); return a ? { address: a, date: str(r.violation_date).slice(0, 10), signal: `Code violation — ${str(r.violation_description) || "open"}` } : null },
     },
     {
+      // No recent-filter: a vacancy is a standing status — an older registry
+      // entry is still a valid lead (the building is likely still vacant).
       domain: "data.cityofchicago.org", resource: "7nii-7srd", vector: "Vacant/abandoned",
-      city: "Chicago", state: "IL", recentField: "date_service_request_was_received",
+      city: "Chicago", state: "IL",
       build: (r) => {
         const a = [str(r.address_street_number), str(r.address_street_direction), str(r.address_street_name), str(r.address_street_suffix)].filter(Boolean).join(" ")
         return a ? { address: a, date: str(r.date_service_request_was_received).slice(0, 10), signal: "Vacant/abandoned building (city registry)", vacant: true } : null
