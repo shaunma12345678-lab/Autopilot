@@ -11,6 +11,10 @@
     {
       "path":     "/api/cron/markets",
       "schedule": "0 */3 * * *"
+    },
+    {
+      "path":     "/api/cron/agent",
+      "schedule": "30 */3 * * *"
     }
   ]
 }
