@@ -7,6 +7,8 @@ export const maxDuration = 60
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { fetchDistressLeads, distressVectorsFor } from "@/lib/distress-sources"
+import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
+import { fillComps } from "@/lib/comp-engine"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 
@@ -30,7 +32,8 @@ export async function POST(request: NextRequest) {
     return Response.json({ leads: [], vectors: [], note: `No distress-data connector yet for ${city}, ${state}. (We add counties/cities one at a time.)` })
   }
   try {
-    const leads = await fetchDistressLeads(city, state, Math.min(Math.max(body.limit ?? 200, 50), 500))
+    const free = await fetchDistressLeads(city, state, Math.min(Math.max(body.limit ?? 200, 50), 500))
+    const leads = fillComps(free.map(freeLeadToForeclosureLead))
     return Response.json({ leads, count: leads.length, vectors })
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : "Distress fetch failed" }, { status: 500 })
