@@ -9,6 +9,7 @@ import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
 import { rankBestDeals } from "@/lib/best-deals"
 import { fetchFundamentals } from "@/lib/market-fundamentals"
+import { resolveAreas, scopeToArea } from "@/lib/area-scope"
 
 const BATCH = 2   // markets scanned per cycle (rotating), to stay within the time budget
 
@@ -38,11 +39,19 @@ export async function runAgentCycle(force = false): Promise<AgentCycleResult> {
         deepSearch(params).catch(() => null),
         fetchFundamentals(mk.city || mk.county || "", mk.state).catch(() => null),
       ])
-      const leads = ds ? fillComps(ds.leads.map(freeLeadToForeclosureLead)) : []
+      const all = ds ? fillComps(ds.leads.map(freeLeadToForeclosureLead)) : []
+      // Cheap state guard — never surface an out-of-state lead for this market.
+      const st = mk.state.toUpperCase()
+      const leads = all.filter((l) => !l.state || (l.state || "").toUpperCase() === st)
       scanned += leads.length
-      const ranked = rankBestDeals(leads, { fallbackValue: fund?.medianHomeValue ?? undefined })
-      for (const d of ranked) {
-        if (d.score < state.config.minScore) continue
+      // Rank, take the candidates over the bar, then Census-scope them to the
+      // exact city/county so the feed stays in the searched area.
+      const candidates = rankBestDeals(leads, { fallbackValue: fund?.medianHomeValue ?? undefined })
+        .filter((d) => d.score >= state.config.minScore)
+        .slice(0, 60)
+      const areas = await resolveAreas(candidates, mk.state, 18000, 10)
+      const { chosen } = scopeToArea(candidates, areas, mk.searchType, mk.city ?? "", mk.county ?? "")
+      for (const d of chosen) {
         const sig = leadSig(d.lead)
         if (!sig || seenSet.has(sig)) continue
         seenSet.add(sig)
