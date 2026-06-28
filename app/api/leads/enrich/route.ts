@@ -76,6 +76,8 @@ export async function POST(request: NextRequest) {
       sources.push(parcel.source)
       set(patch, "sqft", parcel.sqft); set(patch, "beds", parcel.beds); set(patch, "baths", parcel.baths)
       set(patch, "yearBuilt", parcel.yearBuilt); set(patch, "propertyType", parcel.propertyType)
+      set(patch, "ownerName", parcel.ownerName); set(patch, "mailingAddress", parcel.mailingAddress)
+      if (parcel.mailingAddress) set(patch, "isAbsentee", !norm(parcel.mailingAddress).includes(norm(p.address)))
     }
 
     // Our own web extraction fills any remaining gaps.
