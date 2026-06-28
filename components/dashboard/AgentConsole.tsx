@@ -6,8 +6,16 @@
 // hands-off feed.
 
 import { useState, useEffect } from "react"
-import type { AgentConfig, AgentFeedItem } from "@/lib/agent-store"
+import type { AgentConfig, AgentFeedItem, Autonomy } from "@/lib/agent-store"
 import { openDealSheet } from "@/lib/deal-sheet"
+
+const LEVELS: { id: Autonomy; label: string; desc: string; locked: boolean }[] = [
+  { id: "find",       label: "Find & Surface", desc: "Finds & ranks new deals — active now",          locked: false },
+  { id: "suggest",    label: "L1 · Suggest",   desc: "Drafts outreach for you to send",                locked: true },
+  { id: "approve",    label: "L2 · Approve",   desc: "Sends only what you approve",                    locked: true },
+  { id: "supervised", label: "L3 · Supervised",desc: "Auto-handles routine, escalates hot/risky",      locked: true },
+  { id: "auto",       label: "L4 · Autonomous",desc: "Runs the conversation, pulls you in to close",   locked: true },
+]
 
 const TIER: Record<string, string> = {
   elite:  "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/40",
@@ -111,6 +119,22 @@ export default function AgentConsole({ password }: { password: string }) {
           <button onClick={addMarket} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white">+ Add market</button>
         </div>
         <p className="text-[11px] text-gray-600">{config.enabled ? "● Running automatically every ~3 hours, rotating through your markets." : "○ Turn the agent ON to run automatically. You can also Run now anytime."}</p>
+      </div>
+
+      {/* Autonomy level — the self-driving dial */}
+      <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-2">
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Autonomy level</p>
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+          {LEVELS.map((lv) => (
+            <button key={lv.id} onClick={() => saveConfig({ ...config, autonomy: lv.id })} className={`text-left rounded-xl border p-2.5 transition-colors ${config.autonomy === lv.id ? "bg-indigo-600/25 border-indigo-400/60" : "bg-gray-800/40 border-gray-700/50 hover:border-gray-600"}`}>
+              <p className="text-xs font-bold text-white">{lv.label}{lv.locked ? " 🔒" : ""}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5 leading-snug">{lv.desc}</p>
+            </button>
+          ))}
+        </div>
+        {config.autonomy !== "find" && (
+          <p className="text-[11px] text-amber-300">⚡ Outreach levels activate once a contact channel (SMS) is connected. Your choice is saved and ready for that.</p>
+        )}
       </div>
 
       {/* Controls */}

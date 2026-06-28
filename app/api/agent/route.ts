@@ -8,7 +8,7 @@ export const maxDuration = 300
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
-import { loadAgent, saveAgent, type AgentConfig } from "@/lib/agent-store"
+import { loadAgent, saveAgent, type AgentConfig, type Autonomy } from "@/lib/agent-store"
 import { runAgentCycle } from "@/lib/re-agent-runner"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
@@ -25,11 +25,13 @@ function sanitizeConfig(input: unknown, current: AgentConfig): AgentConfig {
         .slice(0, 12)
         .map((m) => ({ searchType: m.searchType, city: (m.city ?? "").trim(), county: (m.county ?? "").trim(), state: m.state.trim().toUpperCase().slice(0, 2) }))
     : current.markets
+  const autonomyVals: Autonomy[] = ["find", "suggest", "approve", "supervised", "auto"]
   return {
     enabled:  typeof c.enabled === "boolean" ? c.enabled : current.enabled,
     markets,
     minScore: typeof c.minScore === "number" ? Math.min(Math.max(Math.round(c.minScore), 30), 95) : current.minScore,
     depth:    typeof c.depth === "number" ? Math.min(Math.max(Math.round(c.depth), 100), 1000) : current.depth,
+    autonomy: typeof c.autonomy === "string" && autonomyVals.includes(c.autonomy as Autonomy) ? c.autonomy as Autonomy : current.autonomy,
     cursor:   current.cursor,
   }
 }

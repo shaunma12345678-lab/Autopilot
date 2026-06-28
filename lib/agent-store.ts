@@ -13,11 +13,15 @@ const FEED_CAP = 80
 const SEEN_CAP = 4000
 
 export interface AgentMarket { searchType: "city" | "county"; city?: string; county?: string; state: string }
+// Graded autonomy (self-driving levels). "find" is active today; the outreach
+// levels activate once a contact channel (SMS) is connected.
+export type Autonomy = "find" | "suggest" | "approve" | "supervised" | "auto"
 export interface AgentConfig {
   enabled:  boolean
   markets:  AgentMarket[]
   minScore: number
   depth:    number
+  autonomy: Autonomy
   cursor:   number
 }
 export interface AgentFeedItem {
@@ -34,7 +38,7 @@ export const leadSig = (l: { address?: string; city?: string }) =>
   `${(l.address ?? "").toLowerCase()}|${(l.city ?? "").toLowerCase()}`.replace(/[\s,#.-]/g, "")
 
 const empty = (): AgentState => ({
-  config: { enabled: false, markets: [], minScore: 55, depth: 300, cursor: 0 },
+  config: { enabled: false, markets: [], minScore: 55, depth: 300, autonomy: "find", cursor: 0 },
   feed: [], seen: [],
 })
 
