@@ -43,7 +43,8 @@ const DISTRESS: Record<string, DistressDataset[]> = {
         const a = [str(r.address_street_number), str(r.address_street_direction), str(r.address_street_name), str(r.address_street_suffix)].filter(Boolean).join(" ")
         if (!a) return null
         const fire = str(r.is_the_building_vacant_due_to_fire_).toLowerCase() === "true"
-        return { address: a, zip: str(r.zip_code), date: str(r.date_service_request_was_received).slice(0, 10), signal: fire ? "Vacant building — FIRE-DAMAGED (city registry)" : "Vacant/abandoned building (city registry)", vacant: true }
+        // No date — vacancy is a standing status, not a dated "filing" that ages out.
+        return { address: a, zip: str(r.zip_code), signal: fire ? "Vacant building — FIRE-DAMAGED (city registry)" : "Vacant/abandoned building (city registry)", vacant: true }
       },
     },
   ],
