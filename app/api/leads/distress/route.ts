@@ -22,17 +22,18 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  let body: { city?: string; state?: string; limit?: number }
+  let body: { city?: string; state?: string; zip?: string; limit?: number }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
-  const city = (body.city ?? "").trim(), state = (body.state ?? "").trim()
-  if (!city || !state) return Response.json({ error: "city and state are required" }, { status: 400 })
+  const city = (body.city ?? "").trim(), state = (body.state ?? "").trim(), zip = (body.zip ?? "").trim()
+  if (!state || (!city && !zip)) return Response.json({ error: "Provide a state plus a city or ZIP." }, { status: 400 })
 
-  const vectors = distressVectorsFor(city, state)
+  const vectors = distressVectorsFor(city, state, zip || undefined)
+  const where = zip ? `ZIP ${zip}` : `${city}, ${state}`
   if (vectors.length === 0) {
-    return Response.json({ leads: [], vectors: [], note: `No distress-data connector yet for ${city}, ${state}. (We add counties/cities one at a time.)` })
+    return Response.json({ leads: [], vectors: [], note: `No distress-data connector yet for ${where}. (We add cities/counties one at a time — Chicago, IL is live.)` })
   }
   try {
-    const free = await fetchDistressLeads(city, state, Math.min(Math.max(body.limit ?? 200, 50), 500))
+    const free = await fetchDistressLeads({ city, state, zip: zip || undefined, limit: Math.min(Math.max(body.limit ?? 200, 50), 500) })
     const leads = fillComps(free.map(freeLeadToForeclosureLead))
     return Response.json({ leads, count: leads.length, vectors })
   } catch (err) {

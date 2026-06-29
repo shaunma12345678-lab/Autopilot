@@ -17,6 +17,7 @@ interface DistressDataset {
   state:       string
   where?:      string   // optional Socrata $where filter (active/open only)
   recentField?: string  // date field to constrain to recent records (actionable only)
+  zipField?:   string   // dataset field holding the ZIP (enables ZIP search)
   build:       (r: Row) => BuiltLead | null
 }
 
@@ -34,33 +35,50 @@ const DISTRESS: Record<string, DistressDataset[]> = {
       build: (r) => { const a = str(r.address); return a ? { address: a, date: str(r.violation_date).slice(0, 10), signal: `Code violation — ${str(r.violation_description) || "open"}` } : null },
     },
     {
-      // No recent-filter: a vacancy is a standing status — an older registry
-      // entry is still a valid lead (the building is likely still vacant).
+      // Only buildings reported as CURRENTLY vacant. A vacancy is a standing
+      // status, so no recent-date filter — but we do have a ZIP field.
       domain: "data.cityofchicago.org", resource: "7nii-7srd", vector: "Vacant/abandoned",
-      city: "Chicago", state: "IL",
+      city: "Chicago", state: "IL", where: "is_the_building_currently_vacant_or_occupied_='Vacant'", zipField: "zip_code",
       build: (r) => {
         const a = [str(r.address_street_number), str(r.address_street_direction), str(r.address_street_name), str(r.address_street_suffix)].filter(Boolean).join(" ")
-        return a ? { address: a, date: str(r.date_service_request_was_received).slice(0, 10), signal: "Vacant/abandoned building (city registry)", vacant: true } : null
+        if (!a) return null
+        const fire = str(r.is_the_building_vacant_due_to_fire_).toLowerCase() === "true"
+        return { address: a, zip: str(r.zip_code), date: str(r.date_service_request_was_received).slice(0, 10), signal: fire ? "Vacant building — FIRE-DAMAGED (city registry)" : "Vacant/abandoned building (city registry)", vacant: true }
       },
     },
   ],
 }
 
-export function distressVectorsFor(city: string, state: string): string[] {
-  const sets = DISTRESS[`${city.toLowerCase().trim()}:${state.toLowerCase().trim()}`]
-  return sets ? Array.from(new Set(sets.map((d) => d.vector))) : []
+// Datasets that apply to a search: by city (all vectors) or by ZIP (only the
+// zip-capable datasets in that state).
+function datasetsFor(opts: { city?: string; state: string; zip?: string }): DistressDataset[] {
+  const st = (opts.state || "").toLowerCase().trim()
+  if (opts.zip) {
+    return Object.entries(DISTRESS).filter(([k]) => k.endsWith(`:${st}`)).flatMap(([, v]) => v).filter((d) => d.zipField)
+  }
+  return DISTRESS[`${(opts.city || "").toLowerCase().trim()}:${st}`] ?? []
 }
 
-export async function fetchDistressLeads(city: string, state: string, limit = 200): Promise<FreeLead[]> {
-  const sets = DISTRESS[`${city.toLowerCase().trim()}:${state.toLowerCase().trim()}`]
-  if (!sets) return []
+export function distressVectorsFor(city: string, state: string, zip?: string): string[] {
+  return Array.from(new Set(datasetsFor({ city, state, zip }).map((d) => d.vector)))
+}
+
+export async function fetchDistressLeads(opts: { city?: string; state: string; zip?: string; limit?: number }): Promise<FreeLead[]> {
+  const sets = datasetsFor(opts)
+  if (!sets.length) return []
+  const zip = (opts.zip || "").trim()
+  const limit = Math.min(Math.max(opts.limit ?? 200, 50), 500)
   const out: FreeLead[] = []
   await Promise.all(sets.map(async (ds) => {
     try {
-      const clauses = [ds.where, ds.recentField ? `${ds.recentField} > '${RECENT_CUTOFF}'` : null].filter(Boolean)
+      const clauses = [
+        ds.where,
+        ds.recentField ? `${ds.recentField} > '${RECENT_CUTOFF}'` : null,
+        zip && ds.zipField ? `${ds.zipField}='${zip}'` : null,
+      ].filter(Boolean)
       const where = clauses.length ? `&$where=${encodeURIComponent(clauses.join(" AND "))}` : ""
       const order = ds.recentField ? `&$order=${encodeURIComponent(ds.recentField)}+DESC` : ""
-      const url = `https://${ds.domain}/resource/${ds.resource}.json?$limit=${Math.min(limit, 500)}${where}${order}`
+      const url = `https://${ds.domain}/resource/${ds.resource}.json?$limit=${limit}${where}${order}`
       const res = await fetch(url, { signal: AbortSignal.timeout(12000) })
       if (!res.ok) return
       const rows = (await res.json()) as Row[]

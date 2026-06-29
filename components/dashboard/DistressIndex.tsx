@@ -12,8 +12,11 @@ import { enrichLeadClient, enrichMany } from "@/lib/enrich-client"
 import { openMailMerge, downloadMailCsv } from "@/lib/mail-merge"
 
 export default function DistressIndex({ password }: { password: string }) {
+  const [mode, setMode]   = useState<"city" | "zip">("city")
   const [city, setCity]   = useState("")
+  const [zip, setZip]     = useState("")
   const [stateAbbr, setStateAbbr] = useState("")
+  const [limit, setLimit] = useState(200)
   const [loading, setLoading] = useState(false)
   const [enrichingAll, setEnrichingAll] = useState(false)
   const [enriching, setEnriching] = useState<Set<string>>(new Set())
@@ -24,10 +27,12 @@ export default function DistressIndex({ password }: { password: string }) {
   const headers = { "Content-Type": "application/json", "x-admin-password": password }
 
   const search = async () => {
-    if (!city.trim() || !stateAbbr.trim()) { setNote("Enter a city and state."); return }
+    if (!stateAbbr.trim()) { setNote("Enter a state."); return }
+    if (mode === "city" && !city.trim()) { setNote("Enter a city."); return }
+    if (mode === "zip" && !zip.trim()) { setNote("Enter a ZIP code."); return }
     setLoading(true); setNote(null); setLeads(null)
     try {
-      const res = await fetch("/api/leads/distress", { method: "POST", headers, body: JSON.stringify({ city: city.trim(), state: stateAbbr.trim(), limit: 400 }) })
+      const res = await fetch("/api/leads/distress", { method: "POST", headers, body: JSON.stringify({ city: mode === "city" ? city.trim() : "", zip: mode === "zip" ? zip.trim() : "", state: stateAbbr.trim(), limit }) })
       const data = await res.json()
       if (data?.error) { setNote(data.error); return }
       setVectors(data.vectors ?? [])
@@ -60,12 +65,24 @@ export default function DistressIndex({ password }: { password: string }) {
       </div>
 
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-3">
+        <div className="flex gap-1.5">
+          {(["city", "zip"] as const).map((md) => (
+            <button key={md} onClick={() => setMode(md)} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${mode === md ? "bg-indigo-600 border-indigo-400 text-white" : "bg-gray-800/40 border-gray-700/50 text-gray-400 hover:text-white"}`}>{md === "city" ? "🏙 City" : "📮 ZIP"}</button>
+          ))}
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-          <input value={city} onChange={(e) => setCity(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="City (e.g. Chicago)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
+          {mode === "city"
+            ? <input value={city} onChange={(e) => setCity(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="City (e.g. Chicago)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
+            : <input value={zip} onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="ZIP (e.g. 60617)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />}
           <input value={stateAbbr} onChange={(e) => setStateAbbr(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="State (e.g. IL)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
+          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white">
+            {[100, 200, 300, 500].map((v) => <option key={v} value={v}>{v} leads</option>)}
+          </select>
+        </div>
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] text-gray-600">Live: Chicago, IL (code violations + vacant registry). More cities/counties added one at a time.</p>
           <button onClick={search} disabled={loading} className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white">{loading ? "Searching…" : "🚨 Find motivated sellers"}</button>
         </div>
-        <p className="text-[11px] text-gray-600">Connectors live: Chicago, IL (code violations + vacant registry). More cities/counties added one at a time.</p>
       </div>
 
       {note && <p className="text-xs text-amber-300">{note}</p>}

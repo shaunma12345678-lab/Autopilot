@@ -39,7 +39,7 @@ export async function runAgentCycle(force = false): Promise<AgentCycleResult> {
       const [ds, fund, distress] = await Promise.all([
         deepSearch(params).catch(() => null),
         fetchFundamentals(mk.city || mk.county || "", mk.state).catch(() => null),
-        mk.searchType === "city" ? fetchDistressLeads(mk.city ?? "", mk.state).catch(() => []) : Promise.resolve([]),
+        mk.searchType === "city" ? fetchDistressLeads({ city: mk.city ?? "", state: mk.state }).catch(() => []) : Promise.resolve([]),
       ])
       // Stack distress vectors (code violations, vacant registry, …) with the
       // foreclosure deep search — more motivated leads no one else surfaces.
