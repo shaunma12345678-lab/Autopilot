@@ -70,19 +70,22 @@ export default function DistressIndex({ password }: { password: string }) {
             <button key={md} onClick={() => setMode(md)} className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${mode === md ? "bg-indigo-600 border-indigo-400 text-white" : "bg-gray-800/40 border-gray-700/50 text-gray-400 hover:text-white"}`}>{md === "city" ? "🏙 City" : "📮 ZIP"}</button>
           ))}
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {mode === "city"
             ? <input value={city} onChange={(e) => setCity(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="City (e.g. Chicago)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
             : <input value={zip} onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="ZIP (e.g. 60617)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />}
           <input value={stateAbbr} onChange={(e) => setStateAbbr(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="State (e.g. IL)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
-          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white">
-            {[100, 200, 300, 500].map((v) => <option key={v} value={v}>{v} leads</option>)}
-          </select>
         </div>
-        <div className="flex items-center justify-between">
-          <p className="text-[11px] text-gray-600">Live: Chicago, IL (code violations + vacant registry). More cities/counties added one at a time.</p>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <label className="flex items-center gap-2 text-xs font-semibold text-gray-300">
+            How many leads:
+            <select value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-1.5 text-sm text-white">
+              {[50, 100, 200, 300, 500].map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </label>
           <button onClick={search} disabled={loading} className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white">{loading ? "Searching…" : "🚨 Find motivated sellers"}</button>
         </div>
+        <p className="text-[11px] text-gray-600">Own connectors: Chicago, IL (code violations + vacant). Anywhere else falls back to the deep-search engine — so every search returns data.</p>
       </div>
 
       {note && <p className="text-xs text-amber-300">{note}</p>}
