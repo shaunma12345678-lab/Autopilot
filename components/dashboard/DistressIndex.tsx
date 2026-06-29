@@ -108,7 +108,7 @@ export default function DistressIndex({ password }: { password: string }) {
               </div>
               {l.occupancy === "vacant" && <span className="text-[10px] font-bold text-red-300 bg-red-950/30 border border-red-500/30 rounded px-1.5 py-0.5 shrink-0">VACANT</span>}
             </div>
-            {l.distressSignals && l.distressSignals.length > 0 && <p className="text-[11px] text-amber-200/90 mt-1">🚩 {l.distressSignals[0]}</p>}
+            {(() => { const sig = (l.distressSignals ?? []).find((s) => /vacant|code violation|fire|abandoned|tax|probate|eviction/i.test(s)) ?? (l.distressSignals ?? [])[0]; return sig ? <p className="text-[11px] text-amber-200/90 mt-1">🚩 {sig}</p> : null })()}
             {(l.ownerName || l.sqft) && <p className="text-[11px] text-gray-300 mt-1">{l.ownerName ? `👤 ${l.ownerName}` : ""}{l.mailingAddress ? ` · ✉ ${l.mailingAddress}` : ""}{l.sqft ? ` · ${l.sqft.toLocaleString()} sqft` : ""}</p>}
             <div className="flex items-center gap-3 mt-2">
               <button onClick={() => enrichOne(l)} disabled={enriching.has(l.address)} className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-50">{enriching.has(l.address) ? "✨ Enriching…" : "✨ Enrich"}</button>
