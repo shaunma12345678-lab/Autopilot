@@ -11,6 +11,7 @@ import AgentConsole from "@/components/dashboard/AgentConsole"
 import DistressIndex from "@/components/dashboard/DistressIndex"
 import RentalCalculator from "@/components/dashboard/RentalCalculator"
 import CashBuyers from "@/components/dashboard/CashBuyers"
+import Pipeline from "@/components/dashboard/Pipeline"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 /* ── Types ── */
@@ -2151,7 +2152,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2224,6 +2225,7 @@ export default function AdminPage() {
     { id: "best-deals",   label: "💎 Best Deals" },
     { id: "distress-index", label: "🚨 Distress Index" },
     { id: "cash-buyers",  label: "🤝 Cash Buyers" },
+    { id: "pipeline",     label: "📋 Pipeline" },
     { id: "distress-map", label: "🗺️ Distress Map" },
     { id: "markets",      label: "📈 Markets" },
     { id: "fixers",       label: "🔧 Fixer-Uppers" },
@@ -2300,6 +2302,7 @@ export default function AdminPage() {
           {tab === "distress-index" && <DistressIndex password={pw} />}
           {tab === "rental-calc" && <RentalCalculator />}
           {tab === "cash-buyers" && <CashBuyers password={pw} />}
+          {tab === "pipeline" && <Pipeline />}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}
