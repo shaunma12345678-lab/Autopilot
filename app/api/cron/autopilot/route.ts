@@ -23,6 +23,10 @@ import { sendEmail } from "@/lib/email"
 import { sendSms } from "@/lib/sms"
 import { computeModel, adaptiveScore, applySeen, featurize, leadArea, emptyTally } from "@/lib/learning-engine"
 import { loadLearningTally, saveLearningTally, resolveLearningBusinessId } from "@/lib/learning-store"
+import { applyOutcomes, loadForecastLedger, saveForecastLedger } from "@/lib/forecast-ledger"
+import { runAcquisitionStep } from "@/lib/acquisition-engine"
+import { predictPreForeclosure, isConfirmedForeclosure } from "@/lib/predictive"
+import { leadSignature } from "@/lib/seen-leads"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
@@ -122,6 +126,25 @@ export async function GET(request: NextRequest) {
       await saveLearningTally(bizId, tally).catch(() => {})
     }
 
+    // Outcome-Verified Predictions: fold today's sweep into the forecast
+    // ledger so predicted properties that later get a scheduled sale become
+    // verified hits — the accuracy record compounds daily, unattended.
+    if (bizId && leads.length) {
+      try {
+        const items = leads.slice(0, 1000).map((l) => {
+          const pr = predictPreForeclosure(l)
+          return {
+            sig: leadSignature(l),
+            addr: [l.address, l.city].filter(Boolean).join(", "),
+            predicted: pr.predicted,
+            probability: pr.probability,
+            confirmed: isConfirmedForeclosure(l),
+          }
+        })
+        await saveForecastLedger(bizId, applyOutcomes(await loadForecastLedger(bizId), items))
+      } catch { /* best-effort — never fail the cron */ }
+    }
+
     // Rank by the LEARNED model when it's ready (what you actually pursue),
     // otherwise by base score. Quality floor lets a strong pattern-fit through.
     const rankScore = (l: ForeclosureLead) => (model.ready ? adaptiveScore(l, model) : (l.score ?? 0))
@@ -144,6 +167,17 @@ export async function GET(request: NextRequest) {
         const c = await traceOwnerFromWeb({ address: d.lead.address, city: d.lead.city, state: d.lead.state, zip: d.lead.zip, ownerName: d.lead.ownerName })
         if (c) { d.contact = c.phone ?? c.email ?? null; d.owner = d.lead.ownerName || null }
       } catch { /* best-effort */ }
+    }
+
+    // Acquisition Agent: when switched ON (Admin → 🚀 Acquisition), enroll
+    // today's best finds into the outreach sequence and advance every due
+    // touch — emails go out automatically, calls/texts/letters queue for you.
+    let acquisition: { enrolledNew: number; emailsSent: number; queuedActions: number } | null = null
+    if (bizId) {
+      try {
+        const r = await runAcquisitionStep(bizId, leads)
+        acquisition = { enrolledNew: r.enrolledNew, emailsSent: r.emailsSent, queuedActions: r.queuedActions }
+      } catch { /* best-effort — never fail the cron */ }
     }
 
     const newCount = ranked.filter((d) => d.isNew).length
@@ -173,6 +207,7 @@ export async function GET(request: NextRequest) {
         insights:    model.insights.slice(0, 3),
       },
       notified: { email: emailed, sms: texted, emailConfigured: Boolean(notifyEmail), smsConfigured: Boolean(notifyPhone) },
+      acquisition,
       durationMs: Date.now() - startedAt,
     })
   } catch (err) {

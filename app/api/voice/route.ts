@@ -1,8 +1,9 @@
-// Voice assistant — interprets a spoken command about the user's real estate
-// business and answers concisely (spoken back in the browser). Uses Groq.
-// Robust: returns a safe fallback, never throws.
+// Voice/text assistant — interprets a spoken or typed command about the user's
+// real estate business. Returns BOTH a short spoken reply and a detailed
+// written answer (the user reads the full breakdown while the short version is
+// read aloud). Uses Groq. Robust: returns a safe fallback, never throws.
 
-export const maxDuration = 20
+export const maxDuration = 30
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
@@ -15,10 +16,21 @@ function isAuthorized(request: NextRequest, user: unknown): boolean {
   return request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
+function safeParse(s: string): Record<string, unknown> | null {
+  try { const m = s.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } catch { return null }
+}
+
+function firstSentence(text: string): string {
+  return text.split(/(?<=[.!?])\s/)[0] ?? text
+}
+
 const SYSTEM =
-  "You are DealPilot, a spoken AI assistant for a real estate investor/wholesaler. Answer the investor's spoken command briefly and conversationally — 1-3 sentences, no markdown, since your reply is read aloud. " +
-  "You can explain deal math (MAO, ARV, BRRRR, cash-on-cash, the 70% rule), coach outreach/negotiation, and describe how to use the app's sections (Best Deals, Distress Index, Cash Buyers, Fixer-Uppers, Pipeline, Rental Calculator, the autonomous Agent). " +
-  "If asked to DO something the app supports (find deals, run a search, mail owners), tell them which section to open and what to click. Be warm, sharp, and practical."
+  "You are DealPilot, the AI assistant for a real estate investor/wholesaler using the AutoPilot platform. " +
+  "You answer questions about deal math (MAO, ARV, the 70% rule, BRRRR, cash-on-cash, cap rate, DSCR), negotiation, outreach, foreclosure timelines, and how to use the app's sections (Real Estate search, Best Deals, Distress Index, Cash Buyers, Pipeline, Deal Simulator, Rental Calculator, Distress Map). " +
+  "Return raw JSON with exactly two keys: " +
+  '{ "spoken": string, "detail": string }. ' +
+  '"spoken": 1-2 conversational sentences with the headline answer — it is read aloud, so no markdown and no lists. ' +
+  '"detail": the FULL detailed written answer — thorough and specific, with the actual numbers worked out step by step when math is involved, concrete word-for-word scripts when outreach or negotiation is involved, and exact section/button names when the app is involved. Use short paragraphs and simple dash lists. Plain text only (no markdown symbols like ** or #). Never invent live data about their leads — if asked about their current leads, explain where in the app to see it.'
 
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
@@ -28,13 +40,20 @@ export async function POST(request: NextRequest) {
   let body: { transcript?: string }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
   const transcript = (body.transcript ?? "").trim()
-  if (!transcript) return Response.json({ answer: "" })
+  if (!transcript) return Response.json({ answer: "", detail: "" })
 
   try {
-    const out = await runAgent(SYSTEM, `The investor said: "${transcript}"`, { model: "haiku", maxTokens: 220 })
-    const answer = typeof out === "string" ? out.trim() : String(out)
-    return Response.json({ answer: answer || "I didn't catch that — try again." })
+    const out = await runAgent(SYSTEM, `The investor asked: "${transcript}"`, { model: "haiku", jsonMode: true, maxTokens: 1400 })
+    const obj = typeof out === "string" ? safeParse(out) : (out as Record<string, unknown>)
+    const spoken = typeof obj?.spoken === "string" ? obj.spoken.trim() : ""
+    const detail = typeof obj?.detail === "string" ? obj.detail.trim() : ""
+    if (!spoken && !detail) {
+      // Model ignored the JSON shape — use the raw text as the detailed answer.
+      const raw = (typeof out === "string" ? out : JSON.stringify(out)).trim()
+      return Response.json({ answer: firstSentence(raw) || "I didn't catch that — try again.", detail: raw })
+    }
+    return Response.json({ answer: spoken || firstSentence(detail), detail: detail || spoken })
   } catch {
-    return Response.json({ answer: "The assistant is unavailable right now — try again in a moment." })
+    return Response.json({ answer: "The assistant is unavailable right now — try again in a moment.", detail: "" })
   }
 }

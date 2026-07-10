@@ -13,7 +13,8 @@ import { analyzeDeal, fmtMoney } from "@/lib/deal-analysis"
 import { learnProfile, fitsProfile } from "@/lib/deal-learning"
 import { rankZones } from "@/lib/opportunity-zones"
 import { detectPortfolios } from "@/lib/owner-portfolio"
-import { predictPreForeclosure } from "@/lib/predictive"
+import { predictPreForeclosure, isConfirmedForeclosure } from "@/lib/predictive"
+import PredictionAccuracy from "@/components/dashboard/PredictionAccuracy"
 import { openDealSheet } from "@/lib/deal-sheet"
 import { telHref, smsHref, mailtoHref, printLetter, printLetterBatch } from "@/lib/outreach-actions"
 import { featurize, leadArea, adaptiveScore, type LearnedModel } from "@/lib/learning-engine"
@@ -1272,6 +1273,8 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
   const [predictiveResult, setPredictiveResult] = useState<{ leads: ForeclosureLead[]; note?: string } | null>(null)
   const [predictiveLoading, setPredictiveLoading] = useState(false)
   const [showZoneRank, setShowZoneRank] = useState(false)
+  const [showAccuracy, setShowAccuracy] = useState(false)
+  const [forecastVersion, setForecastVersion] = useState(0)
   const [showPortfolios, setShowPortfolios] = useState(false)
   const [showBuyers, setShowBuyers]   = useState(false)
   const [autopilotRunning, setAutopilotRunning] = useState(false)
@@ -1359,6 +1362,29 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
     }).then(r => r.json()).then(d => { if (d?.model) setLearnModel(d.model) }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId])
+
+  // Outcome-Verified Predictions: log every lead's forecast state so predicted
+  // properties that later show a scheduled sale become VERIFIED hits with a
+  // measured lead time. Fire-and-forget — never blocks or fails a search.
+  const recordForecasts = useCallback((leads: ForeclosureLead[]) => {
+    if (leads.length === 0) return
+    try {
+      const items = leads.slice(0, 1000).map(l => {
+        const pr = predictPreForeclosure(l)
+        return {
+          sig: leadSignature(l),
+          addr: [l.address, l.city].filter(Boolean).join(", "),
+          predicted: pr.predicted,
+          probability: pr.probability,
+          confirmed: isConfirmedForeclosure(l),
+        }
+      })
+      fetch("/api/leads/prediction-outcomes", { method: "POST", headers: apiHeaders, body: JSON.stringify({ items }) })
+        .then(() => setForecastVersion(v => v + 1))
+        .catch(() => {})
+    } catch { /* never block a search */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const searchSeqRef = useRef(0)
   const [autoEnrichBusy, setAutoEnrichBusy] = useState(false)
@@ -1510,6 +1536,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
         }
         setResult({ leads: finalLeads, total: finalLeads.length, fetched: data.fetched ?? 0, dataSource: "deep-search", dataNote: data.note })
         recordSeen(finalLeads)
+        recordForecasts(finalLeads)
         if (effType && effType !== "new") setTypeFilter(effType)   // isolate the picked type in table + map
         setSourceSummary(data.sourceCounts ?? null)
         setNewCount(data.newTotal ?? null)
@@ -1925,6 +1952,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
               <button onClick={() => setForYou(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${forYou ? "bg-violet-600 border-violet-500 text-white" : "bg-violet-700/30 border-violet-500/40 text-violet-200 hover:bg-violet-700/50"}`} title={learned ? "Rank deals like the ones you pursue in your CRM" : "Move deals to Offer/Contract/Closed in your CRM to teach this"}>🎯 For you</button>
               <button onClick={togglePredictive} disabled={predictiveLoading} className={`border text-xs font-semibold px-3 rounded-lg disabled:opacity-60 ${predictiveOnly ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-fuchsia-700/30 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-700/50"}`} title="Our forecast — properties showing early distress that aren't in foreclosure yet (found with our own engine, no key)">{predictiveLoading ? "🔮 Forecasting…" : `🔮 Predictive${predictiveResult ? ` ${predictiveResult.leads.length}` : ""}`}</button>
               <button onClick={() => setShowZoneRank(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showZoneRank ? "bg-teal-600 border-teal-500 text-white" : "bg-teal-700/30 border-teal-500/40 text-teal-200 hover:bg-teal-700/50"}`} title="Rank the best ZIPs in these results">📍 Best zones</button>
+              <button onClick={() => setShowAccuracy(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showAccuracy ? "bg-emerald-600 border-emerald-500 text-white" : "bg-emerald-700/30 border-emerald-500/40 text-emerald-200 hover:bg-emerald-700/50"}`} title="Our forecasts, verified against what actually happened — hits, lead time, coverage">🎯 Accuracy</button>
               <button onClick={() => setShowPortfolios(v => !v)} className={`border text-xs font-semibold px-3 rounded-lg ${showPortfolios ? "bg-sky-600 border-sky-500 text-white" : "bg-sky-700/30 border-sky-500/40 text-sky-200 hover:bg-sky-700/50"}`} title="Owners with multiple distressed properties (bulk sellers)">👤 Portfolios{portfolios.length ? ` ${portfolios.length}` : ""}</button>
               <button onClick={() => setShowBuyers(true)} className="bg-cyan-700/40 border border-cyan-500/40 hover:bg-cyan-700/60 text-cyan-200 text-xs font-semibold px-3 rounded-lg" title="Manage your cash buyers">💼 Buyers</button>
               <button onClick={enrichAllShown} disabled={autoEnrichBusy} className="bg-amber-700/40 border border-amber-500/40 hover:bg-amber-700/60 disabled:opacity-50 text-amber-200 text-xs font-semibold px-3 rounded-lg" title="Fill beds/baths/sqft/owner/value for all shown leads">{autoEnrichBusy ? "Enriching…" : enrichAllDone ? "✓ Done" : "✨ Enrich all shown"}</button>
@@ -1948,6 +1976,11 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
                   <p className="text-[11px] text-gray-400 mt-1.5">📍 Your best areas: {learnModel.topAreas.slice(0, 3).map(a => a.area).join(" · ")}</p>
                 )}
                 {learnModel.ready && !smartRank && <p className="text-[10px] text-fuchsia-300/70 mt-1">Turn on 🧠 Smart Rank to sort by this.</p>}
+              </div>
+            )}
+            {showAccuracy && (
+              <div className="mt-2">
+                <PredictionAccuracy apiHeaders={apiHeaders} refreshKey={forecastVersion} />
               </div>
             )}
             {showZoneRank && (

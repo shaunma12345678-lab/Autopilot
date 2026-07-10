@@ -14,6 +14,8 @@ import CashBuyers from "@/components/dashboard/CashBuyers"
 import Pipeline from "@/components/dashboard/Pipeline"
 import DealSimulator from "@/components/dashboard/DealSimulator"
 import VoiceAssistant from "@/components/dashboard/VoiceAssistant"
+import InboundSellers from "@/components/dashboard/InboundSellers"
+import AcquisitionCenter from "@/components/dashboard/AcquisitionCenter"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 /* ── Types ── */
@@ -2154,7 +2156,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2224,6 +2226,8 @@ export default function AdminPage() {
     { id: "automations",  label: "Automations" },
     { id: "agent",        label: "🤖 Agent" },
     { id: "real-estate",  label: "🏚 Real Estate" },
+    { id: "inbound",      label: "📥 Inbound Sellers" },
+    { id: "acquisition",  label: "🚀 Acquisition" },
     { id: "best-deals",   label: "💎 Best Deals" },
     { id: "distress-index", label: "🚨 Distress Index" },
     { id: "cash-buyers",  label: "🤝 Cash Buyers" },
@@ -2309,6 +2313,8 @@ export default function AdminPage() {
           {tab === "pipeline" && <Pipeline />}
           {tab === "simulator" && <DealSimulator />}
           {tab === "voice" && <VoiceAssistant password={pw} />}
+          {tab === "inbound" && <InboundSellers password={pw} />}
+          {tab === "acquisition" && <AcquisitionCenter password={pw} />}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}
