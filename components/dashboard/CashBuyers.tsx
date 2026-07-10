@@ -153,8 +153,8 @@ export default function CashBuyers({ password }: { password: string }) {
 
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          <input value={county} onChange={(e) => setCounty(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="County (e.g. Maricopa)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
-          <input value={stateAbbr} onChange={(e) => setStateAbbr(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="State (e.g. AZ)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
+          <input value={county} onChange={(e) => setCounty(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="County (e.g. Marion)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
+          <input value={stateAbbr} onChange={(e) => setStateAbbr(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="State (e.g. IN)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
         </div>
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
@@ -168,7 +168,7 @@ export default function CashBuyers({ password }: { password: string }) {
           </div>
           <button onClick={search} disabled={loading} className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white">{loading ? "Building buyer intel…" : "🤝 Find cash buyers"}</button>
         </div>
-        <p className="text-[11px] text-gray-600">Live counties: Wayne MI (Detroit) · Maricopa AZ (Phoenix) · Marion IN (Indianapolis). Each is verified assessor data — more added as they&apos;re confirmed.</p>
+        <p className="text-[11px] text-gray-600">Live counties: Wayne MI (Detroit) · Marion IN (Indianapolis). Each is verified assessor data — more added as they&apos;re confirmed.</p>
       </div>
 
       {note && <p className="text-xs text-amber-300">{note}</p>}

@@ -58,14 +58,9 @@ const BUYER_LAYERS: Record<string, BuyerLayer> = {
     stateAbbr: "MI", fixedCity: "Detroit",
     label: "Wayne County, MI",
   },
-  "maricopa:az": {
-    url: "https://gis.mcassessor.maricopa.gov/arcgis/rest/services/Parcels/MapServer/0/query",
-    owner: "OWNER_NAME", mailAddr: "MAIL_ADDR1", mailCity: "MAIL_CITY", mailState: "MAIL_STATE", mailZip: "MAIL_ZIP",
-    situsAddr: "PHYSICAL_ADDRESS", situsCity: "PHYSICAL_CITY", situsZip: "PHYSICAL_ZIP",
-    saleDate: "SALE_DATE", salePrice: "SALE_PRICE", value: "FCV_CUR",
-    stateAbbr: "AZ",
-    label: "Maricopa County, AZ (Phoenix)",
-  },
+  // NOTE: Maricopa AZ is deliberately NOT here — its assessor MapServer times
+  // out on county-wide GROUP BY (1.6M parcels, verified live 2026-07). It stays
+  // in parcel-enrich, where per-point lookups are fast.
   "marion:in": {
     url: "https://gis.indy.gov/server/rest/services/MapIndy/MapIndyProperty/MapServer/10/query",
     owner: "FULLOWNERNAME", mailAddr: "OWNERADDRESS", mailCity: "OWNERCITY", mailState: "OWNERSTATE", mailZip: "OWNERZIP",
@@ -200,8 +195,10 @@ export async function findCashBuyers(county: string, state: string, limit = 40):
       const ownerKey = Object.keys(a).find((k) => k.toLowerCase() === layer.owner.toLowerCase())
       const owner = ownerKey ? str(a[ownerKey]).replace(/(\s*,\s*)+$/, "") : ""
       const count = Number(a.cnt)
-      if (!owner || owner.toUpperCase() === "TAXPAYER") continue
-      if (!Number.isFinite(count) || count < 3 || count > 300) continue // private investors, not mega-institutions
+      if (!owner || /^(taxpayer|occupant|owner|unknown|current owner)$/i.test(owner)) continue
+      // 3+ holdings = investor; big SFR funds (FirstKey/VineBrook-scale) are
+      // real buyers too, so the cap only guards against data-error rollups.
+      if (!Number.isFinite(count) || count < 3 || count > 2000) continue
       if (INSTITUTIONAL.test(owner)) continue
       buyers.push({
         owner, count, mailing: null, mailingState: null,
