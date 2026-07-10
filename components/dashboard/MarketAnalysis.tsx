@@ -71,8 +71,42 @@ const composite = (e?: CachedEntry) => {
 }
 const ago = (iso: string) => { const h = (Date.now() - new Date(iso).getTime()) / 3.6e6; return h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago` }
 
-function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: number; onClick: () => void; busy: boolean; entry?: CachedEntry }) {
-  const c = composite(entry)
+// ── Rank the markets by any strategy, not just the overall composite ─────────
+type RankBy = "overall" | "ltr" | "str" | "mtr" | "flip" | "upside"
+const RANK_TABS: Array<{ id: RankBy; label: string; hint: string }> = [
+  { id: "overall", label: "🏆 Overall",          hint: "health + upside + deal economics" },
+  { id: "ltr",     label: "🏘 Long-term rentals", hint: "cap rate, rental vacancy, job growth, tenant depth" },
+  { id: "str",     label: "🏖 Short-term rentals", hint: "rent multiple, migration pull, occupancy" },
+  { id: "mtr",     label: "🛏 Mid-term rentals",  hint: "furnished 2-bed economics + employment demand" },
+  { id: "flip",    label: "🔨 Flips",             hint: "distressed supply, equity spread, resale demand" },
+  { id: "upside",  label: "📈 Upside",            hint: "appreciation potential — growth, jobs, migration, affordability headroom" },
+]
+
+function dimScore(e: CachedEntry | undefined, by: RankBy): number {
+  if (!e) return -1
+  switch (by) {
+    case "ltr":    return e.strat.longRental.score
+    case "str":    return e.strat.shortRental.score
+    case "mtr":    return e.strat.midRental.score
+    case "flip":   return e.strat.flip.score
+    case "upside": return typeof e.upside === "number" ? e.upside : -1
+    default:       return composite(e)
+  }
+}
+
+function dimDetail(e: CachedEntry, by: RankBy): string {
+  switch (by) {
+    case "ltr":    return e.strat.longRental.roi
+    case "str":    return e.strat.shortRental.roi
+    case "mtr":    return e.strat.midRental.roi
+    case "flip":   return e.strat.flip.roi
+    case "upside": return (e.upsideReasons ?? []).slice(0, 2).join(" · ")
+    default:       return `🏆 ${e.strat.bestFor}`
+  }
+}
+
+function MarketCard({ m, rank, onClick, busy, entry, rankBy }: { m: Market; rank?: number; onClick: () => void; busy: boolean; entry?: CachedEntry; rankBy: RankBy }) {
+  const c = dimScore(entry, rankBy)
   return (
     <button onClick={onClick} disabled={busy} className="text-left bg-gray-900/60 border border-gray-700/40 rounded-xl p-3 hover:border-indigo-500/50 hover:bg-gray-800/40 transition-all disabled:opacity-50">
       <div className="flex items-center justify-between gap-2">
@@ -80,7 +114,9 @@ function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: numbe
         {c >= 0 ? <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${GRADE_CLR[c >= 65 ? "A" : c >= 50 ? "C" : "D"]}`}>{c}</span> : <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${TAG_CLR[m.tag]}`}>{m.tag}</span>}
       </div>
       <p className="text-[11px] text-gray-500 mt-1 line-clamp-2">{m.why}</p>
-      {entry ? <p className="text-[10px] text-emerald-400 font-semibold mt-1.5">🏆 {entry.strat.bestFor} · updated {ago(entry.at)} →</p> : <p className="text-[10px] text-indigo-400 font-semibold mt-1.5">Analyze →</p>}
+      {entry
+        ? <p className="text-[10px] text-emerald-400 font-semibold mt-1.5 truncate">{dimDetail(entry, rankBy)} · {ago(entry.at)} →</p>
+        : <p className="text-[10px] text-indigo-400 font-semibold mt-1.5">Analyze →</p>}
     </button>
   )
 }
@@ -91,6 +127,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
   const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; fundConfigured: boolean } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
+  const [rankBy, setRankBy]   = useState<RankBy>("overall")
 
   // Load the 24/7-analyzed reports so the lists rank by LIVE data.
   useEffect(() => {
@@ -98,10 +135,23 @@ export default function MarketAnalysis({ password }: { password: string }) {
       .then(r => r.json()).then(d => { if (d?.reports) setCached(d.reports) }).catch(() => {})
   }, [password])
 
-  const sortByLive = (list: Market[]) => [...list].sort((a, b) => composite(cached[mKey(b.city, b.state)]) - composite(cached[mKey(a.city, a.state)]))
-  const topSorted = useMemo(() => sortByLive(TOP_MARKETS), [cached])        // eslint-disable-line react-hooks/exhaustive-deps
-  const upSorted  = useMemo(() => sortByLive(UPCOMING_MARKETS), [cached])   // eslint-disable-line react-hooks/exhaustive-deps
+  const sortByLive = (list: Market[]) => [...list].sort((a, b) => dimScore(cached[mKey(b.city, b.state)], rankBy) - dimScore(cached[mKey(a.city, a.state)], rankBy))
+  const topSorted = useMemo(() => sortByLive(TOP_MARKETS), [cached, rankBy])        // eslint-disable-line react-hooks/exhaustive-deps
+  const upSorted  = useMemo(() => sortByLive(UPCOMING_MARKETS), [cached, rankBy])   // eslint-disable-line react-hooks/exhaustive-deps
   const cachedCount = Object.keys(cached).length
+
+  // The single best market per strategy across everything we've analyzed.
+  const leaders = useMemo(() => {
+    const all = [...TOP_MARKETS, ...UPCOMING_MARKETS]
+    return RANK_TABS.filter((t) => t.id !== "overall").map((t) => {
+      let best: Market | null = null, bestScore = -1
+      for (const m of all) {
+        const s = dimScore(cached[mKey(m.city, m.state)], t.id)
+        if (s > bestScore) { bestScore = s; best = m }
+      }
+      return { tab: t, m: best, score: bestScore }
+    }).filter((l) => l.m && l.score >= 0)
+  }, [cached])
 
   const analyze = async (m: Market | { city: string; state: string }, depth = 500) => {
     if (!m.city.trim()) return
@@ -321,20 +371,48 @@ export default function MarketAnalysis({ password }: { password: string }) {
         {loading && <p className="text-xs text-indigo-300 flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-gray-600 border-t-indigo-400 rounded-full animate-spin" />Deep-searching &amp; analyzing {loading}…</p>}
       </div>
 
+      {/* 🏅 Strategy leaders — the single best market for each play, at a glance */}
+      {leaders.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-white mb-2">🏅 Best market per strategy <span className="text-[11px] font-normal text-gray-500">— from every city the 24/7 analyzer has scored</span></h4>
+          <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+            {leaders.map((l) => (
+              <button key={l.tab.id} onClick={() => analyze(l.m!)} disabled={!!loading}
+                className="text-left bg-gradient-to-b from-indigo-950/40 to-gray-900/60 border border-indigo-500/25 rounded-xl p-3 hover:border-indigo-400/60 transition-all disabled:opacity-50">
+                <p className="text-[10px] text-gray-500">{l.tab.label}</p>
+                <p className="text-sm font-bold text-white mt-0.5">{l.m!.city}, {l.m!.state}</p>
+                <p className="text-[10px] text-emerald-400 font-semibold mt-0.5">score {l.score} →</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rank every list by the strategy YOU run */}
+      <div className="flex flex-wrap gap-1.5">
+        {RANK_TABS.map((t) => (
+          <button key={t.id} onClick={() => setRankBy(t.id)} title={t.hint}
+            className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${rankBy === t.id ? "bg-indigo-600 border-indigo-400 text-white" : "bg-gray-900/60 border-gray-700/50 text-gray-400 hover:text-gray-200"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {rankBy !== "overall" && <p className="text-[11px] text-gray-500 -mt-3">Ranking every market by <b className="text-gray-300">{RANK_TABS.find((t) => t.id === rankBy)?.label.replace(/^\S+\s/, "")}</b> — {RANK_TABS.find((t) => t.id === rankBy)?.hint}. Cards show that strategy&apos;s numbers.</p>}
+
       <div>
         <div className="flex items-center justify-between mb-2">
           <h4 className="text-sm font-semibold text-white">🏆 Top 20 Markets</h4>
           <span className="text-[10px] text-gray-500">{cachedCount > 0 ? `🔄 analyzed 24/7 · ${cachedCount} cached · ranked by live score` : "ranked by live data once the 24/7 analyzer runs"}</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {topSorted.map((m, i) => <MarketCard key={m.city} m={m} rank={i + 1} onClick={() => analyze(m)} busy={!!loading} entry={cached[mKey(m.city, m.state)]} />)}
+          {topSorted.map((m, i) => <MarketCard key={m.city} m={m} rank={i + 1} onClick={() => analyze(m)} busy={!!loading} entry={cached[mKey(m.city, m.state)]} rankBy={rankBy} />)}
         </div>
       </div>
 
       <div>
         <h4 className="text-sm font-semibold text-white mb-2">🌱 Upcoming Cities <span className="text-[11px] font-normal text-gray-500">— lower cost, high potential</span></h4>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {upSorted.map((m) => <MarketCard key={m.city} m={m} onClick={() => analyze(m)} busy={!!loading} entry={cached[mKey(m.city, m.state)]} />)}
+          {upSorted.map((m, i) => <MarketCard key={m.city} m={m} rank={i + 1} onClick={() => analyze(m)} busy={!!loading} entry={cached[mKey(m.city, m.state)]} rankBy={rankBy} />)}
         </div>
       </div>
     </div>
