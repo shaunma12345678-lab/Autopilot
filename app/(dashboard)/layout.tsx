@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import Link from "next/link"
 import { signOut } from "@/app/actions/auth"
 import { SidebarNav } from "./sidebar-nav"
+import AIHelperWidget from "@/components/AIHelperWidget"
 
 export default async function DashboardLayout({
   children,
@@ -115,6 +116,19 @@ export default async function DashboardLayout({
       <main className="flex-1 overflow-y-auto bg-[#0f0f12]">
         {children}
       </main>
+
+      {/* Always-available AI helper (auth: the signed-in session cookie). */}
+      <AIHelperWidget
+        endpoint="/api/voice"
+        title="AutoPilot Assistant"
+        intro="Ask anything about your business or the platform — deal math worked step by step, outreach scripts, or where to find a feature. Full written answers."
+        placeholder="Ask me anything…"
+        suggestions={[
+          "What can this platform do for me?",
+          "Explain the 70% rule with an example",
+          "How do I find cash buyers?",
+        ]}
+      />
     </div>
   )
 }

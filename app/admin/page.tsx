@@ -16,6 +16,8 @@ import DealSimulator from "@/components/dashboard/DealSimulator"
 import VoiceAssistant from "@/components/dashboard/VoiceAssistant"
 import InboundSellers from "@/components/dashboard/InboundSellers"
 import AcquisitionCenter from "@/components/dashboard/AcquisitionCenter"
+import SellerFinder from "@/components/dashboard/SellerFinder"
+import AIHelperWidget from "@/components/AIHelperWidget"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 /* ── Types ── */
@@ -2156,7 +2158,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2226,6 +2228,7 @@ export default function AdminPage() {
     { id: "automations",  label: "Automations" },
     { id: "agent",        label: "🤖 Agent" },
     { id: "real-estate",  label: "🏚 Real Estate" },
+    { id: "seller-finder", label: "🧲 Seller Finder" },
     { id: "inbound",      label: "📥 Inbound Sellers" },
     { id: "acquisition",  label: "🚀 Acquisition" },
     { id: "best-deals",   label: "💎 Best Deals" },
@@ -2315,6 +2318,7 @@ export default function AdminPage() {
           {tab === "voice" && <VoiceAssistant password={pw} />}
           {tab === "inbound" && <InboundSellers password={pw} />}
           {tab === "acquisition" && <AcquisitionCenter password={pw} />}
+          {tab === "seller-finder" && <SellerFinder password={pw} />}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}
@@ -2453,6 +2457,19 @@ export default function AdminPage() {
           {tab === "sites" && <SitesPanel password={pw} />}
         </div>
       </main>
+
+      <AIHelperWidget
+        endpoint="/api/voice"
+        headers={{ "x-admin-password": pw }}
+        title="DealPilot Copilot"
+        intro="Ask anything, from any tab — deal math worked step by step, negotiation scripts, or how to use a section. I answer in full detail."
+        placeholder="e.g. MAO on a $400k ARV needing $60k rehab?"
+        suggestions={[
+          "What should I offer on a $300k ARV with $40k repairs?",
+          "Write my cold-call script for a pre-foreclosure owner",
+          "Where do I see homeowners who requested a cash offer?",
+        ]}
+      />
     </div>
   )
 }

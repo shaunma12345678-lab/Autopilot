@@ -101,6 +101,69 @@ export default function AcquisitionCenter({ password }: { password: string }) {
   const enrolled = useMemo(() => Object.values(state?.enrolled ?? {}).sort((a, b) => b.enrolledAt.localeCompare(a.enrolledAt)), [state])
   const queue = state?.queue ?? []
 
+  // ── Competitor CSV import ("switch in 5 minutes") ──────────────────────────
+  const [importNote, setImportNote] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+
+  // Minimal CSV parser: handles quoted fields with commas; good enough for
+  // PropStream / DealMachine / BatchLeads exports.
+  const parseCsv = (text: string): string[][] => {
+    const rows: string[][] = []
+    let row: string[] = [], cell = "", inQ = false
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i]
+      if (inQ) {
+        if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++ }
+        else if (ch === '"') inQ = false
+        else cell += ch
+      } else if (ch === '"') inQ = true
+      else if (ch === ",") { row.push(cell); cell = "" }
+      else if (ch === "\n" || ch === "\r") {
+        if (cell.length || row.length) { row.push(cell); rows.push(row); row = []; cell = "" }
+        if (ch === "\r" && text[i + 1] === "\n") i++
+      } else cell += ch
+    }
+    if (cell.length || row.length) { row.push(cell); rows.push(row) }
+    return rows
+  }
+
+  const findCol = (headers: string[], names: string[]): number =>
+    headers.findIndex((h) => names.some((n) => h.replace(/[^a-z]/g, "").includes(n)))
+
+  const importCsv = async (file: File) => {
+    setImporting(true); setImportNote(null)
+    try {
+      const rows = parseCsv(await file.text())
+      if (rows.length < 2) throw new Error("That file looks empty — export your list as CSV with a header row.")
+      const headers = rows[0].map((h) => h.toLowerCase().trim())
+      const iAddr = findCol(headers, ["propertyaddress", "situsaddress", "address", "street"])
+      if (iAddr < 0) throw new Error("Couldn't find an address column — make sure the CSV has an Address / Property Address header.")
+      const iCity = findCol(headers, ["propertycity", "situscity", "city"])
+      const iState = findCol(headers, ["propertystate", "situsstate", "state"])
+      const iZip = findCol(headers, ["propertyzip", "situszip", "zip", "postal"])
+      const iOwner = findCol(headers, ["ownerfullname", "ownername", "owner", "fullname", "taxpayer"])
+      const iPhone = findCol(headers, ["phone", "mobile", "cell"])
+      const iEmail = findCol(headers, ["email"])
+      const cell = (r: string[], i: number) => (i >= 0 ? (r[i] ?? "").trim() : "")
+      const leads = rows.slice(1)
+        .map((r) => ({
+          address: cell(r, iAddr), city: cell(r, iCity), state: cell(r, iState), zip: cell(r, iZip),
+          ownerName: cell(r, iOwner), phone: cell(r, iPhone), email: cell(r, iEmail), score: 0,
+        }))
+        .filter((l) => l.address && /\d/.test(l.address))
+        .slice(0, 100)
+      if (!leads.length) throw new Error("No usable rows found — check that the address column has street addresses.")
+      const res = await fetch("/api/acquisition", { method: "POST", headers: apiHeaders, body: JSON.stringify({ action: "import", leads }) })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error ?? "Import failed — try again.")
+      if (d.state) setState(d.state)
+      setImportNote(`✓ Imported ${d.added} leads into the sequence${d.skipped ? ` (${d.skipped} duplicates/invalid skipped)` : ""}. Turn the agent ON and it starts working them.`)
+    } catch (e) {
+      setImportNote(`⚠ ${e instanceof Error ? e.message : "Import failed — try again."}`)
+    }
+    setImporting(false)
+  }
+
   // ── Offer Engine state ──────────────────────────────────────────────────────
   const [offer, setOffer] = useState({ ownerName: "", address: "", city: "", state: "CA", zip: "", offerPrice: "", emd: "2500", closeDays: "14", inspectionDays: "7", expireDays: "7", buyerEmail: "" })
   const [offerNote, setOfferNote] = useState<string | null>(null)
@@ -284,6 +347,18 @@ export default function AcquisitionCenter({ password }: { password: string }) {
         </div>
         {offerNote && <p className="text-xs text-amber-300 mt-2">{offerNote}</p>}
         <p className="text-[10px] text-gray-600 mt-3">Tip: get the exact number from Real Estate → any lead → Deal tab (MAO), or 📥 Inbound Sellers → 🔎 Run the numbers. Have your purchase agreement reviewed by a local attorney once — then reuse it on every accepted LOI.</p>
+      </div>
+
+      {/* ── Import your list (switch from any tool in 5 minutes) ──────────── */}
+      <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5">
+        <h4 className="font-bold text-white">📂 Bring your list — switch in 5 minutes</h4>
+        <p className="text-xs text-gray-500 mt-0.5">Export your leads from PropStream, DealMachine, BatchLeads, or any spreadsheet as CSV and drop it here. We detect the address/owner/phone columns automatically and enroll everything into the Acquisition sequence — nothing you&apos;ve built gets left behind.</p>
+        <label className={`mt-3 inline-flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-lg cursor-pointer ${importing ? "bg-gray-800 text-gray-500" : "bg-emerald-700/60 hover:bg-emerald-600 text-white"}`}>
+          {importing ? "Importing…" : "📥 Choose CSV file"}
+          <input type="file" accept=".csv,text/csv" className="hidden" disabled={importing}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void importCsv(f); e.target.value = "" }} />
+        </label>
+        {importNote && <p className="text-xs text-emerald-200 mt-2">{importNote}</p>}
       </div>
 
       {note && <p className="text-xs text-amber-300">{note}</p>}

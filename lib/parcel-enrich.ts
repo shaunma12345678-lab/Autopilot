@@ -25,7 +25,10 @@ interface ParcelLayer {
   url: string
   source: string
   f: {
-    sqft: string; year: string; use: string
+    // Every field is optional — counties expose different columns, and mapping
+    // a wrong-but-present field (e.g. lot sqft as living area, or assessment
+    // year as year built) would corrupt the deal math. Only map what's real.
+    sqft?: string; year?: string; use?: string
     beds?: string; baths?: string; units?: string; land?: string; imp?: string
     owner?: string; mailAddr?: string; mailCity?: string; mailState?: string; mailZip?: string
   }
@@ -44,6 +47,21 @@ const COUNTY_PARCELS: Record<string, ParcelLayer> = {
     url: "https://services2.arcgis.com/qvkbeam7Wirps6zC/arcgis/rest/services/parcel_file_current/FeatureServer/0/query",
     source: "Wayne County Assessor (parcel)",
     f: { sqft: "total_square_footage", year: "year_built", use: "use_code_description", owner: "taxpayer_1", mailAddr: "taxpayer_address", mailCity: "taxpayer_city", mailState: "taxpayer_state", mailZip: "taxpayer_zip_code" },
+  },
+  // Maricopa County (Phoenix) — official assessor layer: owner + full mailing
+  // address + living-area sqft + year built. Verified live 2026-07.
+  "maricopa:az": {
+    url: "https://gis.mcassessor.maricopa.gov/arcgis/rest/services/Parcels/MapServer/0/query",
+    source: "Maricopa County Assessor (parcel)",
+    f: { sqft: "LIVING_SPACE", year: "CONST_YEAR", use: "PUC", owner: "OWNER_NAME", mailAddr: "MAIL_ADDR1", mailCity: "MAIL_CITY", mailState: "MAIL_STATE", mailZip: "MAIL_ZIP" },
+  },
+  // Marion County (Indianapolis) — owner + full mailing address. ESTSQFT is the
+  // LOT size (not living area) and there's no year-built column, so those are
+  // intentionally unmapped. Verified live 2026-07.
+  "marion:in": {
+    url: "https://gis.indy.gov/server/rest/services/MapIndy/MapIndyProperty/MapServer/10/query",
+    source: "Marion County / Indy Assessor (parcel)",
+    f: { land: "ASSESSORYEAR_LANDTOTAL", imp: "ASSESSORYEAR_IMPTOTAL", owner: "FULLOWNERNAME", mailAddr: "OWNERADDRESS", mailCity: "OWNERCITY", mailState: "OWNERSTATE", mailZip: "OWNERZIP" },
   },
 }
 
@@ -83,15 +101,17 @@ export async function enrichFromParcel(address: string, state: string): Promise<
     const assessedValue = land != null || imp != null ? (land ?? 0) + (imp ?? 0) : null
     const str = (k?: string) => { const v = k ? a[k] : null; return typeof v === "string" && v.trim() ? v.trim() : null }
     const mailParts = [str(layer.f.mailAddr), [str(layer.f.mailCity), str(layer.f.mailState), str(layer.f.mailZip)].filter(Boolean).join(", ")].filter(Boolean)
+    // Some registries pad owner names with empty CSV cells ("X LLC, , , ").
+    const owner = str(layer.f.owner)?.replace(/(\s*,\s*)+$/, "") ?? null
     return {
-      sqft:           num(a[layer.f.sqft]),
+      sqft:           layer.f.sqft ? num(a[layer.f.sqft]) : null,
       beds:           layer.f.beds ? num(a[layer.f.beds]) : null,
       baths:          layer.f.baths ? num(a[layer.f.baths]) : null,
-      yearBuilt:      num(a[layer.f.year]),
-      propertyType:   str(layer.f.use),
+      yearBuilt:      layer.f.year ? num(a[layer.f.year]) : null,
+      propertyType:   layer.f.use ? str(layer.f.use) : null,
       units:          layer.f.units ? num(a[layer.f.units]) : null,
       assessedValue,
-      ownerName:      str(layer.f.owner),
+      ownerName:      owner,
       mailingAddress: mailParts.length ? mailParts.join(", ") : null,
       source:         layer.source,
     }

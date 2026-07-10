@@ -15,6 +15,7 @@ import {
 } from "@/lib/acquisition-engine"
 import { areaCacheKey, loadAreaCache } from "@/lib/lead-cache"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
+import { leadSignature } from "@/lib/seen-leads"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
 
@@ -43,14 +44,42 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
+  interface IncomingLead { address?: string; city?: string; state?: string; zip?: string; ownerName?: string; phone?: string; email?: string; score?: number }
   let body: {
     action?: string
     config?: Partial<AcquisitionConfig>
     area?: { searchType?: string; zipCode?: string; city?: string; county?: string; state?: string }
     actionId?: string
     sig?: string
+    lead?: IncomingLead
+    leads?: IncomingLead[]
   }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
+
+  const clean = (v: unknown, max = 160): string => (typeof v === "string" ? v.trim().slice(0, max) : "")
+  const toEnrolled = (l: IncomingLead) => {
+    const address = clean(l.address)
+    if (!address) return null
+    const sig = leadSignature({ address, zip: clean(l.zip, 10) })
+    if (!sig || sig.length < 4) return null
+    const nowIso = new Date().toISOString()
+    return {
+      sig,
+      addr: address,
+      city: clean(l.city, 80),
+      state: clean(l.state, 2).toUpperCase(),
+      zip: clean(l.zip, 10),
+      owner: clean(l.ownerName),
+      phone: clean(l.phone, 40),
+      email: clean(l.email),
+      score: typeof l.score === "number" ? Math.max(0, Math.min(100, Math.round(l.score))) : 0,
+      enrolledAt: nowIso,
+      step: 0,
+      nextAt: nowIso,
+      paused: false,
+      history: [],
+    }
+  }
 
   try {
     const bizId = await resolveLearningBusinessId()
@@ -90,6 +119,25 @@ export async function POST(request: NextRequest) {
         st.queue = st.queue.filter((q) => q.id !== body.actionId)
         await saveAcquisitionState(bizId, st)
         return Response.json({ ok: true, state: st })
+      }
+
+      // Enroll one lead (Seller Finder / Real Estate hand-off) or a whole
+      // imported list (competitor CSV). Dedup by signature; never re-enrolls.
+      case "enroll":
+      case "import": {
+        const incoming = body.action === "enroll" ? (body.lead ? [body.lead] : []) : (Array.isArray(body.leads) ? body.leads : [])
+        if (!incoming.length) return Response.json({ error: "lead(s) required" }, { status: 400 })
+        const st = await loadAcquisitionState(bizId)
+        let added = 0
+        for (const raw of incoming.slice(0, 100)) {
+          const e = toEnrolled(raw)
+          if (!e || st.enrolled[e.sig]) continue
+          st.enrolled[e.sig] = e
+          st.totals.enrolled++
+          added++
+        }
+        await saveAcquisitionState(bizId, st)
+        return Response.json({ ok: true, added, skipped: Math.min(incoming.length, 100) - added, state: st })
       }
 
       case "pause":
