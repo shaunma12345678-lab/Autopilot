@@ -42,7 +42,17 @@ function StrategyCard({ title, emoji, s }: { title: string; emoji: string; s: St
   )
 }
 
-interface Fund { population: number | null; popGrowth5yr: number | null; medianIncome: number | null; povertyRate: number | null; unemploymentRate: number | null; medianHomeValue?: number | null; medianRent?: number | null; vacancyRate?: number | null; priceToIncome?: number | null; grossYield?: number | null; growthFrom?: string; source?: string }
+interface Fund {
+  population: number | null; popGrowth5yr: number | null; medianIncome: number | null; povertyRate: number | null; unemploymentRate: number | null
+  medianHomeValue?: number | null; medianRent?: number | null; vacancyRate?: number | null; priceToIncome?: number | null; grossYield?: number | null
+  occupancyPct?: number | null; rentalVacancyPct?: number | null; renterSharePct?: number | null; inboundMigrationPct?: number | null
+  rent1br?: number | null; rent2br?: number | null; rent3br?: number | null
+  jobGrowthPct?: number | null; jobsNote?: string
+  growthFrom?: string; source?: string
+}
+interface Factor { key: string; label: string; value: string; rating: number | null; meaning: string; drives: string[] }
+interface JobMove { company: string; jobs: number | null; note: string }
+interface JobMovesData { inbound: JobMove[]; outbound: JobMove[]; at: string; sources: number }
 interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; fundamentals?: Fund | null; fundScore?: number | null; fundReasons?: string[]; upside?: number | null; upsideReasons?: string[]; at: string }
 const mKey = (c: string, s: string) => `${c.toLowerCase().trim()}:${(s || "").toUpperCase().trim()}`
 // Composite rank = current health (fundamentals) 40% + upside/appreciation
@@ -78,7 +88,7 @@ function MarketCard({ m, rank, onClick, busy, entry }: { m: Market; rank?: numbe
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; fundConfigured: boolean } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; fundConfigured: boolean } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
 
@@ -104,7 +114,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error || !data?.report) { setError(data?.error ?? `No data for ${m.city} yet — run it again; the cache fills over time.`) }
-      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], fundConfigured: !!data.fundConfigured }) }
+      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], factors: Array.isArray(data.factors) ? data.factors : [], jobMoves: data.jobMoves ?? null, fundConfigured: !!data.fundConfigured }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
@@ -115,7 +125,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons } = report
+    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons, factors, jobMoves } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -161,12 +171,17 @@ export default function MarketAnalysis({ password }: { password: string }) {
               {[
                 ["Population", fund.population != null ? fund.population.toLocaleString() : "—"],
                 ["Pop growth", fund.popGrowth5yr != null ? `${fund.popGrowth5yr > 0 ? "+" : ""}${fund.popGrowth5yr}%` : "—"],
+                ["Jobs YoY", fund.jobGrowthPct != null ? `${fund.jobGrowthPct > 0 ? "+" : ""}${fund.jobGrowthPct}%` : "—"],
+                ["Moved in (1yr)", fund.inboundMigrationPct != null ? `${fund.inboundMigrationPct}%` : "—"],
                 ["Median income", fund.medianIncome != null ? `$${Math.round(fund.medianIncome / 1000)}k` : "—"],
                 ["Poverty", fund.povertyRate != null ? `${fund.povertyRate}%` : "—"],
                 ["Unemployment", fund.unemploymentRate != null ? `${fund.unemploymentRate}%` : "—"],
                 ["Median home value", fund.medianHomeValue != null ? `$${Math.round(fund.medianHomeValue / 1000)}k` : "—"],
                 ["Median rent", fund.medianRent != null ? `$${fund.medianRent.toLocaleString()}` : "—"],
-                ["Vacancy", fund.vacancyRate != null ? `${fund.vacancyRate}%` : "—"],
+                ["Rent 1bd/2bd/3bd", fund.rent1br || fund.rent2br || fund.rent3br ? [fund.rent1br, fund.rent2br, fund.rent3br].map((r) => (r ? `$${r}` : "—")).join(" / ") : "—"],
+                ["Occupancy", fund.occupancyPct != null ? `${fund.occupancyPct}%` : "—"],
+                ["Rental vacancy", fund.rentalVacancyPct != null ? `${fund.rentalVacancyPct}%` : "—"],
+                ["Renter share", fund.renterSharePct != null ? `${fund.renterSharePct}%` : "—"],
                 ["Price-to-income", fund.priceToIncome != null ? `${fund.priceToIncome}×` : "—"],
                 ["Gross yield", fund.grossYield != null ? `${fund.grossYield}%` : "—"],
               ].map(([k, v]) => (
@@ -176,6 +191,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
                 </div>
               ))}
             </div>
+            {fund.jobsNote && <p className="text-[10px] text-gray-600 mt-1.5">Jobs YoY = {fund.jobsNote} (BLS — city-level employment isn&apos;t published keyless)</p>}
             {upside != null && upsideReasons.length > 0 && (
               <p className="text-[11px] text-amber-200/80 mt-2">↑ <b>Appreciation potential {upside}/100</b> — {upsideReasons.join(" · ")}</p>
             )}
@@ -188,6 +204,66 @@ export default function MarketAnalysis({ password }: { password: string }) {
           <StrategyCard title="Mid-term rental"     emoji="🛏" s={strat.midRental} />
           <StrategyCard title="Long-term rental"    emoji="🏘" s={strat.longRental} />
         </div>
+
+        {/* 🏢 Which employers are coming and going (web+AI, cached weekly) */}
+        {jobMoves && (jobMoves.inbound.length > 0 || jobMoves.outbound.length > 0) && (
+          <div className="bg-gray-900/60 border border-sky-500/25 rounded-2xl p-4">
+            <p className="text-sm font-semibold text-sky-200 mb-2">🏢 Jobs moving in / out <span className="text-[10px] font-normal text-gray-500">· from recent local news ({jobMoves.sources} sources) · updated {ago(jobMoves.at)}</span></p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <p className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider mb-1">→ Coming in</p>
+                {jobMoves.inbound.length === 0 && <p className="text-[11px] text-gray-600">No expansions found in recent news.</p>}
+                <ul className="space-y-1">
+                  {jobMoves.inbound.map((j, i) => (
+                    <li key={i} className="text-[11px] text-gray-300 bg-emerald-950/25 border border-emerald-800/30 rounded-lg px-2 py-1.5">
+                      <b className="text-white">{j.company}</b>{j.jobs ? <span className="text-emerald-300"> · ~{j.jobs.toLocaleString()} jobs</span> : null}{j.note ? <span className="text-gray-400"> — {j.note}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-rose-300 uppercase tracking-wider mb-1">← Leaving / cutting</p>
+                {jobMoves.outbound.length === 0 && <p className="text-[11px] text-gray-600">No closures or layoffs found in recent news.</p>}
+                <ul className="space-y-1">
+                  {jobMoves.outbound.map((j, i) => (
+                    <li key={i} className="text-[11px] text-gray-300 bg-rose-950/20 border border-rose-800/30 rounded-lg px-2 py-1.5">
+                      <b className="text-white">{j.company}</b>{j.jobs ? <span className="text-rose-300"> · ~{j.jobs.toLocaleString()} jobs</span> : null}{j.note ? <span className="text-gray-400"> — {j.note}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <p className="text-[10px] text-gray-600 mt-2">Extracted from news snippets — only employers named in sources are shown. Verify before underwriting around a single employer.</p>
+          </div>
+        )}
+
+        {/* 🧮 Every factor we weigh — the full transparent screen */}
+        {factors.length > 0 && (
+          <div className="bg-gray-900/60 border border-violet-500/25 rounded-2xl p-4">
+            <p className="text-sm font-semibold text-violet-200 mb-2">🧮 Every factor we weigh <span className="text-[10px] font-normal text-gray-500">· real public data, rated for investors</span></p>
+            <div className="space-y-1.5">
+              {factors.map((fa) => (
+                <div key={fa.key} className="flex items-center gap-3 bg-gray-950/50 border border-gray-800/70 rounded-lg px-3 py-2">
+                  <div className="w-40 shrink-0">
+                    <p className="text-[11px] font-semibold text-gray-200">{fa.label}</p>
+                    <p className="text-sm font-bold text-white">{fa.value}</p>
+                  </div>
+                  <div className="w-20 shrink-0">
+                    {fa.rating != null ? (
+                      <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${fa.rating >= 65 ? "bg-emerald-500" : fa.rating >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${fa.rating}%` }} />
+                      </div>
+                    ) : <span className="text-[10px] text-gray-600">no data</span>}
+                  </div>
+                  <p className="flex-1 text-[11px] text-gray-400 min-w-0">{fa.meaning}</p>
+                  <div className="hidden md:flex gap-1 shrink-0">
+                    {fa.drives.slice(0, 2).map((d) => <span key={d} className="text-[9px] bg-violet-950/50 border border-violet-800/40 text-violet-200 px-1.5 py-0.5 rounded">{d}</span>)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {market.insights.length > 0 && (
           <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4">
             <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">Why this market scores this way</p>

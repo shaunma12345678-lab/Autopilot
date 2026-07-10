@@ -4,6 +4,7 @@
 // pulled (no external API). Pure, synchronous, null-safe.
 
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
+import type { Fundamentals } from "@/lib/market-fundamentals"
 import { fuseSignals } from "@/lib/signal-fusion"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { opportunityScore } from "@/lib/opportunity"
@@ -114,53 +115,91 @@ const grade = (s: number): string => (s >= 80 ? "A" : s >= 65 ? "B" : s >= 50 ? 
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)))
 const k = (n: number) => `$${Math.round(n / 1000)}k`
 
-export function scoreStrategies(r: MarketReport): MarketStrategies {
+// Fundamentals (when provided) sharpen every strategy with the real market
+// screen: rental vacancy, job growth, migration, renter depth, bedroom rents.
+export function scoreStrategies(r: MarketReport, f?: Fundamentals | null): MarketStrategies {
   const eq  = r.avgEquity ?? 30
   const val = r.medianValue ?? 0
   const rent = r.medianRent ?? (val ? Math.round(val * 0.007) : 0)   // LTR monthly
+  const jobs = f?.jobGrowthPct ?? null
+  const rvac = f?.rentalVacancyPct ?? null
+  const inbound = f?.inboundMigrationPct ?? null
 
-  // FLIP — supply (distress) + spread (equity) + ready gems. ROI ≈ profit on cash.
-  const flipScore = clamp(r.distressRate * 0.55 + eq * 0.5 + Math.min(r.gemCount * 2.5, 20))
+  // FLIP — supply (distress) + spread (equity) + resale demand (occupancy,
+  // affordability headroom).
+  let flipScore = r.distressRate * 0.5 + eq * 0.45 + Math.min(r.gemCount * 2.5, 18)
+  if (f?.occupancyPct != null) flipScore += f.occupancyPct >= 90 ? 5 : f.occupancyPct < 82 ? -5 : 0
+  if (f?.priceToIncome != null) flipScore += f.priceToIncome <= 4.5 ? 8 : f.priceToIncome >= 7 ? -6 : 0
+  flipScore = clamp(flipScore)
   const flipProfit = val ? Math.round(val * (0.06 + Math.min(eq, 50) / 500)) : 0  // rough avg profit/flip
   const flip: StrategyScore = {
     score: flipScore, grade: grade(flipScore),
     verdict: flipScore >= 65 ? "Strong flip market" : flipScore >= 50 ? "Workable for flips" : "Thin for flips",
     roi: val ? `~${k(flipProfit)} profit/flip · ${Math.round((flipProfit / Math.max(val * 0.25, 1)) * 100)}% cash-on-cash (est)` : "value n/a",
-    reasons: [`${r.distressRate}% distressed supply${r.gemCount ? ` · ${r.gemCount} hidden gems` : ""}`, `~${eq}% avg equity ${eq >= 35 ? "→ buy low" : "→ tighter margins"}`],
+    reasons: [
+      `${r.distressRate}% distressed supply${r.gemCount ? ` · ${r.gemCount} hidden gems` : ""}`,
+      `~${eq}% avg equity ${eq >= 35 ? "→ buy low" : "→ tighter margins"}`,
+      ...(f?.occupancyPct != null ? [`${f.occupancyPct}% occupancy → ${f.occupancyPct >= 90 ? "retail buyers waiting" : "verify resale demand"}`] : []),
+    ],
     estimated: true,
   }
 
-  // LONG-TERM RENTAL — cap rate / gross yield.
+  // LONG-TERM RENTAL — cap rate + the real rental screen: vacancy, jobs, tenant depth.
   const cap = r.capRate ?? (rent && val ? Math.round((rent * 12 * 0.55) / val * 1000) / 10 : 5)
-  const ltrScore = clamp(cap * 9 + (val && val < 350_000 ? 12 : 0))
+  let ltrScore = cap * 8 + (val && val < 350_000 ? 10 : 0)
+  if (rvac != null) ltrScore += rvac <= 5 ? 12 : rvac <= 9 ? 4 : -8
+  if (jobs != null) ltrScore += jobs >= 1.5 ? 10 : jobs > 0 ? 5 : -6
+  if (f?.renterSharePct != null && f.renterSharePct >= 40) ltrScore += 5
+  ltrScore = clamp(ltrScore)
   const longRental: StrategyScore = {
     score: ltrScore, grade: grade(ltrScore),
     verdict: ltrScore >= 65 ? "Strong cash flow" : ltrScore >= 50 ? "Balanced" : "Appreciation play, thin cash flow",
-    roi: `${cap}% cap rate · ~$${rent}/mo${r.rentYield != null ? ` · ${r.rentYield}% gross yield` : ""}`,
-    reasons: [val ? `median ${k(val)}` : "value n/a", `${cap}% cap rate`],
+    roi: `${cap}% cap rate · ~$${rent}/mo${f?.rent3br ? ` (3-bed $${f.rent3br})` : ""}${r.rentYield != null ? ` · ${r.rentYield}% gross yield` : ""}`,
+    reasons: [
+      val ? `median ${k(val)} · ${cap}% cap` : `${cap}% cap rate`,
+      ...(rvac != null ? [`${rvac}% rental vacancy ${rvac <= 5 ? "→ units fill fast" : rvac <= 9 ? "→ balanced" : "→ expect gaps between tenants"}`] : []),
+      ...(jobs != null ? [`${jobs > 0 ? "+" : ""}${jobs}% jobs YoY${f?.jobsNote ? ` (${f.jobsNote.split(",")[0]})` : ""}`] : []),
+      ...(f?.renterSharePct != null ? [`${f.renterSharePct}% of homes rent → ${f.renterSharePct >= 45 ? "deep tenant pool" : "moderate tenant pool"}`] : []),
+    ],
     estimated: r.rentYield == null,
   }
 
-  // MID-TERM RENTAL — furnished 1–6mo (corporate / travel nurse). ~1.4× LTR rent,
-  // lower turnover than STR. Score tracks LTR with a furnished premium.
-  const mtrRent = Math.round(rent * 1.4)
-  const mtrCap = val ? Math.round((mtrRent * 12 * 0.6) / val * 1000) / 10 : cap
+  // MID-TERM RENTAL — furnished 1–6mo (corporate / travel nurse). ~1.4× the
+  // 1-2 bed rent, fewer turnovers than STR; runs on employment demand.
+  const mtrBase = f?.rent2br ?? f?.rent1br ?? rent
+  const mtrRent = Math.round(mtrBase * 1.4)
+  let mtrScore = (val ? Math.round((mtrRent * 12 * 0.6) / val * 1000) / 10 : cap) * 8
+  if (jobs != null) mtrScore += jobs >= 1 ? 10 : jobs > 0 ? 4 : -6
+  if (inbound != null && inbound >= 2.5) mtrScore += 6
+  mtrScore = clamp(mtrScore)
   const midRental: StrategyScore = {
-    score: clamp(mtrCap * 9), grade: grade(clamp(mtrCap * 9)),
+    score: mtrScore, grade: grade(mtrScore),
     verdict: "Furnished mid-term — steadier than STR",
-    roi: `~$${mtrRent}/mo · ${mtrCap}% cap (est)`,
-    reasons: ["~1.4× long-term rent, fewer turnovers", "demand near hospitals / corporate hubs"],
+    roi: `~$${mtrRent}/mo · ${val ? Math.round((mtrRent * 12 * 0.6) / val * 1000) / 10 : cap}% cap (est)`,
+    reasons: [
+      `~1.4× the ${f?.rent2br ? "2-bed" : "market"} rent ($${mtrBase} → $${mtrRent}), fewer turnovers`,
+      ...(jobs != null ? [`${jobs > 0 ? "+" : ""}${jobs}% job growth feeds corporate/travel-nurse demand`] : ["demand near hospitals / corporate hubs"]),
+    ],
     estimated: true,
   }
 
-  // SHORT-TERM RENTAL — ~2.4× LTR gross at ~55% occupancy. High upside + variance.
-  const strRent = Math.round(rent * 2.4 * 0.55)
-  const strScore = clamp((val >= 250_000 && val <= 1_200_000 ? 56 : 44) + Math.min(r.distressRate * 0.1, 8))
+  // SHORT-TERM RENTAL — ~2.4× LTR gross at ~55% occupancy; migration/visitor
+  // pull raises confidence. Still modeled without paid STR data — flagged.
+  const strBase = f?.rent2br ?? rent
+  const strRent = Math.round(strBase * 2.4 * 0.55)
+  let strScore = (val >= 250_000 && val <= 1_200_000 ? 54 : 44) + Math.min(r.distressRate * 0.1, 6)
+  if (inbound != null) strScore += inbound >= 3 ? 10 : inbound >= 1.5 ? 5 : 0
+  if (f?.occupancyPct != null && f.occupancyPct < 82) strScore -= 6
+  strScore = clamp(strScore)
   const shortRental: StrategyScore = {
     score: strScore, grade: grade(strScore),
     verdict: "High upside, variable — verify local STR rules + demand",
     roi: `~$${strRent}/mo net (est, ~55% occ)`,
-    reasons: ["~2.4× long-term rent gross", "check city STR permits + seasonality"],
+    reasons: [
+      `~2.4× the ${f?.rent2br ? "2-bed" : "long-term"} rent gross`,
+      ...(inbound != null ? [`${inbound}% moved in last year → ${inbound >= 3 ? "strong visitor/relocation pull" : "moderate demand pull"}`] : []),
+      "check city STR permits + seasonality",
+    ],
     estimated: true,
   }
 
