@@ -13,7 +13,7 @@ import { loadBuyers, saveBuyers, type Buyer } from "@/lib/buyers"
 
 interface BuyerProperty { address: string; city: string; zip: string; value: number | null; salePrice: number | null; saleDate: string | null; use: string | null }
 interface CashBuyer {
-  owner: string; count: number; mailing: string | null; mailingState: string | null
+  owner: string; ownerRaw: string; count: number; mailing: string | null; mailingState: string | null
   entity: "LLC" | "Trust" | "Company" | "Individual"; absentee: boolean
   recentBuys: number; lastBuy: string | null; hasSaleData: boolean
   portfolioValue: number | null; avgValue: number | null
@@ -69,7 +69,7 @@ export default function CashBuyers({ password }: { password: string }) {
     if (dossiers[b.owner]) return
     setDossiers((d) => ({ ...d, [b.owner]: "loading" }))
     try {
-      const res = await fetch("/api/leads/buyers", { method: "POST", headers: apiHeaders, body: JSON.stringify({ action: "dossier", county: county.trim(), state: stateAbbr.trim(), owner: b.owner }) })
+      const res = await fetch("/api/leads/buyers", { method: "POST", headers: apiHeaders, body: JSON.stringify({ action: "dossier", county: county.trim(), state: stateAbbr.trim(), owner: b.owner, ownerRaw: b.ownerRaw }) })
       const data = await res.json()
       setDossiers((d) => ({ ...d, [b.owner]: Array.isArray(data.properties) ? data.properties : [] }))
     } catch { setDossiers((d) => ({ ...d, [b.owner]: [] })) }

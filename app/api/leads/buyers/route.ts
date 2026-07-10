@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  let body: { action?: string; county?: string; state?: string; limit?: number; owner?: string; sampleAddress?: string; sampleCity?: string }
+  let body: { action?: string; county?: string; state?: string; limit?: number; owner?: string; ownerRaw?: string; sampleAddress?: string; sampleCity?: string }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
   const county = (body.county ?? "").trim(), state = (body.state ?? "").trim()
   if (!county || !state) return Response.json({ error: "county and state are required" }, { status: 400 })
@@ -31,8 +31,10 @@ export async function POST(request: NextRequest) {
   try {
     switch (body.action ?? "search") {
       case "dossier": {
-        if (!body.owner?.trim()) return Response.json({ error: "owner is required" }, { status: 400 })
-        const properties = await buyerDossier(county, state, body.owner.trim())
+        // ownerRaw carries the county's exact stored spelling (padding included).
+        const queryOwner = (body.ownerRaw ?? body.owner ?? "").trim()
+        if (!queryOwner) return Response.json({ error: "owner is required" }, { status: 400 })
+        const properties = await buyerDossier(county, state, body.ownerRaw ?? queryOwner)
         return Response.json({ properties, count: properties.length })
       }
 

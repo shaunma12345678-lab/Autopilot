@@ -20,7 +20,8 @@ export interface BuyerProperty {
 }
 
 export interface CashBuyer {
-  owner: string
+  owner: string              // cleaned for display
+  ownerRaw: string           // exactly as stored in the county data — REQUIRED for follow-up queries
   count: number              // properties they own in the county
   mailing: string | null
   mailingState: string | null
@@ -193,7 +194,10 @@ export async function findCashBuyers(county: string, state: string, limit = 40):
       const a = r.attributes ?? {}
       // Group-by echoes the field under its own (case-varying) name — find it.
       const ownerKey = Object.keys(a).find((k) => k.toLowerCase() === layer.owner.toLowerCase())
-      const owner = ownerKey ? str(a[ownerKey]).replace(/(\s*,\s*)+$/, "") : ""
+      // Keep the RAW stored value for follow-up equality queries (some counties
+      // pad names with ", , ") and a cleaned version for display.
+      const ownerRaw = ownerKey ? str(a[ownerKey]) : ""
+      const owner = ownerRaw.replace(/(\s*,\s*)+$/, "")
       const count = Number(a.cnt)
       if (!owner || /^(taxpayer|occupant|owner|unknown|current owner)$/i.test(owner)) continue
       // 3+ holdings = investor; big SFR funds (FirstKey/VineBrook-scale) are
@@ -201,7 +205,7 @@ export async function findCashBuyers(county: string, state: string, limit = 40):
       if (!Number.isFinite(count) || count < 3 || count > 2000) continue
       if (INSTITUTIONAL.test(owner)) continue
       buyers.push({
-        owner, count, mailing: null, mailingState: null,
+        owner, ownerRaw, count, mailing: null, mailingState: null,
         entity: entityOf(owner), absentee: false,
         recentBuys: 0, lastBuy: null, hasSaleData: Boolean(layer.saleDate),
         portfolioValue: null, avgValue: null, topZips: [], topUse: null,
@@ -221,7 +225,7 @@ export async function findCashBuyers(county: string, state: string, limit = 40):
             layer.situsNum, layer.situsAddr, layer.situsCity, layer.situsZip,
             layer.saleDate, layer.salePrice, layer.value, layer.use,
           ].filter(Boolean).join(",")
-          const u = `${layer.url}?where=${enc(`${layer.owner}='${b.owner.replace(/'/g, "''")}'`)}&outFields=${enc(outFields)}&resultRecordCount=60&returnGeometry=false&f=json`
+          const u = `${layer.url}?where=${enc(`${layer.owner}='${b.ownerRaw.replace(/'/g, "''")}'`)}&outFields=${enc(outFields)}&resultRecordCount=60&returnGeometry=false&f=json`
           const rr = await fetch(u, { signal: AbortSignal.timeout(9000) })
           if (!rr.ok) continue
           const dd = (await rr.json()) as { features?: Array<{ attributes?: Record<string, unknown> }> }
