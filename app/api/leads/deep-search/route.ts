@@ -104,12 +104,22 @@ export async function POST(request: NextRequest) {
   })
 
   // Feed the Property Index — every search permanently upgrades OUR database
-  // (canonical records, provenance, Potential Score). Hard time budget so the
-  // response is never held hostage; anything unwritten lands on the next search.
+  // (canonical records, provenance, Potential Score). Thin leads inherit the
+  // searched area's city/state/zip (same autofill the client applies) so the
+  // index stays queryable by place. Hard time budget so the response is never
+  // held hostage; anything unwritten lands on the next search.
   try {
     const { observeLeads } = await import("@/lib/property-index")
+    const indexLeads = leads
+      .filter((l): l is NonNullable<typeof l> => l !== null)
+      .map((l) => ({
+        ...l,
+        city:  l.city  || body.city  || "",
+        state: l.state || body.state || "",
+        zip:   l.zip   || (body.searchType === "zip" ? (body.zipCode ?? "") : ""),
+      }))
     await Promise.race([
-      observeLeads(leads.filter((l): l is NonNullable<typeof l> => l !== null), { cap: 250 }),
+      observeLeads(indexLeads, { cap: 250 }),
       new Promise((r) => setTimeout(r, 8000)),
     ])
   } catch { /* the index is additive — never fail a search over it */ }
