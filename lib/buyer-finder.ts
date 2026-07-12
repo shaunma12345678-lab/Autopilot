@@ -22,7 +22,9 @@ export interface BuyerProperty {
 export interface CashBuyer {
   owner: string              // cleaned for display
   ownerRaw: string           // exactly as stored in the county data — REQUIRED for follow-up queries
-  count: number              // properties they own in the county
+  county: string             // which county's data this buyer came from (display)
+  countyKey: string          // registry key, e.g. "wayne:mi" — the client passes it back for dossier/contact
+  count: number              // properties they own in the searched area (county, city, or ZIP)
   mailing: string | null
   mailingState: string | null
   entity: "LLC" | "Trust" | "Company" | "Individual"
@@ -73,12 +75,37 @@ const BUYER_LAYERS: Record<string, BuyerLayer> = {
 }
 
 export const BUYER_COUNTIES = Object.values(BUYER_LAYERS).map((l) => l.label)
+export const BUYER_STATES = [...new Set(Object.values(BUYER_LAYERS).map((l) => l.stateAbbr))]
 
 // Names that are NOT private cash buyers (government / institutional / lenders).
 const INSTITUTIONAL = /\b(city|county|state|u ?s|usa|federal|gov|dept|department|authority|land ?bank|\bbank\b|mortgage|hud|fannie|freddie|redevelop|housing|parks|recreation|transport|dot|school|univ|college|church|diocese|treasurer|secretary|llc holdings inc)\b/i
 
 export function buyerCountySupported(county: string, state: string): boolean {
   return Boolean(BUYER_LAYERS[`${normCounty(county)}:${(state || "").toLowerCase().trim()}`])
+}
+
+export function buyerStateSupported(state: string): boolean {
+  return BUYER_STATES.includes((state || "").toUpperCase().trim())
+}
+
+// Narrow a layer's query to a city or ZIP. Returns the extra WHERE clause,
+// "" when no narrowing is needed, or null when this layer can't serve the area.
+export interface BuyerArea { city?: string; zip?: string }
+function areaClause(layer: BuyerLayer, area?: BuyerArea): string | null {
+  const zip = (area?.zip ?? "").replace(/[^0-9]/g, "").slice(0, 5)
+  const city = (area?.city ?? "").trim()
+  if (zip) {
+    if (!layer.situsZip) return null
+    // LIKE handles both plain ZIPs and ZIP+4 strings.
+    return `${layer.situsZip} LIKE '${zip}%'`
+  }
+  if (city) {
+    if (layer.situsCity) return `UPPER(${layer.situsCity}) LIKE '${city.toUpperCase().replace(/'/g, "''")}%'`
+    // Single-city files (e.g. Detroit's parcel file) match by name, no filter needed.
+    if (layer.fixedCity && layer.fixedCity.toLowerCase().startsWith(city.toLowerCase())) return ""
+    return null
+  }
+  return ""
 }
 
 const enc = encodeURIComponent
@@ -178,13 +205,16 @@ function summarize(b: CashBuyer, props: BuyerProperty[], layer: BuyerLayer): voi
   b.score = Math.max(0, Math.min(100, s))
 }
 
-export async function findCashBuyers(county: string, state: string, limit = 40): Promise<CashBuyer[]> {
-  const layer = BUYER_LAYERS[`${normCounty(county)}:${(state || "").toLowerCase().trim()}`]
-  if (!layer) return []
+async function findBuyersInLayer(key: string, layer: BuyerLayer, limit: number, area?: BuyerArea): Promise<CashBuyer[]> {
+  const extra = areaClause(layer, area)
+  if (extra === null) return []   // this layer can't serve the requested city/ZIP
   try {
-    // 1) Group the county by owner — who holds 3+ properties?
+    // 1) Group by owner — who holds multiple properties in the searched area?
+    // A ZIP is a smaller universe, so 2+ already marks an active buyer there.
+    const minHold = area?.zip ? 2 : 3
+    const where = [`${layer.owner} IS NOT NULL`, extra].filter(Boolean).join(" AND ")
     const stats = enc('[{"statisticType":"count","onStatisticField":"objectid","outStatisticFieldName":"cnt"}]')
-    const url = `${layer.url}?where=${enc(`${layer.owner} IS NOT NULL`)}&groupByFieldsForStatistics=${layer.owner}&outStatistics=${stats}&having=${enc("count(objectid)>=3")}&orderByFields=${enc("cnt DESC")}&resultRecordCount=800&f=json`
+    const url = `${layer.url}?where=${enc(where)}&groupByFieldsForStatistics=${layer.owner}&outStatistics=${stats}&having=${enc(`count(objectid)>=${minHold}`)}&orderByFields=${enc("cnt DESC")}&resultRecordCount=800&f=json`
     const res = await fetch(url, { signal: AbortSignal.timeout(16000) })
     if (!res.ok) return []
     const data = (await res.json()) as { features?: Array<{ attributes?: Record<string, unknown> }> }
@@ -200,12 +230,12 @@ export async function findCashBuyers(county: string, state: string, limit = 40):
       const owner = ownerRaw.replace(/(\s*,\s*)+$/, "")
       const count = Number(a.cnt)
       if (!owner || /^(taxpayer|occupant|owner|unknown|current owner)$/i.test(owner)) continue
-      // 3+ holdings = investor; big SFR funds (FirstKey/VineBrook-scale) are
+      // Multi-holdings = investor; big SFR funds (FirstKey/VineBrook-scale) are
       // real buyers too, so the cap only guards against data-error rollups.
-      if (!Number.isFinite(count) || count < 3 || count > 2000) continue
+      if (!Number.isFinite(count) || count < minHold || count > 2000) continue
       if (INSTITUTIONAL.test(owner)) continue
       buyers.push({
-        owner, ownerRaw, count, mailing: null, mailingState: null,
+        owner, ownerRaw, county: layer.label, countyKey: key, count, mailing: null, mailingState: null,
         entity: entityOf(owner), absentee: false,
         recentBuys: 0, lastBuy: null, hasSaleData: Boolean(layer.saleDate),
         portfolioValue: null, avgValue: null, topZips: [], topUse: null,
@@ -256,4 +286,28 @@ export async function findCashBuyers(county: string, state: string, limit = 40):
   } catch {
     return []
   }
+}
+
+// Area-aware search: county, city, or ZIP. With no county, every verified layer
+// in the state is queried in parallel and results merge by score.
+export async function findCashBuyersArea(
+  p: { state: string; county?: string; city?: string; zip?: string },
+  limit = 40,
+): Promise<CashBuyer[]> {
+  const st = (p.state || "").toLowerCase().trim()
+  const entries = p.county
+    ? Object.entries(BUYER_LAYERS).filter(([k]) => k === `${normCounty(p.county)}:${st}`)
+    : Object.entries(BUYER_LAYERS).filter(([, l]) => l.stateAbbr.toLowerCase() === st)
+  if (!entries.length) return []
+  const area: BuyerArea | undefined = p.city || p.zip ? { city: p.city, zip: p.zip } : undefined
+  const results = await Promise.allSettled(entries.map(([k, l]) => findBuyersInLayer(k, l, limit, area)))
+  const merged: CashBuyer[] = []
+  for (const r of results) if (r.status === "fulfilled") merged.push(...r.value)
+  merged.sort((x, y) => y.score - x.score || y.count - x.count)
+  return merged.slice(0, limit)
+}
+
+// Back-compatible county search (DealAnalysis buyer-match etc. call this).
+export async function findCashBuyers(county: string, state: string, limit = 40): Promise<CashBuyer[]> {
+  return findCashBuyersArea({ state, county }, limit)
 }

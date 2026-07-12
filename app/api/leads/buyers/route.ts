@@ -8,7 +8,7 @@ export const maxDuration = 90
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
-import { findCashBuyers, buyerDossier, buyerCountySupported, BUYER_COUNTIES } from "@/lib/buyer-finder"
+import { findCashBuyersArea, buyerDossier, buyerCountySupported, buyerStateSupported, BUYER_COUNTIES } from "@/lib/buyer-finder"
 import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
@@ -23,10 +23,14 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  let body: { action?: string; county?: string; state?: string; limit?: number; owner?: string; ownerRaw?: string; sampleAddress?: string; sampleCity?: string }
+  let body: { action?: string; county?: string; state?: string; city?: string; zip?: string; limit?: number; owner?: string; ownerRaw?: string; sampleAddress?: string; sampleCity?: string }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
   const county = (body.county ?? "").trim(), state = (body.state ?? "").trim()
-  if (!county || !state) return Response.json({ error: "county and state are required" }, { status: 400 })
+  const city = (body.city ?? "").trim(), zip = (body.zip ?? "").replace(/[^0-9]/g, "").slice(0, 5)
+  if (!state) return Response.json({ error: "state is required" }, { status: 400 })
+  if (!county && !city && !zip && (body.action ?? "search") === "search") {
+    return Response.json({ error: "Enter a county, city, or ZIP" }, { status: 400 })
+  }
 
   try {
     switch (body.action ?? "search") {
@@ -57,11 +61,16 @@ export async function POST(request: NextRequest) {
       }
 
       default: {
-        if (!buyerCountySupported(county, state)) {
-          return Response.json({ buyers: [], note: `No buyer-data connector yet for ${county} County, ${state}. Live now: ${BUYER_COUNTIES.join(" · ")}. (We add counties one at a time as their assessor data is verified.)` })
+        const supported = county ? buyerCountySupported(county, state) : buyerStateSupported(state)
+        if (!supported) {
+          return Response.json({ buyers: [], note: `No buyer-data connector yet for ${county ? `${county} County, ` : ""}${state}. Live now: ${BUYER_COUNTIES.join(" · ")}. (We add counties one at a time as their assessor data is verified.)` })
         }
-        const buyers = await findCashBuyers(county, state, Math.min(Math.max(body.limit ?? 40, 10), 100))
-        return Response.json({ buyers, count: buyers.length })
+        const buyers = await findCashBuyersArea({ state, county: county || undefined, city: city || undefined, zip: zip || undefined }, Math.min(Math.max(body.limit ?? 40, 10), 100))
+        const areaLabel = zip ? `ZIP ${zip}` : city ? `${city}, ${state}` : `${county} County, ${state}`
+        return Response.json({
+          buyers, count: buyers.length,
+          note: buyers.length === 0 ? `No multi-property buyers found in ${areaLabel} — try the county view, or a nearby ZIP.` : undefined,
+        })
       }
     }
   } catch (err) {

@@ -13,7 +13,7 @@ import { loadBuyers, saveBuyers, type Buyer } from "@/lib/buyers"
 
 interface BuyerProperty { address: string; city: string; zip: string; value: number | null; salePrice: number | null; saleDate: string | null; use: string | null }
 interface CashBuyer {
-  owner: string; ownerRaw: string; count: number; mailing: string | null; mailingState: string | null
+  owner: string; ownerRaw: string; county: string; countyKey: string; count: number; mailing: string | null; mailingState: string | null
   entity: "LLC" | "Trust" | "Company" | "Individual"; absentee: boolean
   recentBuys: number; lastBuy: string | null; hasSaleData: boolean
   portfolioValue: number | null; avgValue: number | null
@@ -37,7 +37,10 @@ function scoreCls(s: number): string {
 
 export default function CashBuyers({ password }: { password: string }) {
   const apiHeaders = useMemo(() => ({ "Content-Type": "application/json", "x-admin-password": password }), [password])
+  const [mode, setMode] = useState<"county" | "city" | "zip">("county")
   const [county, setCounty] = useState("")
+  const [cityQ, setCityQ] = useState("")
+  const [zipQ, setZipQ] = useState("")
   const [stateAbbr, setStateAbbr] = useState("")
   const [limit, setLimit] = useState(40)
   const [loading, setLoading] = useState(false)
@@ -51,10 +54,22 @@ export default function CashBuyers({ password }: { password: string }) {
   const [fromPhone, setFromPhone] = useState("")
 
   const search = async () => {
-    if (!county.trim() || !stateAbbr.trim()) { setNote("Enter a county and state."); return }
+    if (!stateAbbr.trim()) { setNote("Enter a state."); return }
+    if (mode === "county" && !county.trim()) { setNote("Enter a county."); return }
+    if (mode === "city" && !cityQ.trim()) { setNote("Enter a city."); return }
+    if (mode === "zip" && !zipQ.trim()) { setNote("Enter a ZIP."); return }
     setLoading(true); setNote(null); setBuyers(null); setDossiers({}); setContacts({}); setOpenDossier(null)
     try {
-      const res = await fetch("/api/leads/buyers", { method: "POST", headers: apiHeaders, body: JSON.stringify({ county: county.trim(), state: stateAbbr.trim(), limit }) })
+      const res = await fetch("/api/leads/buyers", {
+        method: "POST", headers: apiHeaders,
+        body: JSON.stringify({
+          state: stateAbbr.trim(),
+          county: mode === "county" ? county.trim() : undefined,
+          city: mode === "city" ? cityQ.trim() : undefined,
+          zip: mode === "zip" ? zipQ.trim() : undefined,
+          limit,
+        }),
+      })
       const data = await res.json()
       if (data?.error) { setNote(data.error); setLoading(false); return }
       setBuyers(data.buyers ?? [])
@@ -63,13 +78,19 @@ export default function CashBuyers({ password }: { password: string }) {
     setLoading(false)
   }
 
+  // Dossier/contact queries go back to the buyer's own county layer.
+  const countyOf = (b: CashBuyer): { county: string; state: string } => {
+    const [c, s] = (b.countyKey || "").split(":")
+    return { county: c || county.trim(), state: (s || stateAbbr).toUpperCase() }
+  }
+
   const toggleDossier = async (b: CashBuyer) => {
     if (openDossier === b.owner) { setOpenDossier(null); return }
     setOpenDossier(b.owner)
     if (dossiers[b.owner]) return
     setDossiers((d) => ({ ...d, [b.owner]: "loading" }))
     try {
-      const res = await fetch("/api/leads/buyers", { method: "POST", headers: apiHeaders, body: JSON.stringify({ action: "dossier", county: county.trim(), state: stateAbbr.trim(), owner: b.owner, ownerRaw: b.ownerRaw }) })
+      const res = await fetch("/api/leads/buyers", { method: "POST", headers: apiHeaders, body: JSON.stringify({ action: "dossier", ...countyOf(b), owner: b.owner, ownerRaw: b.ownerRaw }) })
       const data = await res.json()
       setDossiers((d) => ({ ...d, [b.owner]: Array.isArray(data.properties) ? data.properties : [] }))
     } catch { setDossiers((d) => ({ ...d, [b.owner]: [] })) }
@@ -80,7 +101,7 @@ export default function CashBuyers({ password }: { password: string }) {
     try {
       const res = await fetch("/api/leads/buyers", {
         method: "POST", headers: apiHeaders,
-        body: JSON.stringify({ action: "contact", county: county.trim(), state: stateAbbr.trim(), owner: b.owner, sampleAddress: b.sample[0]?.address ?? "", sampleCity: b.sample[0]?.city ?? "" }),
+        body: JSON.stringify({ action: "contact", ...countyOf(b), owner: b.owner, sampleAddress: b.sample[0]?.address ?? "", sampleCity: b.sample[0]?.city ?? "" }),
       })
       const data = await res.json()
       setContacts((c) => ({ ...c, [b.owner]: { phone: data.phone ?? null, email: data.email ?? null, note: data.note ?? undefined } }))
@@ -152,9 +173,16 @@ export default function CashBuyers({ password }: { password: string }) {
       </div>
 
       <div className="bg-gray-900/60 border border-gray-700/40 rounded-2xl p-4 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          <input value={county} onChange={(e) => setCounty(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="County (e.g. Marion)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 sm:col-span-2" />
-          <input value={stateAbbr} onChange={(e) => setStateAbbr(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="State (e.g. IN)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500" />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg overflow-hidden border border-gray-700">
+            {(["county", "city", "zip"] as const).map((m) => (
+              <button key={m} onClick={() => setMode(m)} className={`px-3 py-2 text-xs font-semibold capitalize ${mode === m ? "bg-indigo-600 text-white" : "bg-gray-950 text-gray-400 hover:text-gray-200"}`}>{m}</button>
+            ))}
+          </div>
+          {mode === "county" && <input value={county} onChange={(e) => setCounty(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="County (e.g. Marion)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 flex-1 min-w-[160px]" />}
+          {mode === "city" && <input value={cityQ} onChange={(e) => setCityQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="City (e.g. Indianapolis)" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 flex-1 min-w-[160px]" />}
+          {mode === "zip" && <input value={zipQ} onChange={(e) => setZipQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="ZIP (e.g. 46226)" inputMode="numeric" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 w-36" />}
+          <input value={stateAbbr} onChange={(e) => setStateAbbr(e.target.value.toUpperCase().slice(0, 2))} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="ST" className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 w-16" />
         </div>
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
@@ -168,7 +196,7 @@ export default function CashBuyers({ password }: { password: string }) {
           </div>
           <button onClick={search} disabled={loading} className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white">{loading ? "Building buyer intel…" : "🤝 Find cash buyers"}</button>
         </div>
-        <p className="text-[11px] text-gray-600">Live counties: Wayne MI (Detroit) · Marion IN (Indianapolis). Each is verified assessor data — more added as they&apos;re confirmed.</p>
+        <p className="text-[11px] text-gray-600">Search by county, city, or ZIP — a ZIP shows who&apos;s buying that exact neighborhood (2+ holdings there = active). Live data: Wayne MI (Detroit) · Marion IN (Indianapolis) — verified assessor data, more counties added as they&apos;re confirmed.</p>
       </div>
 
       {note && <p className="text-xs text-amber-300">{note}</p>}
@@ -192,6 +220,7 @@ export default function CashBuyers({ password }: { password: string }) {
                     <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${scoreCls(b.score)}`}>{b.score}</span>
                     <p className="text-sm font-bold text-white truncate">👤 {b.owner}</p>
                     <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${ENTITY_CLS[b.entity]}`}>{b.entity}</span>
+                    {mode !== "county" && b.county && <span className="text-[10px] text-gray-500 bg-gray-900 border border-gray-800 rounded px-1.5 py-0.5 shrink-0">{b.county}</span>}
                     {b.absentee && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border bg-purple-900/60 border-purple-700/50 text-purple-200" title="Mails out of state — remote investor who relies on local deal flow">✈ Out-of-state</span>}
                     {b.hasSaleData && b.recentBuys > 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-700/70 text-emerald-100" title={b.lastBuy ? `Most recent purchase ${b.lastBuy}` : undefined}>🔥 {b.recentBuys} buys in 18mo</span>}
                   </div>
