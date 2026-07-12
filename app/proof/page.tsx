@@ -99,7 +99,10 @@ export default function ProofPage() {
         <section className="text-center space-y-3">
           <h2 className="text-xl font-bold">See it work on any address</h2>
           <p className="text-sm text-gray-400">Run a free instant analysis — value estimate, max-offer math, and the deal verdict.</p>
-          <Link href="/analyze" className="inline-block bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-8 py-3 rounded-xl transition-colors">Analyze an address free →</Link>
+          <div className="flex flex-wrap justify-center gap-3">
+            <Link href="/analyze" className="inline-block bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-8 py-3 rounded-xl transition-colors">Analyze an address free →</Link>
+            <Link href="/pricing" className="inline-block bg-gray-800 hover:bg-gray-700 border border-gray-700 text-white font-bold px-8 py-3 rounded-xl transition-colors">See plans</Link>
+          </div>
         </section>
       </main>
     </div>

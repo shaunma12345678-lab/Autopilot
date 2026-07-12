@@ -118,6 +118,7 @@ export default function AnalyzePage() {
             <div className="border-t border-gray-800 pt-4 text-center">
               <p className="text-sm text-gray-300 font-semibold">This is one address. The platform finds hundreds like it — before they hit anyone&apos;s list.</p>
               <p className="text-xs text-gray-500 mt-1">Predictive foreclosure forecasts (verified accuracy at <Link href="/proof" className="text-indigo-400 hover:text-indigo-300">/proof</Link>), owner &amp; mailing records, deal sheets, outreach on autopilot.</p>
+              <Link href="/pricing" className="inline-block mt-3 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold px-6 py-2.5 rounded-xl transition-colors">See plans — founding pricing →</Link>
             </div>
           </div>
         )}

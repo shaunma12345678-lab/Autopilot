@@ -28,7 +28,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Sales & Closing",
     items: [
       { href: "/sales",         label: "Sales Scripts",  icon: "📞" },
-      { href: "/pricing",       label: "Pricing",        icon: "💲" },
+      { href: "/pricing-tool",  label: "Pricing",        icon: "💲" },
       { href: "/business-plan", label: "Business Plan",  icon: "📋" },
     ],
   },

@@ -168,7 +168,7 @@ export async function POST(request: NextRequest) {
       id: "pricing", name: "Pricing Agent", color: "teal",
       status: "idle" as const, last24h: 0, lastHour: 0, queueSize: 0, successRate: 0,
       description: "Pricing strategy, packaging, price page copy",
-      route: "/pricing",
+      route: "/pricing-tool",
     },
     {
       id: "expenses", name: "Expense Analyzer Agent", color: "indigo",
