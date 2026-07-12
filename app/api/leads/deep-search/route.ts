@@ -110,14 +110,17 @@ export async function POST(request: NextRequest) {
   // held hostage; anything unwritten lands on the next search.
   try {
     const { observeLeads } = await import("@/lib/property-index")
+    // The adapter drops sourceUrl — pair it back by index so provenance
+    // (assessor > recorder > listing > …) is attributed correctly.
     const indexLeads = leads
-      .filter((l): l is NonNullable<typeof l> => l !== null)
-      .map((l) => ({
+      .map((l, i) => (l ? {
         ...l,
+        sourceUrl: result.leads[i]?.sourceUrl,
         city:  l.city  || body.city  || "",
         state: l.state || body.state || "",
         zip:   l.zip   || (body.searchType === "zip" ? (body.zipCode ?? "") : ""),
-      }))
+      } : null))
+      .filter((l): l is NonNullable<typeof l> => l !== null)
     await Promise.race([
       observeLeads(indexLeads, { cap: 250 }),
       new Promise((r) => setTimeout(r, 8000)),
