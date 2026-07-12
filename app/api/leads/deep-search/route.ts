@@ -111,11 +111,13 @@ export async function POST(request: NextRequest) {
   try {
     const { observeLeads } = await import("@/lib/property-index")
     // The adapter drops sourceUrl — pair it back by index so provenance
-    // (assessor > recorder > listing > …) is attributed correctly.
+    // (assessor > recorder > listing > …) is attributed correctly. (Typed
+    // explicitly: the timeout-fallback literal makes result.leads never[].)
+    const rawLeads: Array<{ sourceUrl?: string }> = result.leads
     const indexLeads = leads
       .map((l, i) => (l ? {
         ...l,
-        sourceUrl: result.leads[i]?.sourceUrl,
+        sourceUrl: rawLeads[i]?.sourceUrl,
         city:  l.city  || body.city  || "",
         state: l.state || body.state || "",
         zip:   l.zip   || (body.searchType === "zip" ? (body.zipCode ?? "") : ""),
