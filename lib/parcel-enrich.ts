@@ -63,7 +63,25 @@ const COUNTY_PARCELS: Record<string, ParcelLayer> = {
     source: "Marion County / Indy Assessor (parcel)",
     f: { land: "ASSESSORYEAR_LANDTOTAL", imp: "ASSESSORYEAR_IMPTOTAL", owner: "FULLOWNERNAME", mailAddr: "OWNERADDRESS", mailCity: "OWNERCITY", mailState: "OWNERSTATE", mailZip: "OWNERZIP" },
   },
+  // Cuyahoga County (Cleveland) — owner + full mailing + residential living
+  // area (total_res_liv_area; 0 on commercial lots → treated as null). Group-by
+  // isn't supported on this server, so it's enrichment-only (no buyer layer).
+  // Verified live 2026-07.
+  "cuyahoga:oh": {
+    url: "https://gis.cuyahogacounty.us/server/rest/services/CUYAHOGA_BASE/Combined_Parcels_RP_CAMA_WGS84/MapServer/0/query",
+    source: "Cuyahoga County Assessor (parcel)",
+    f: { sqft: "total_res_liv_area", use: "zoning_use", owner: "parcel_owner", mailAddr: "mail_addr_street", mailCity: "mail_city", mailState: "mail_state", mailZip: "mail_zip" },
+  },
 }
+
+// Counties with a verified parcel layer — the coverage panel reads this.
+export const PARCEL_COVERAGE = Object.entries(COUNTY_PARCELS).map(([key, layer]) => ({
+  key,
+  label: layer.source,
+  hasOwner: Boolean(layer.f.owner),
+  hasMailing: Boolean(layer.f.mailAddr),
+  hasSqft: Boolean(layer.f.sqft),
+}))
 
 const num = (v: unknown): number | null => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null }
 

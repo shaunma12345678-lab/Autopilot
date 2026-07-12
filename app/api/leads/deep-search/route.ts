@@ -103,6 +103,17 @@ export async function POST(request: NextRequest) {
     return (b?.score ?? 0) - (a?.score ?? 0)
   })
 
+  // Feed the Property Index — every search permanently upgrades OUR database
+  // (canonical records, provenance, Potential Score). Hard time budget so the
+  // response is never held hostage; anything unwritten lands on the next search.
+  try {
+    const { observeLeads } = await import("@/lib/property-index")
+    await Promise.race([
+      observeLeads(leads.filter((l): l is NonNullable<typeof l> => l !== null), { cap: 250 }),
+      new Promise((r) => setTimeout(r, 8000)),
+    ])
+  } catch { /* the index is additive — never fail a search over it */ }
+
   return Response.json({
     leads,
     total:        leads.length,

@@ -166,6 +166,7 @@ export const db = {
   scheduledRun:     model("ScheduledRun"),
   rawSignal:        model("RawSignal"),
   source:           model("Source"),
+  propertyIndex:    model("PropertyIndex"),
 
   // Prisma transaction compatibility — runs promises sequentially
   $transaction: async (fns: unknown[]) => {

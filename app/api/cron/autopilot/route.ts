@@ -25,6 +25,9 @@ import { computeModel, adaptiveScore, applySeen, featurize, leadArea, emptyTally
 import { loadLearningTally, saveLearningTally, resolveLearningBusinessId } from "@/lib/learning-store"
 import { applyOutcomes, loadForecastLedger, saveForecastLedger } from "@/lib/forecast-ledger"
 import { runAcquisitionStep } from "@/lib/acquisition-engine"
+import { observeLeads, thinHighPotential, patchRecord, setRecordLocation } from "@/lib/property-index"
+import { enrichFromParcel } from "@/lib/parcel-enrich"
+import { geocodeAddressComponents } from "@/lib/geocode"
 import { predictPreForeclosure, isConfirmedForeclosure } from "@/lib/predictive"
 import { leadSignature } from "@/lib/seen-leads"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
@@ -126,6 +129,34 @@ export async function GET(request: NextRequest) {
       await saveLearningTally(bizId, tally).catch(() => {})
     }
 
+    // Feed the Property Index with today's sweep, then run the self-healing
+    // backfill: take the thinnest high-potential records and upgrade them with
+    // assessor-grade facts (parcel) + canonical location (Census) — the
+    // database gets cleaner every night, unattended.
+    let indexed = 0, backfilled = 0
+    try {
+      const obs = await observeLeads(leads, { cap: 400 })
+      indexed = obs.observed
+      const thin = await thinHighPotential(10)
+      for (const rec of thin) {
+        try {
+          if (!rec.city || !rec.zip || !rec.county) {
+            const comp = await geocodeAddressComponents(rec.address, rec.state ?? "").catch(() => null)
+            if (comp) await setRecordLocation(rec, { city: comp.city, zip: comp.zip, county: comp.county })
+          }
+          const parcel = await enrichFromParcel(rec.address, rec.state ?? "CA").catch(() => null)
+          if (parcel) {
+            await patchRecord(rec, {
+              ownerName: parcel.ownerName, mailingAddress: parcel.mailingAddress,
+              sqft: parcel.sqft, beds: parcel.beds, baths: parcel.baths,
+              yearBuilt: parcel.yearBuilt, propertyType: parcel.propertyType,
+            }, "county-assessor")
+            backfilled++
+          }
+        } catch { /* next record */ }
+      }
+    } catch { /* index is additive — never fail the cron */ }
+
     // Outcome-Verified Predictions: fold today's sweep into the forecast
     // ledger so predicted properties that later get a scheduled sale become
     // verified hits — the accuracy record compounds daily, unattended.
@@ -208,6 +239,7 @@ export async function GET(request: NextRequest) {
       },
       notified: { email: emailed, sms: texted, emailConfigured: Boolean(notifyEmail), smsConfigured: Boolean(notifyPhone) },
       acquisition,
+      index: { indexed, backfilled },
       durationMs: Date.now() - startedAt,
     })
   } catch (err) {

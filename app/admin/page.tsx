@@ -17,6 +17,7 @@ import VoiceAssistant from "@/components/dashboard/VoiceAssistant"
 import InboundSellers from "@/components/dashboard/InboundSellers"
 import AcquisitionCenter from "@/components/dashboard/AcquisitionCenter"
 import SellerFinder from "@/components/dashboard/SellerFinder"
+import PropertyIndexPanel from "@/components/dashboard/PropertyIndexPanel"
 import AIHelperWidget from "@/components/AIHelperWidget"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
@@ -2158,7 +2159,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder" | "index">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2229,6 +2230,7 @@ export default function AdminPage() {
     { id: "agent",        label: "🤖 Agent" },
     { id: "real-estate",  label: "🏚 Real Estate" },
     { id: "seller-finder", label: "🧲 Seller Finder" },
+    { id: "index",        label: "🧬 The Index" },
     { id: "inbound",      label: "📥 Inbound Sellers" },
     { id: "acquisition",  label: "🚀 Acquisition" },
     { id: "best-deals",   label: "💎 Best Deals" },
@@ -2319,6 +2321,7 @@ export default function AdminPage() {
           {tab === "inbound" && <InboundSellers password={pw} />}
           {tab === "acquisition" && <AcquisitionCenter password={pw} />}
           {tab === "seller-finder" && <SellerFinder password={pw} />}
+          {tab === "index" && <PropertyIndexPanel password={pw} />}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}
