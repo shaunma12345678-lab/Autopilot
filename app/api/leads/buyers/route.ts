@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
         const notes: string[] = []
         if (!supported) notes.push(`No assessor connector yet for ${county ? `${county} County, ` : ""}${state} (live: ${BUYER_COUNTIES.join(" · ")}).`)
         else if (buyers.length === 0) notes.push(`No multi-property owners found in ${areaLabel} — try the county view or a nearby ZIP.`)
-        if (webCity && !(web?.buyers.length)) notes.push("Web buyer discovery found nothing — the TAVILY_API_KEY search key appears invalid or expired; renew the free key at tavily.com to enable finding buyers who advertise in any city.")
+        if (webCity && !(web?.buyers.length)) notes.push("No buyers surfaced from news/web for this city yet — our news engine catches reported acquisitions as they happen, so check back; assessor counties always work.")
         return Response.json({
           buyers, count: buyers.length,
           webBuyers: web?.buyers ?? [],

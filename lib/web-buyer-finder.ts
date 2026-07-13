@@ -9,6 +9,7 @@
 import { prisma } from "@/lib/prisma"
 import { resolveLearningBusinessId } from "@/lib/learning-store"
 import { webSearchMeta } from "@/lib/search"
+import { newsSweep } from "@/lib/own-access"
 import { runAgent } from "@/lib/claude"
 
 const SLUG = "re-web-buyers"
@@ -53,8 +54,8 @@ async function saveCached(bizId: string, key: string, data: WebBuyers): Promise<
 const SYSTEM =
   "You extract ACTIVE CASH BUYERS of houses from web-search snippets about a city. Return raw JSON: " +
   '{ "buyers": [{ "name": string, "phone": string|null, "website": string|null, "kind": "we-buy-houses"|"investor"|"ibuyer"|"buyer-agent", "tendencies": string }] }. ' +
-  "Include: local we-buy-houses / cash-home-buyer companies, investment firms stating they buy properties, iBuyers operating there. " +
-  "EXCLUDE: lead-gen directories ABOUT selling (articles, 'top 10 companies' lists as entities themselves), realtors selling services to buyers, national portals (Zillow/Redfin/Opendoor listings pages — but Opendoor/Offerpad AS buyers in the city are fine). " +
+  "Include: local we-buy-houses / cash-home-buyer companies, investment firms buying HOUSES / rental homes / residential portfolios / multifamily, iBuyers operating there. " +
+  "EXCLUDE: buyers of commercial/industrial/retail/office/warehouse/hotel-only assets (not residential), lead-gen directories ABOUT selling (articles, 'top 10 companies' lists as entities themselves), realtors selling services to buyers, national portals (Zillow/Redfin listings pages — but Opendoor/Offerpad AS buyers in the city are fine). " +
   "STRICT: name must appear verbatim in the snippets. phone ONLY if those exact digits appear in the text (else null). website ONLY if that domain appears (else null). tendencies = a short quote/paraphrase of what THEY say they buy (as-is, any condition, price range, areas, close speed) — from the text only. Max 12. Never invent."
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -72,13 +73,28 @@ export async function findWebBuyers(city: string, state: string): Promise<WebBuy
 
   try {
     const place = [c, st].filter(Boolean).join(" ")
+    const chunks: string[] = []
+    let sources = 0
+
+    // OUR access layer: news-reported acquisitions expose the serious buyers —
+    // "investor buys 40 rentals", "firm acquires portfolio", "iBuyer expands
+    // to {city}". Keyless, datacenter-safe, and higher-signal than marketing
+    // pages: these buyers PROVED they buy.
+    const news = await newsSweep([
+      `${place} investor buys homes rental portfolio`,
+      `${place} real estate investment firm acquires houses`,
+      `"we buy houses" OR "cash buyer" ${place}`,
+    ], 8).catch(() => [])
+    for (const it of news) {
+      chunks.push(`[${it.title} — ${it.source} ${it.publishedAt}] ${it.snippet}`.slice(0, 600))
+      sources++
+    }
+
+    // Metasearch adds the we-buy-houses marketers when an engine is available.
     const queries = [
       `"we buy houses" ${place} cash`,
       `cash home buyers ${place} any condition`,
-      `${place} real estate investors buying houses fast close`,
     ]
-    const chunks: string[] = []
-    let sources = 0
     for (const q of queries) {
       const r = await webSearchMeta(q, 6).catch(() => null)
       for (const res of r?.results ?? []) {
@@ -88,7 +104,7 @@ export async function findWebBuyers(city: string, state: string): Promise<WebBuy
       }
     }
     if (!chunks.length) return null
-    const corpus = chunks.slice(0, 20).join("\n---\n")
+    const corpus = chunks.slice(0, 24).join("\n---\n")
 
     const out = await runAgent(SYSTEM, `City: ${place}\n\nSearch snippets:\n${corpus}`, { jsonMode: true, maxTokens: 1200 })
     const obj = typeof out === "string" ? (() => { try { const m = out.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } catch { return null } })() : (out as Record<string, unknown>)

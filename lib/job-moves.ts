@@ -8,6 +8,7 @@
 import { prisma } from "@/lib/prisma"
 import { resolveLearningBusinessId } from "@/lib/learning-store"
 import { webSearchMeta } from "@/lib/search"
+import { newsSweep } from "@/lib/own-access"
 import { runAgent } from "@/lib/claude"
 
 const SLUG = "re-job-moves"
@@ -82,14 +83,23 @@ export async function discoverJobMoves(city: string, state: string): Promise<Job
       `${place} headquarters relocation opening facility hiring`,
       `${place} layoffs plant closing ${year}`,
     ]
+    // OUR access layer first: Google News RSS is keyless, datacenter-safe, and
+    // exactly the right universe for employer moves. Metasearch is the fallback.
     const chunks: string[] = []
     let sources = 0
-    for (const q of queries) {
-      const r = await webSearchMeta(q, 6).catch(() => null)
-      for (const res of r?.results ?? []) {
-        if (!res.content) continue
-        chunks.push(`[${res.title}] ${res.content}`.slice(0, 500))
-        sources++
+    const news = await newsSweep(queries, 8).catch(() => [])
+    for (const it of news) {
+      chunks.push(`[${it.title} — ${it.source} ${it.publishedAt}] ${it.snippet}`.slice(0, 500))
+      sources++
+    }
+    if (!chunks.length) {
+      for (const q of queries) {
+        const r = await webSearchMeta(q, 6).catch(() => null)
+        for (const res of r?.results ?? []) {
+          if (!res.content) continue
+          chunks.push(`[${res.title}] ${res.content}`.slice(0, 500))
+          sources++
+        }
       }
     }
     if (!chunks.length) return null
