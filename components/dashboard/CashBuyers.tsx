@@ -12,6 +12,11 @@ import { useMemo, useState } from "react"
 import { loadBuyers, saveBuyers, type Buyer } from "@/lib/buyers"
 
 interface BuyerProperty { address: string; city: string; zip: string; value: number | null; salePrice: number | null; saleDate: string | null; use: string | null }
+interface WebBuyer { name: string; phone: string | null; website: string | null; kind: string; tendencies: string }
+
+const WEB_KIND: Record<string, string> = {
+  "we-buy-houses": "🏠 We-buy-houses", investor: "💼 Investor", ibuyer: "⚡ iBuyer", "buyer-agent": "🤝 Buyer's agent",
+}
 interface CashBuyer {
   owner: string; ownerRaw: string; county: string; countyKey: string; count: number; mailing: string | null; mailingState: string | null
   entity: "LLC" | "Trust" | "Company" | "Individual"; absentee: boolean
@@ -45,6 +50,7 @@ export default function CashBuyers({ password }: { password: string }) {
   const [limit, setLimit] = useState(40)
   const [loading, setLoading] = useState(false)
   const [buyers, setBuyers] = useState<CashBuyer[] | null>(null)
+  const [webBuyers, setWebBuyers] = useState<WebBuyer[]>([])
   const [note, setNote] = useState<string | null>(null)
   const [openDossier, setOpenDossier] = useState<string | null>(null)   // owner name
   const [dossiers, setDossiers] = useState<Record<string, BuyerProperty[] | "loading">>({})
@@ -58,7 +64,7 @@ export default function CashBuyers({ password }: { password: string }) {
     if (mode === "county" && !county.trim()) { setNote("Enter a county."); return }
     if (mode === "city" && !cityQ.trim()) { setNote("Enter a city."); return }
     if (mode === "zip" && !zipQ.trim()) { setNote("Enter a ZIP."); return }
-    setLoading(true); setNote(null); setBuyers(null); setDossiers({}); setContacts({}); setOpenDossier(null)
+    setLoading(true); setNote(null); setBuyers(null); setWebBuyers([]); setDossiers({}); setContacts({}); setOpenDossier(null)
     try {
       const res = await fetch("/api/leads/buyers", {
         method: "POST", headers: apiHeaders,
@@ -73,6 +79,7 @@ export default function CashBuyers({ password }: { password: string }) {
       const data = await res.json()
       if (data?.error) { setNote(data.error); setLoading(false); return }
       setBuyers(data.buyers ?? [])
+      setWebBuyers(Array.isArray(data.webBuyers) ? data.webBuyers : [])
       if (data.note) setNote(data.note)
     } catch { setNote("Search failed — try again.") }
     setLoading(false)
@@ -285,6 +292,44 @@ export default function CashBuyers({ password }: { password: string }) {
           )
         })}
       </div>
+
+      {/* 🌐 Buyers who advertise — real operators found on the public web, any city */}
+      {webBuyers.length > 0 && (
+        <div className="space-y-2">
+          <div>
+            <h4 className="text-sm font-bold text-white">🌐 Active buyers advertising in this market <span className="text-[11px] font-normal text-gray-500">· {webBuyers.length} found on the public web</span></h4>
+            <p className="text-[11px] text-gray-600">We-buy-houses operators and investors marketing here right now — their stated tendencies quoted from their own pages. Names/phones only shown when they appear verbatim in sources; verify before wiring anything.</p>
+          </div>
+          {webBuyers.map((w) => (
+            <div key={w.name} className="bg-gray-900/60 border border-sky-700/30 rounded-xl p-3.5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-bold text-white truncate">{w.name}</p>
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border bg-sky-950/60 border-sky-700/50 text-sky-200">{WEB_KIND[w.kind] ?? w.kind}</span>
+                  </div>
+                  {w.tendencies && <p className="text-[11px] text-gray-400 mt-1">“{w.tendencies}”</p>}
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {w.phone && <>📞 <a className="underline text-sky-200" href={`tel:${w.phone}`}>{w.phone}</a> · </>}
+                    {w.website && <a className="underline text-sky-300" href={`https://${w.website}`} target="_blank" rel="noreferrer">{w.website}</a>}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    const existing = loadBuyers()
+                    if (existing.some((x) => x.name.toLowerCase() === w.name.toLowerCase())) { setSavedOwners((s) => new Set(s).add(w.name)); return }
+                    saveBuyers([...existing, { id: crypto.randomUUID(), name: w.name, contact: w.phone ?? w.website ?? "", maxPrice: 0, minEquityPct: 0, minProfit: 0, areas: [], exits: [] }])
+                    setSavedOwners((s) => new Set(s).add(w.name))
+                  }}
+                  disabled={savedOwners.has(w.name)}
+                  className="bg-emerald-700/60 hover:bg-emerald-600 disabled:opacity-60 text-white text-[11px] font-semibold px-2.5 py-1.5 rounded-lg shrink-0">
+                  {savedOwners.has(w.name) ? "✓ In My Buyers" : "💾 Save buyer"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

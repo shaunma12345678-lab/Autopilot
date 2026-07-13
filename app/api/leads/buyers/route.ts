@@ -9,6 +9,7 @@ export const maxDuration = 90
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { findCashBuyersArea, buyerDossier, buyerCountySupported, buyerStateSupported, BUYER_COUNTIES } from "@/lib/buyer-finder"
+import { findWebBuyers } from "@/lib/web-buyer-finder"
 import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
@@ -62,14 +63,22 @@ export async function POST(request: NextRequest) {
 
       default: {
         const supported = county ? buyerCountySupported(county, state) : buyerStateSupported(state)
-        if (!supported) {
-          return Response.json({ buyers: [], note: `No buyer-data connector yet for ${county ? `${county} County, ` : ""}${state}. Live now: ${BUYER_COUNTIES.join(" · ")}. (We add counties one at a time as their assessor data is verified.)` })
-        }
-        const buyers = await findCashBuyersArea({ state, county: county || undefined, city: city || undefined, zip: zip || undefined }, Math.min(Math.max(body.limit ?? 40, 10), 100))
         const areaLabel = zip ? `ZIP ${zip}` : city ? `${city}, ${state}` : `${county} County, ${state}`
+        // Assessor records (verified holdings) + web discovery (buyers who
+        // advertise) run in parallel — every city produces real buyers.
+        const webCity = city || county || ""
+        const [buyers, web] = await Promise.all([
+          supported ? findCashBuyersArea({ state, county: county || undefined, city: city || undefined, zip: zip || undefined }, Math.min(Math.max(body.limit ?? 40, 10), 100)) : Promise.resolve([]),
+          webCity ? findWebBuyers(webCity, state).catch(() => null) : Promise.resolve(null),
+        ])
+        const notes: string[] = []
+        if (!supported) notes.push(`No assessor connector yet for ${county ? `${county} County, ` : ""}${state} (live: ${BUYER_COUNTIES.join(" · ")}) — showing buyers who advertise there instead.`)
+        else if (buyers.length === 0) notes.push(`No multi-property owners found in ${areaLabel} — try the county view or a nearby ZIP.`)
         return Response.json({
           buyers, count: buyers.length,
-          note: buyers.length === 0 ? `No multi-property buyers found in ${areaLabel} — try the county view, or a nearby ZIP.` : undefined,
+          webBuyers: web?.buyers ?? [],
+          webAt: web?.at ?? null,
+          note: notes.join(" ") || undefined,
         })
       }
     }
