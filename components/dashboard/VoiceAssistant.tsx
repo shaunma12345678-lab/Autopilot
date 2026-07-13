@@ -26,7 +26,7 @@ function getSR(): SRCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
 }
 
-interface Turn { you: string; ai: string; detail: string; results?: ForeclosureLead[]; area?: string }
+interface Turn { you: string; ai: string; detail: string; results?: ForeclosureLead[]; area?: string; grounded?: { kind: string; label: string } | null }
 interface SearchAction { searchType: "city" | "zip" | "county"; city?: string; state?: string; zip?: string; county?: string; leadType?: string; maxLeads?: number }
 
 const CUSTOM_KEY = "ap_voice_custom_v1"
@@ -144,7 +144,7 @@ export default function VoiceAssistant({ password }: { password: string }) {
         setTurns((p) => [{ you: "(search)", ai: summary, detail: summary, results: r?.leads.slice(0, 10) ?? [], area: r?.area }, ...p])
         speak(summary)
       } else {
-        setTurns((p) => [{ you: q, ai, detail }, ...p])
+        setTurns((p) => [{ you: q, ai, detail, grounded: data.grounded ?? null }, ...p])
         speak(ai)
       }
     } catch { setNote("Couldn't reach the assistant — try again.") }
@@ -214,6 +214,7 @@ export default function VoiceAssistant({ password }: { password: string }) {
           <div key={i} className="bg-gray-900/60 border border-gray-700/40 rounded-xl p-4">
             {t.you !== "(search)" && <p className="text-xs text-gray-500">🗣 {t.you}</p>}
             {t.detail !== t.ai && <p className="text-sm font-semibold text-violet-200 mt-2">🤖 {t.ai}</p>}
+            {t.grounded && <p className="text-[10px] font-semibold text-emerald-300 bg-emerald-950/40 border border-emerald-800/40 rounded-full px-2 py-0.5 inline-block mt-2">📊 Answered from live {t.grounded.kind === "market" ? "market data" : "property records"}: {t.grounded.label}</p>}
             <p className="text-sm text-gray-200 mt-2 whitespace-pre-wrap leading-relaxed">{t.detail}</p>
             {t.results && t.results.length > 0 && (
               <div className="mt-3 space-y-1">
