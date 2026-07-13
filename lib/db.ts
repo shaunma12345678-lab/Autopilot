@@ -1,6 +1,5 @@
 // Supabase REST-based database client — works on Vercel (IPv4 port 443).
 // Direct PostgreSQL is IPv6-only on free Supabase tier and unreachable from Vercel serverless.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 
 import { getAdminClient } from "@/lib/supabase/admin"
 
@@ -10,24 +9,28 @@ function sb(): any { return getAdminClient() }
 
 type W = Record<string, unknown>
 
+// Prisma callers pass Date objects; supabase-js can't serialize them (the
+// request fails with an empty-message error) — always convert to ISO strings.
+const ser = (v: unknown): unknown => (v instanceof Date ? v.toISOString() : v)
+
 function applyFilters(q: unknown, where: W): unknown {
   let r: unknown = q
   for (const [key, value] of Object.entries(where)) {
     if (value === null || value === undefined) {
       r = (r as { is: (k: string, v: null) => unknown }).is(key, null)
     } else if (Array.isArray(value)) {
-      r = (r as { in: (k: string, v: unknown[]) => unknown }).in(key, value)
-    } else if (typeof value === "object" && value !== null) {
+      r = (r as { in: (k: string, v: unknown[]) => unknown }).in(key, value.map(ser))
+    } else if (typeof value === "object" && !(value instanceof Date) && value !== null) {
       const sub = value as W
-      if ("not" in sub) r = (r as { neq: (k: string, v: unknown) => unknown }).neq(key, sub.not)
-      else if ("in" in sub) r = (r as { in: (k: string, v: unknown[]) => unknown }).in(key, sub.in as unknown[])
-      else if ("gt" in sub) r = (r as { gt: (k: string, v: unknown) => unknown }).gt(key, sub.gt)
-      else if ("lt" in sub) r = (r as { lt: (k: string, v: unknown) => unknown }).lt(key, sub.lt)
-      else if ("gte" in sub) r = (r as { gte: (k: string, v: unknown) => unknown }).gte(key, sub.gte)
-      else if ("lte" in sub) r = (r as { lte: (k: string, v: unknown) => unknown }).lte(key, sub.lte)
+      if ("not" in sub) r = (r as { neq: (k: string, v: unknown) => unknown }).neq(key, ser(sub.not))
+      else if ("in" in sub) r = (r as { in: (k: string, v: unknown[]) => unknown }).in(key, (sub.in as unknown[]).map(ser))
+      else if ("gt" in sub) r = (r as { gt: (k: string, v: unknown) => unknown }).gt(key, ser(sub.gt))
+      else if ("lt" in sub) r = (r as { lt: (k: string, v: unknown) => unknown }).lt(key, ser(sub.lt))
+      else if ("gte" in sub) r = (r as { gte: (k: string, v: unknown) => unknown }).gte(key, ser(sub.gte))
+      else if ("lte" in sub) r = (r as { lte: (k: string, v: unknown) => unknown }).lte(key, ser(sub.lte))
       else if ("contains" in sub) r = (r as { ilike: (k: string, v: string) => unknown }).ilike(key, `%${sub.contains}%`)
     } else {
-      r = (r as { eq: (k: string, v: unknown) => unknown }).eq(key, value)
+      r = (r as { eq: (k: string, v: unknown) => unknown }).eq(key, ser(value))
     }
   }
   return r
