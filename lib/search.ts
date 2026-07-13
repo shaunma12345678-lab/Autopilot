@@ -345,11 +345,22 @@ export async function webSearchMeta(query: string, maxResults = 8): Promise<Sear
     _mojeekHtml(query, maxResults),
   ])
   const norm = (u: string) => u.replace(/^https?:\/\/(www\.)?/, "").replace(/\/+$/, "").toLowerCase()
+  // Relevance guard: engines under bot pressure (Bing especially) sometimes
+  // return generic pages that ignore the query ("Cash App" for "cash home
+  // buyers Riverside"). Require each result to share meaningful query terms.
+  const qTerms = query.toLowerCase().replace(/["']/g, "").split(/\s+/).filter((t) => t.length >= 4)
+  const relevant = (r: SearchResult): boolean => {
+    if (qTerms.length < 2) return true
+    const hay = `${r.title ?? ""} ${r.content ?? ""} ${r.url ?? ""}`.toLowerCase()
+    let hits = 0
+    for (const t of qTerms) if (hay.includes(t)) hits++
+    return hits >= 2
+  }
   const merged = new Map<string, { r: SearchResult; weight: number; hits: number }>()
   for (const e of engines) {
     if (e.status !== "fulfilled") continue
     for (const r of e.value.results) {
-      if (!r.url) continue
+      if (!r.url || !relevant(r)) continue
       const key = norm(r.url)
       const prev = merged.get(key)
       const w = r.score ?? 0.5
