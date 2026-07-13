@@ -108,7 +108,7 @@ async function addressDigest(a: { address: string; city?: string; state?: string
       score: 50, priority: "WARM", scoreReason: "", distressSignals: [], dealCalc: null, outreach: null,
       rentEstimate: f?.medianRent ?? null, comps: [],
     } as unknown as ForeclosureLead
-    const d = analyzeDeal(lead, anchor ? { fallbackValue: anchor } : undefined)
+    const d = analyzeDeal(lead, undefined, anchor ? { fallbackValue: anchor } : undefined)
     if (!parcel && !anchor) return null
     const L: string[] = [`VERIFIED DATA for ${a.address}${a.city ? `, ${a.city}` : ""}, ${state} (county records + our underwrite):`]
     if (parcel) L.push(`- County parcel (${parcel.source}): owner ${parcel.ownerName ?? "n/a"}, mailing ${parcel.mailingAddress ?? "n/a"}, ${parcel.sqft ?? "n/a"} sqft, ${parcel.beds ?? "n/a"}bd/${parcel.baths ?? "n/a"}ba, built ${parcel.yearBuilt ?? "n/a"}, type ${parcel.propertyType ?? "n/a"}`)
