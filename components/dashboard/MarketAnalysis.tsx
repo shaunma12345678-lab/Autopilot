@@ -53,6 +53,49 @@ interface Fund {
 interface Factor { key: string; label: string; value: string; rating: number | null; meaning: string; drives: string[] }
 interface JobMove { company: string; jobs: number | null; note: string }
 interface JobMovesData { inbound: JobMove[]; outbound: JobMove[]; at: string; sources: number }
+interface ChecklistRow { label: string; value: string; ok: "good" | "ok" | "bad"; why: string }
+interface RentalStrategy { score: number; grade: string; roi: string; checklist: ChecklistRow[]; dealbreakers: string[]; estimated: boolean }
+interface RentalIntelData {
+  metro: string | null; rentYoY: number | null; rent3yrAnnual: number | null; zoriRent: number | null
+  priceYoY: number | null; priceMomentum: number | null; zhviValue: number | null; drawdown10y: number | null
+  mortgageRate: number | null; monthlyPayment: number | null; cashflowGap: number | null
+  landlord: { grade: string; evictionDays: number; rentControl: boolean; state: string } | null
+  strRule: { status: string; note: string } | null
+  ltr: RentalStrategy; mtr: RentalStrategy; str: RentalStrategy
+  bestRental: string; verdict: string
+}
+
+const OK_ICON: Record<ChecklistRow["ok"], string> = { good: "✅", ok: "▫️", bad: "❌" }
+
+function RentalPanel({ title, emoji, s }: { title: string; emoji: string; s: RentalStrategy }) {
+  return (
+    <div className="bg-gray-900/60 border border-gray-700/40 rounded-xl p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-bold text-white">{emoji} {title}</p>
+        <span className={`text-xs font-bold px-2 py-0.5 rounded-lg border ${GRADE_CLR[s.grade] ?? GRADE_CLR.C}`}>{s.grade} · {s.score}</span>
+      </div>
+      <p className="text-[12px] font-semibold text-emerald-300 mt-1">{s.roi}{s.estimated ? " (est.)" : ""}</p>
+      {s.dealbreakers.map((d) => (
+        <p key={d} className="text-[11px] font-semibold text-rose-300 bg-rose-950/40 border border-rose-800/40 rounded-lg px-2 py-1 mt-1.5">🚫 {d}</p>
+      ))}
+      <div className="mt-2 space-y-1">
+        {s.checklist.map((r) => (
+          <div key={r.label} className="flex items-start gap-1.5 text-[11px]" title={r.why}>
+            <span className="shrink-0">{OK_ICON[r.ok]}</span>
+            <span className="text-gray-400 shrink-0">{r.label}:</span>
+            <span className="text-gray-200 font-semibold">{r.value}</span>
+          </div>
+        ))}
+      </div>
+      <details className="mt-2">
+        <summary className="text-[10px] text-gray-600 cursor-pointer">Why each rating</summary>
+        <ul className="mt-1 space-y-0.5">
+          {s.checklist.map((r) => <li key={r.label} className="text-[10px] text-gray-500">• <b>{r.label}</b> — {r.why}</li>)}
+        </ul>
+      </details>
+    </div>
+  )
+}
 interface CachedEntry { city: string; state: string; report: MarketReport; strat: MarketStrategies; fundamentals?: Fund | null; fundScore?: number | null; fundReasons?: string[]; upside?: number | null; upsideReasons?: string[]; at: string }
 const mKey = (c: string, s: string) => `${c.toLowerCase().trim()}:${(s || "").toUpperCase().trim()}`
 // Composite rank = current health (fundamentals) 40% + upside/appreciation
@@ -124,7 +167,7 @@ function MarketCard({ m, rank, onClick, busy, entry, rankBy }: { m: Market; rank
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; fundConfigured: boolean } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; rental: RentalIntelData | null; fundConfigured: boolean } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
   const [rankBy, setRankBy]   = useState<RankBy>("overall")
@@ -164,7 +207,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error || !data?.report) { setError(data?.error ?? `No data for ${m.city} yet — run it again; the cache fills over time.`) }
-      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], factors: Array.isArray(data.factors) ? data.factors : [], jobMoves: data.jobMoves ?? null, fundConfigured: !!data.fundConfigured }) }
+      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], factors: Array.isArray(data.factors) ? data.factors : [], jobMoves: data.jobMoves ?? null, rental: data.rental ?? null, fundConfigured: !!data.fundConfigured }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
@@ -175,7 +218,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons, factors, jobMoves } = report
+    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons, factors, jobMoves, rental } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -254,6 +297,41 @@ export default function MarketAnalysis({ password }: { password: string }) {
           <StrategyCard title="Mid-term rental"     emoji="🛏" s={strat.midRental} />
           <StrategyCard title="Long-term rental"    emoji="🏘" s={strat.longRental} />
         </div>
+
+        {/* 🏠 Rental Deep Dive — the full LTR/MTR/STR criteria, every box checked */}
+        {rental && (
+          <div className="bg-gradient-to-b from-emerald-950/30 to-gray-900/60 border border-emerald-500/30 rounded-2xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-emerald-200">🏠 Rental Deep Dive <span className="text-[10px] font-normal text-gray-500">· Zillow trend data{rental.metro ? ` (${rental.metro} metro)` : ""} · Freddie Mac rate · ACS · curated law</span></p>
+              <span className="text-xs font-bold text-white bg-emerald-700/60 border border-emerald-500/50 rounded-lg px-2.5 py-1">🏆 {rental.bestRental}</span>
+            </div>
+            <p className="text-[12px] text-gray-300">{rental.verdict}</p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+              {[
+                ["Metro rent (ZORI)", rental.zoriRent != null ? `$${rental.zoriRent.toLocaleString()}` : "—"],
+                ["Rent growth 12mo", rental.rentYoY != null ? `${rental.rentYoY > 0 ? "+" : ""}${rental.rentYoY}%` : "—"],
+                ["Rent 3yr/yr", rental.rent3yrAnnual != null ? `${rental.rent3yrAnnual > 0 ? "+" : ""}${rental.rent3yrAnnual}%` : "—"],
+                ["Price 12mo (ZHVI)", rental.priceYoY != null ? `${rental.priceYoY > 0 ? "+" : ""}${rental.priceYoY}%` : "—"],
+                ["Momentum (3mo ann.)", rental.priceMomentum != null ? `${rental.priceMomentum > 0 ? "+" : ""}${rental.priceMomentum}%` : "—"],
+                ["30-yr rate today", rental.mortgageRate != null ? `${rental.mortgageRate}%` : "—"],
+                ["Median-door cash flow", rental.cashflowGap != null ? `${rental.cashflowGap >= 0 ? "+" : ""}$${rental.cashflowGap}/mo` : "—"],
+              ].map(([k, v]) => (
+                <div key={k} className="bg-gray-900/50 border border-gray-700/40 rounded-lg px-2.5 py-2">
+                  <p className="text-[9px] text-gray-500 uppercase tracking-wide">{k}</p>
+                  <p className="text-sm font-bold text-white mt-0.5">{v}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <RentalPanel title="Long-term" emoji="🏘" s={rental.ltr} />
+              <RentalPanel title="Mid-term (furnished)" emoji="🛏" s={rental.mtr} />
+              <RentalPanel title="Short-term" emoji="🏖" s={rental.str} />
+            </div>
+            <p className="text-[10px] text-gray-600">Trend data: Zillow Research (metro-level). Landlord/STR law is a curated rating — always verify the current local ordinance. STR revenue is modeled without nightly-rate data; underwrite with real comps before buying.</p>
+          </div>
+        )}
 
         {/* 🏢 Which employers are coming and going (web+AI, cached weekly) */}
         {jobMoves && (jobMoves.inbound.length > 0 || jobMoves.outbound.length > 0) && (

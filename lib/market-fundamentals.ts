@@ -35,6 +35,9 @@ export interface Fundamentals {
   rent3br:             number | null
   jobGrowthPct:        number | null   // BLS YoY employment growth (statewide; city-level isn't published keyless)
   jobsNote?:           string          // e.g. "TN statewide, May 2025 → May 2026"
+  seasonalSharePct:    number | null   // vacation/seasonal homes as % of stock — revealed STR demand
+  healthcareSharePct:  number | null   // healthcare share of employment — MTR (travel-nurse) demand
+  collegeSharePct:     number | null   // college students as % of residents — MTR/LTR student demand
   growthFrom?:     string          // the growth period, e.g. "2010→2020"
   source?:         string
 }
@@ -64,6 +67,7 @@ interface CensusMetrics {
   unemploymentRate: number | null; medianHomeValue: number | null; medianRent: number | null; vacancyRate: number | null
   occupancyPct: number | null; rentalVacancyPct: number | null; renterSharePct: number | null
   inboundMigrationPct: number | null; rent1br: number | null; rent2br: number | null; rent3br: number | null
+  seasonalSharePct: number | null; healthcareSharePct: number | null; collegeSharePct: number | null
 }
 
 async function resolveGeoid(city: string, state: string): Promise<string | null> {
@@ -92,7 +96,7 @@ async function fetchCensusReporter(city: string, state: string): Promise<CensusM
   try {
     const geoid = await resolveGeoid(city, state)
     if (!geoid) return null
-    const tables = "B01003,B19013,B17001,B23025,B25077,B25064,B25002,B25003,B25004,B25031,B07003"
+    const tables = "B01003,B19013,B17001,B23025,B25077,B25064,B25002,B25003,B25004,B25031,B07003,C24030,B14001"
     const url = `https://api.censusreporter.org/1.0/data/show/latest?table_ids=${tables}&geo_ids=${geoid}`
     const res = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(12000) })
     if (!res.ok) return null
@@ -111,6 +115,12 @@ async function fetchCensusReporter(city: string, state: string): Promise<CensusM
     const mobUniv = est("B07003", "B07003001")
     const fromOtherState = est("B07003", "B07003013"), fromAbroad = est("B07003", "B07003016")
     const inbound = (fromOtherState ?? 0) + (fromAbroad ?? 0)
+    // Rental-demand proxies: vacation-home share (STR), healthcare employment
+    // (MTR travel nurses: male C24030023 + female C24030050), college share.
+    const seasonal = est("B25004", "B25004006")
+    const hcM = est("C24030", "C24030023"), hcF = est("C24030", "C24030050"), workers = est("C24030", "C24030001")
+    const college = est("B14001", "B14001008")
+    const pop = est("B01003", "B01003001")
     return {
       population:       est("B01003", "B01003001"),
       medianIncome:     est("B19013", "B19013001"),
@@ -126,6 +136,9 @@ async function fetchCensusReporter(city: string, state: string): Promise<CensusM
       rent1br:          est("B25031", "B25031003"),
       rent2br:          est("B25031", "B25031004"),
       rent3br:          est("B25031", "B25031005"),
+      seasonalSharePct:   seasonal != null && totUnits ? Math.round((seasonal / totUnits) * 1000) / 10 : null,
+      healthcareSharePct: workers && (hcM != null || hcF != null) ? Math.round((((hcM ?? 0) + (hcF ?? 0)) / workers) * 1000) / 10 : null,
+      collegeSharePct:    college != null && pop ? Math.round((college / pop) * 1000) / 10 : null,
     }
   } catch {
     return null
@@ -271,6 +284,9 @@ export async function fetchFundamentals(city: string, state: string): Promise<Fu
     rent3br:             cr?.rent3br ?? null,
     jobGrowthPct:        jobs?.growth ?? null,
     jobsNote:            jobs?.note,
+    seasonalSharePct:    cr?.seasonalSharePct ?? null,
+    healthcareSharePct:  cr?.healthcareSharePct ?? null,
+    collegeSharePct:     cr?.collegeSharePct ?? null,
     growthFrom:       wiki?.growthFrom,
     source:           [cr && "Census ACS", wiki && "Wikidata", jobs && "BLS"].filter(Boolean).join(" · ") || undefined,
   }

@@ -9,6 +9,7 @@ import { fillComps } from "@/lib/comp-engine"
 import { analyzeMarket, scoreStrategies, type MarketReport, type MarketStrategies } from "@/lib/market-analysis"
 import { fetchFundamentals, fundamentalsScore, upsidePotential, investorFactors, isFundamentalsConfigured, type Fundamentals, type InvestorFactor } from "@/lib/market-fundamentals"
 import { discoverJobMoves, type JobMoves } from "@/lib/job-moves"
+import { buildRentalIntel, type RentalIntel } from "@/lib/rental-intel"
 import { opportunityScore } from "@/lib/opportunity"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
@@ -22,6 +23,7 @@ export interface MarketAnalysisResult {
   upsideReasons: string[]
   factors:     InvestorFactor[]  // every factor we weigh, rated + explained
   jobMoves:    JobMoves | null   // which employers are coming / going (web+AI, cached)
+  rental:      RentalIntel | null // the LTR/MTR/STR deep dive (trend + law + proxies + today's-rate cash flow)
   fundConfigured: boolean
   leads:       ForeclosureLead[]   // top leads in the market (for the find-leads list)
   total:       number
@@ -39,6 +41,7 @@ export async function runMarketAnalysis(city: string, state: string, depth = 250
   // Override the distressed-sample value/rent with authoritative ACS numbers.
   const report = analyzeMarket(allLeads, { value: fundamentals?.medianHomeValue ?? null, rent: fundamentals?.medianRent ?? null })
   const strat  = scoreStrategies(report, fundamentals)
+  const rental = await buildRentalIntel(city, state, fundamentals).catch(() => null)
   const fs     = fundamentalsScore(fundamentals)
   const up     = upsidePotential(fundamentals)
   // Return only the top leads by opportunity to keep the payload small.
@@ -49,6 +52,7 @@ export async function runMarketAnalysis(city: string, state: string, depth = 250
     upside: up?.score ?? null, upsideReasons: up?.reasons ?? [],
     factors: investorFactors(fundamentals),
     jobMoves,
+    rental,
     fundConfigured: isFundamentalsConfigured(), leads, total: allLeads.length,
   }
 }
