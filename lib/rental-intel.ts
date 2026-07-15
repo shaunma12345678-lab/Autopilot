@@ -104,7 +104,7 @@ function matchMetro(rows: MetroSeries[], city: string, state: string): MetroSeri
 }
 
 let pmmsCache: { at: number; rate: number } | null = null
-async function mortgageRate30(): Promise<number | null> {
+export async function mortgageRate30(): Promise<number | null> {
   if (pmmsCache && Date.now() - pmmsCache.at < CACHE_TTL) return pmmsCache.rate
   try {
     const res = await fetch(PMMS_URL, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(20000) })

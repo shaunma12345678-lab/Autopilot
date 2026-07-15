@@ -14,6 +14,80 @@ import {
 import { loadBuyers, matchBuyers, BUYERS_EVENT, type Buyer } from "@/lib/buyers"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { fuseSignals } from "@/lib/signal-fusion"
+import { exitOptions } from "@/lib/exit-options"
+
+// Today's 30-yr rate — fetched once per session (module cache), null until it lands.
+let ratePromise: Promise<number | null> | null = null
+function fetchTodayRate(): Promise<number | null> {
+  if (!ratePromise) {
+    ratePromise = fetch("/api/market/rate")
+      .then((r) => r.json())
+      .then((d) => (typeof d.rate30 === "number" ? d.rate30 : null))
+      .catch(() => null)
+  }
+  return ratePromise
+}
+
+const chanceCls = (c: number) => (c >= 60 ? "bg-emerald-600 text-white" : c >= 40 ? "bg-amber-600 text-white" : "bg-gray-700 text-gray-300")
+
+// 🧭 The per-property playbook: every way to make money on this one, ranked by
+// the chance it actually pays — plus the refinance angle (seller's est. rate vs
+// today's) that tells you whether the LOAN is the asset or the relief.
+function ExitPlaybook({ lead }: { lead: ForeclosureLead }) {
+  const [rate, setRate] = useState<number | null>(null)
+  const [open, setOpen] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    const t = setTimeout(() => { void fetchTodayRate().then((r) => { if (alive) setRate(r) }) }, 0)
+    return () => { alive = false; clearTimeout(t) }
+  }, [])
+  const pb = useMemo(() => exitOptions(lead, { todayRate: rate }), [lead, rate])
+  const refi = pb.refi
+
+  return (
+    <div className="bg-indigo-950/25 border border-indigo-500/25 rounded-lg px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-indigo-300 font-bold uppercase tracking-wide">🧭 Exit playbook — every way to make money here</span>
+        {pb.best && <span className="text-[10px] font-bold text-emerald-300">Best: {pb.best.emoji} {pb.best.name}</span>}
+      </div>
+
+      <div className="space-y-1">
+        {pb.options.map((o) => (
+          <div key={o.key} className={`rounded-lg border px-2.5 py-1.5 ${o.viable ? "bg-gray-950/50 border-gray-800" : "bg-gray-950/30 border-gray-900 opacity-60"}`}>
+            <button onClick={() => setOpen(open === o.key ? null : o.key)} className="w-full flex items-center gap-2 text-left">
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${chanceCls(o.moneyChance)}`} title="Chance this play makes money here">{o.moneyChance}%</span>
+              <span className="text-[11px] font-semibold text-white shrink-0">{o.emoji} {o.name}</span>
+              <span className="text-[11px] text-emerald-300 truncate flex-1">{o.headline}</span>
+              {!o.viable && <span className="text-[9px] text-gray-600 shrink-0">not viable</span>}
+              <span className="text-gray-600 text-[10px] shrink-0">{open === o.key ? "▾" : "▸"}</span>
+            </button>
+            {open === o.key && (
+              <div className="mt-1.5 pl-1 space-y-0.5">
+                {o.numbers.map((n, i) => <p key={i} className="text-[10px] text-gray-400">· {n}</p>)}
+                <p className="text-[10px] text-gray-500 italic">{o.why}</p>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className={`rounded-lg border px-2.5 py-2 ${refi.direction === "locked-in" ? "bg-fuchsia-950/30 border-fuchsia-700/40" : refi.direction === "refi-relief" ? "bg-sky-950/30 border-sky-700/40" : "bg-gray-950/40 border-gray-800"}`}>
+        <p className="text-[10px] font-bold uppercase tracking-wide mb-1 text-gray-300">
+          💰 Refinance angle{refi.available && refi.sellerRate != null ? ` — seller ~${refi.sellerRate}% vs today ${refi.todayRate}%` : ""}
+        </p>
+        <p className="text-[10px] text-gray-300 leading-relaxed">{refi.angle}</p>
+        {refi.available && (
+          <p className="text-[10px] text-gray-500 mt-1">
+            Est. balance {fmtMoney(refi.estBalance ?? 0)} · payment {fmtMoney(refi.currentPayment ?? 0)}/mo → {fmtMoney(refi.refiPayment ?? 0)}/mo refi
+            {refi.cashOutAvailable != null && refi.cashOutAvailable > 0 ? ` · cash-out headroom ${fmtMoney(refi.cashOutAvailable)}` : ""}
+            {refi.breakEvenMonths ? ` · breaks even ~${refi.breakEvenMonths}mo` : ""}
+          </p>
+        )}
+        {refi.buyerNote && <p className="text-[10px] text-gray-500 mt-0.5">{refi.buyerNote}</p>}
+      </div>
+    </div>
+  )
+}
 
 // Shows which of your saved cash buyers fit this deal — instant disposition.
 function BuyerMatch({ lead, a }: { lead: ForeclosureLead; a: DealAnalysisType }) {
@@ -269,6 +343,9 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
 
       {/* Cash-buyer matches */}
       <BuyerMatch lead={lead} a={a} />
+
+      {/* 🧭 Every exit, ranked by chance of profit + the refinance angle */}
+      <ExitPlaybook lead={lead} />
 
       {/* Narrative */}
       <p className="text-[11px] text-gray-300 italic bg-gray-900/50 rounded-lg px-3 py-2">{a.narrative}</p>
