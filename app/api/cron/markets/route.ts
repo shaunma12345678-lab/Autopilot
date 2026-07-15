@@ -13,13 +13,13 @@ import { TOP_MARKETS, UPCOMING_MARKETS } from "@/lib/markets-data"
 import { loadMarketCache, saveMarketCache, marketKey, type MarketEntry } from "@/lib/market-store"
 
 const CRON_SECRET    = process.env.CRON_SECRET ?? ""
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 const BATCH = 4   // markets analyzed per run (rotating)
 
 function authorized(request: NextRequest): boolean {
   const bearer = request.headers.get("authorization")
   if (CRON_SECRET && bearer === `Bearer ${CRON_SECRET}`) return true
-  return request.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 const ALL = [...TOP_MARKETS, ...UPCOMING_MARKETS]

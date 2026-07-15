@@ -11,11 +11,11 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { resolveLearningBusinessId } from "@/lib/learning-store"
 import { applyOutcomes, computeForecastStats, loadForecastLedger, saveForecastLedger, type OutcomeItem } from "@/lib/forecast-ledger"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
-  return request.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 export async function GET(request: NextRequest) {

@@ -1,6 +1,7 @@
 // #1 Buy-box — the investor's deal criteria, saved locally. When enabled, the
 // map highlights only the deals that fit. Client-only (localStorage), null-safe.
 
+import { schedulePush } from "@/lib/workspace-sync"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import type { DealAnalysis } from "@/lib/deal-analysis"
 
@@ -30,7 +31,7 @@ export function loadBuyBox(): BuyBox {
 
 export function saveBuyBox(b: BuyBox): void {
   if (typeof window === "undefined") return
-  try { window.localStorage.setItem(KEY, JSON.stringify(b)) } catch { /* quota */ }
+  try { window.localStorage.setItem(KEY, JSON.stringify(b)); schedulePush("buybox") } catch { /* quota */ }
 }
 
 export function matchesBuyBox(lead: ForeclosureLead, a: DealAnalysis, box: BuyBox): boolean {

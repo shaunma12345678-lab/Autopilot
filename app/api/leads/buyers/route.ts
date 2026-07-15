@@ -8,21 +8,24 @@ export const maxDuration = 90
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { requirePlanFeature } from "@/lib/plan-gate"
 import { findCashBuyersArea, buyerDossier, buyerCountySupported, buyerStateSupported, BUYER_COUNTIES } from "@/lib/buyer-finder"
 import { findWebBuyers } from "@/lib/web-buyer-finder"
 import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
-  return request.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  const gate = await requirePlanFeature(request, user, "buyer-intel")
+  if (!gate.ok) return gate.resp
 
   let body: { action?: string; county?: string; state?: string; city?: string; zip?: string; limit?: number; owner?: string; ownerRaw?: string; sampleAddress?: string; sampleCity?: string }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }

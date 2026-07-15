@@ -2,7 +2,7 @@ import { NextRequest } from "next/server"
 import { BOS_AGENT_REGISTRY, BOS_AGENT_BY_SLUG } from "@/lib/bos-registry"
 import { runAgent } from "@/lib/claude"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 // ── In-memory state (per lambda instance) ───────────────────────────────────
 // For cross-instance persistence, replace with Upstash Redis:
@@ -225,7 +225,7 @@ export async function POST(request: NextRequest) {
       payload?: Record<string, unknown>
     }
 
-    if (password !== ADMIN_PASSWORD) {
+    if (!ADMIN_PASSWORD || password !== ADMIN_PASSWORD) {
       return Response.json({ error: "Invalid password" }, { status: 401 })
     }
 

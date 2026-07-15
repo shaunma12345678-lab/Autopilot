@@ -8,6 +8,7 @@
 // answer respects it. Conversation mode keeps the mic open hands-free.
 // Browser speech APIs (keyless) + the Groq voice endpoint; degrades gracefully.
 
+import { schedulePush } from "@/lib/workspace-sync"
 import { useEffect, useRef, useState } from "react"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import { openDealSheet } from "@/lib/deal-sheet"
@@ -55,7 +56,7 @@ export default function VoiceAssistant({ password }: { password: string }) {
 
   const saveCustom = (v: string) => {
     setCustom(v)
-    try { window.localStorage.setItem(CUSTOM_KEY, v) } catch { /* quota */ }
+    try { window.localStorage.setItem(CUSTOM_KEY, v); schedulePush("voiceCustom") } catch { /* quota */ }
   }
 
   const startListening = () => {

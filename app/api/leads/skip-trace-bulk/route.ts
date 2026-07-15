@@ -14,13 +14,13 @@ import { traceOwnerFromWeb } from "@/lib/own-skip-trace"
 import { enrichPropertyFromWeb } from "@/lib/property-enrichment"
 import { withConcurrency } from "@/lib/geo-tiles"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 const MAX_LEADS  = 40   // per request — keeps us inside the serverless budget
 const PER_LEAD_MS = 24_000
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
-  return request.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 interface InLead { attomId: number; address: string; city?: string; state?: string; zip?: string; ownerName?: string }

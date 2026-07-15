@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 async function getAdminUserId(): Promise<string | null> {
   const user = await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } })
@@ -10,7 +10,7 @@ async function getAdminUserId(): Promise<string | null> {
 
 export async function POST(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
   try {
     const { email, code } = await request.json()

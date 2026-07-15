@@ -2,13 +2,13 @@ import { NextRequest } from "next/server"
 
 export const maxDuration = 60
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 // ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) {
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 

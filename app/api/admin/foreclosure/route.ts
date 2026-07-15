@@ -24,10 +24,10 @@ import { batchDiscoverContacts } from "@/lib/foreclosure-enrichment"
 import { searchFreeForeclosures } from "@/lib/free-foreclosure-scraper"
 import { searchZeroKey, type ZeroKeyLead } from "@/lib/zero-key-foreclosure-scraper"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 function auth(req: NextRequest) {
-  return req.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && req.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 function hashStr(s: string): number {

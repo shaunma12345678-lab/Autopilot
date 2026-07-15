@@ -12,7 +12,7 @@ import { scrapeLayer2 } from "@/lib/scrapers/layer2"
 import { scrapeLayer3 } from "@/lib/scrapers/layer3"
 import { processSignals, upsertSource } from "@/lib/signal-processor"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { password, countyId = "san-diego", layer = 1, businessId: bId } = body
 
-    if (password !== ADMIN_PASSWORD) {
+    if (!ADMIN_PASSWORD || password !== ADMIN_PASSWORD) {
       return Response.json({ error: "Invalid password" }, { status: 403 })
     }
 

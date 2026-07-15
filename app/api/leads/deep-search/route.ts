@@ -11,22 +11,25 @@ export const maxDuration = 60
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { requirePlanFeature } from "@/lib/plan-gate"
 import { deepSearch, type DeepSearchParams } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 
 const INTERNAL_DEADLINE_MS = 55_000
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
-  return request.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  const gate = await requirePlanFeature(request, user, "deep-search")
+  if (!gate.ok) return gate.resp
 
   let body: {
     searchType:  string
@@ -80,7 +83,8 @@ export async function POST(request: NextRequest) {
       timedOut = true
     }
   } catch (err) {
-    console.error("[deep-search POST]", err)
+    const { captureError } = await import("@/lib/observe")
+    void captureError("deep-search", err, { searchType: body.searchType, city: body.city, zip: body.zipCode })
     return Response.json(
       { error: err instanceof Error ? err.message : "Search failed" },
       { status: 500 }
@@ -148,6 +152,8 @@ export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  const gate = await requirePlanFeature(request, user, "deep-search")
+  if (!gate.ok) return gate.resp
 
   const { searchParams } = new URL(request.url)
   const since = searchParams.get("since")

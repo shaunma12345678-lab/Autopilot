@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 const ZERO_AGENTS = [
   { id: "content", name: "Content Agent", color: "indigo", status: "idle", last24h: 0, lastHour: 0, queueSize: 0, successRate: 0, description: "Social posts, newsletters, SMS campaigns", route: "/content" },
@@ -20,7 +20,7 @@ const ZERO_AGENTS = [
 
 export async function POST(request: NextRequest) {
   const { password } = await request.json()
-  if (password !== ADMIN_PASSWORD) {
+  if (!ADMIN_PASSWORD || password !== ADMIN_PASSWORD) {
     return Response.json({ error: "Invalid password" }, { status: 401 })
   }
 

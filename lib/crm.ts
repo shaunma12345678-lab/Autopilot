@@ -1,3 +1,5 @@
+import { schedulePush } from "@/lib/workspace-sync"
+
 // #9 CRM pipeline — per-lead deal stage, saved locally. Pins can be colored by
 // stage so the map doubles as your pipeline board. Client-only, null-safe.
 
@@ -22,7 +24,7 @@ export function loadCrm(): CrmMap {
 
 export function persistCrm(map: CrmMap): void {
   if (typeof window === "undefined") return
-  try { window.localStorage.setItem(KEY, JSON.stringify(map)); window.dispatchEvent(new Event(CRM_EVENT)) } catch { /* quota */ }
+  try { window.localStorage.setItem(KEY, JSON.stringify(map)); window.dispatchEvent(new Event(CRM_EVENT)); schedulePush("crm") } catch { /* quota */ }
 }
 
 export function crmColor(stage: CrmStage | undefined): string {
@@ -48,7 +50,7 @@ export function setReminder(id: number, reminder: Reminder | null): ReminderMap 
   const map = loadReminders()
   if (reminder && reminder.due) map[id] = reminder; else delete map[id]
   if (typeof window !== "undefined") {
-    try { window.localStorage.setItem(R_KEY, JSON.stringify(map)); window.dispatchEvent(new Event(CRM_EVENT)) } catch { /* quota */ }
+    try { window.localStorage.setItem(R_KEY, JSON.stringify(map)); window.dispatchEvent(new Event(CRM_EVENT)); schedulePush("crmReminders") } catch { /* quota */ }
   }
   return map
 }

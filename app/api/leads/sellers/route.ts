@@ -8,6 +8,7 @@ export const maxDuration = 120
 
 import { NextRequest } from "next/server"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { requirePlanFeature } from "@/lib/plan-gate"
 import { deepSearch, type DeepSearchParams } from "@/lib/deep-search-engine"
 import { freeLeadToForeclosureLead } from "@/lib/foreclosure-lead-adapter"
 import { fillComps } from "@/lib/comp-engine"
@@ -16,11 +17,11 @@ import { predictPreForeclosure } from "@/lib/predictive"
 import { resolveAreas, scopeToArea } from "@/lib/area-scope"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 function isAuthorized(request: NextRequest, user: unknown): boolean {
   if (user) return true
-  return request.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && request.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 export interface SellerHit {
@@ -36,6 +37,8 @@ export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!isAuthorized(request, user)) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  const gate = await requirePlanFeature(request, user, "seller-finder")
+  if (!gate.ok) return gate.resp
 
   let body: { searchType?: string; city?: string; state?: string; county?: string; zip?: string; depth?: number; limit?: number }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }

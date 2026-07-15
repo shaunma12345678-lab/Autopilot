@@ -5,7 +5,7 @@ import { runAgent } from "@/lib/claude"
 
 export const maxDuration = 300
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 // ── SSE helper ─────────────────────────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ async function generateWithRetry(
 
 export async function POST(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) {
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -275,7 +275,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) {
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 

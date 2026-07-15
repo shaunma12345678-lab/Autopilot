@@ -1,10 +1,10 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 function auth(req: NextRequest) {
-  return req.headers.get("x-admin-password") === ADMIN_PASSWORD
+  return ADMIN_PASSWORD.length > 0 && req.headers.get("x-admin-password") === ADMIN_PASSWORD
 }
 
 export async function GET(request: NextRequest) {

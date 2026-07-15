@@ -2,7 +2,7 @@ import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { isMissingTableError } from "@/lib/db-guard"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 // Find the platform owner (first user created) to attach connections to
 async function getAdminUserId(): Promise<string | null> {
@@ -13,7 +13,7 @@ async function getAdminUserId(): Promise<string | null> {
 // GET — list all connected accounts for the admin user
 export async function GET(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
   try {
     const userId = await getAdminUserId()
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 // POST — save or update a credential-based integration
 export async function POST(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
   try {
     const userId = await getAdminUserId()
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
 // DELETE — disconnect an integration
 export async function DELETE(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
   try {
     const userId = await getAdminUserId()

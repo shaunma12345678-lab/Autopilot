@@ -12,7 +12,7 @@ import { COUNTY_ZIPS, TARGET_ZIP_COUNT } from "@/lib/zip-codes"
 import { bulkScan } from "@/lib/bulk-scraper"
 import { processSignals } from "@/lib/signal-processor"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 // Which counties to scan per target level (smaller targets = fewer counties)
 const TARGET_COUNTIES: Record<number, string[]> = {
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       businessId?: string
     }
 
-    if (password !== ADMIN_PASSWORD) {
+    if (!ADMIN_PASSWORD || password !== ADMIN_PASSWORD) {
       return Response.json({ error: "Invalid password" }, { status: 403 })
     }
 

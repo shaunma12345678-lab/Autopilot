@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { getAdminClient } from "@/lib/supabase/admin"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 const ZERO_STATS = {
   stats: { totalUsers: 0, totalBusinesses: 0, totalContent: 0, totalReviews: 0, totalLeads: 0, approvedContent: 0, pendingContent: 0, avgRating: "0" },
@@ -12,7 +12,7 @@ const ZERO_STATS = {
 
 export async function POST(request: NextRequest) {
   const { password } = await request.json()
-  if (password !== ADMIN_PASSWORD) {
+  if (!ADMIN_PASSWORD || password !== ADMIN_PASSWORD) {
     return Response.json({ error: "Invalid password" }, { status: 401 })
   }
 

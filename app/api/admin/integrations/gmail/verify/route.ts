@@ -2,7 +2,7 @@ import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { Resend } from "resend"
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "ap2026admin"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? ""   // no fallback: unset env disables admin access
 
 function generateCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString()
@@ -15,7 +15,7 @@ async function getAdminUserId(): Promise<string | null> {
 
 export async function POST(request: NextRequest) {
   const pw = request.headers.get("x-admin-password")
-  if (pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  if (!ADMIN_PASSWORD || pw !== ADMIN_PASSWORD) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
   try {
     const { email } = await request.json()

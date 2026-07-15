@@ -17,6 +17,7 @@
 //   • Comps layer  — show comparable sales (from on-demand valuations) for ARV.
 //   • Density layer— a heat overlay revealing the hottest blocks to farm.
 
+import { schedulePush } from "@/lib/workspace-sync"
 import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import "leaflet/dist/leaflet.css"
 import type {
@@ -216,7 +217,7 @@ function loadZones(): SavedZone[] {
 }
 function persistZones(zones: SavedZone[]): void {
   if (typeof window === "undefined") return
-  try { window.localStorage.setItem(ZONES_KEY, JSON.stringify(zones)) } catch { /* quota */ }
+  try { window.localStorage.setItem(ZONES_KEY, JSON.stringify(zones)); schedulePush("farms") } catch { /* quota */ }
 }
 
 // #6 Driving for Dollars — houses logged in the field, persisted locally.
@@ -228,7 +229,7 @@ function loadDrivingLeads(): DrivingLead[] {
 }
 function persistDrivingLeads(list: DrivingLead[]): void {
   if (typeof window === "undefined") return
-  try { window.localStorage.setItem(DRIVE_KEY, JSON.stringify(list)) } catch { /* quota */ }
+  try { window.localStorage.setItem(DRIVE_KEY, JSON.stringify(list)); schedulePush("driving") } catch { /* quota */ }
 }
 
 // #13 Zone deal alerts — phone + the lead IDs already seen per saved zone.
@@ -240,7 +241,7 @@ function loadAlerts(): AlertConfig {
 }
 function persistAlerts(cfg: AlertConfig): void {
   if (typeof window === "undefined") return
-  try { window.localStorage.setItem(ALERTS_KEY, JSON.stringify(cfg)) } catch { /* quota */ }
+  try { window.localStorage.setItem(ALERTS_KEY, JSON.stringify(cfg)); schedulePush("zoneAlerts") } catch { /* quota */ }
 }
 
 // Heat weight 0..1 for a lead under the chosen metric.

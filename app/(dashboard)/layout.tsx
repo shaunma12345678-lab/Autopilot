@@ -4,6 +4,7 @@ import Link from "next/link"
 import { signOut } from "@/app/actions/auth"
 import { SidebarNav } from "./sidebar-nav"
 import AIHelperWidget from "@/components/AIHelperWidget"
+import WorkspaceSync from "@/components/WorkspaceSync"
 
 export default async function DashboardLayout({
   children,
@@ -116,6 +117,8 @@ export default async function DashboardLayout({
       <main className="flex-1 overflow-y-auto bg-[#0f0f12]">
         {children}
       </main>
+
+      <WorkspaceSync />
 
       {/* Always-available AI helper (auth: the signed-in session cookie). */}
       <AIHelperWidget

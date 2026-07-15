@@ -2,6 +2,7 @@
 // which buyers it fits, so disposition is instant. Client-only (localStorage),
 // null-safe. Matching reuses the same underwrite the rest of the app produces.
 
+import { schedulePush } from "@/lib/workspace-sync"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 import type { DealAnalysis } from "@/lib/deal-analysis"
 
@@ -28,6 +29,7 @@ export function saveBuyers(buyers: Buyer[]): void {
   if (typeof window === "undefined") return
   try {
     window.localStorage.setItem(KEY, JSON.stringify(buyers))
+    schedulePush("buyers")
     window.dispatchEvent(new Event(BUYERS_EVENT))
   } catch { /* quota */ }
 }
