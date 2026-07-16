@@ -170,6 +170,13 @@ export const db = {
   rawSignal:        model("RawSignal"),
   source:           model("Source"),
   propertyIndex:    model("PropertyIndex"),
+  brandProfile:     model("BrandProfile"),
+  contentExemplar:  model("ContentExemplar"),
+  contentIdea:      model("ContentIdea"),
+  contentExpansion: model("ContentExpansion"),
+  trendSignal:      model("TrendSignal"),
+  contentOutcome:   model("ContentOutcome"),
+  scoreCalibration: model("ScoreCalibration"),
 
   // Prisma transaction compatibility — runs promises sequentially
   $transaction: async (fns: unknown[]) => {

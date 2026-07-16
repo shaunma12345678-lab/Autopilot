@@ -157,6 +157,12 @@ export async function GET(request: NextRequest) {
       }
     } catch { /* index is additive — never fail the cron */ }
 
+    // Content Engine: refresh trend signals daily (news adapter, keyless).
+    try {
+      const { refreshTrends } = await import("@/lib/content/trends")
+      await refreshTrends("real estate investing and small business marketing")
+    } catch { /* trends are additive */ }
+
     // Outcome-Verified Predictions: fold today's sweep into the forecast
     // ledger so predicted properties that later get a scheduled sale become
     // verified hits — the accuracy record compounds daily, unattended.

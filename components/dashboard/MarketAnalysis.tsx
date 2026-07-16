@@ -53,6 +53,18 @@ interface Fund {
 interface Factor { key: string; label: string; value: string; rating: number | null; meaning: string; drives: string[] }
 interface JobMove { company: string; jobs: number | null; note: string }
 interface JobMovesData { inbound: JobMove[]; outbound: JobMove[]; at: string; sources: number }
+interface TrendVerdict { metric: string; from: string; to: string; direction: "improving" | "declining" | "flat"; note: string }
+interface MarketHistoryData {
+  price: { y1: number | null; y3: number | null; y5: number | null; y10: number | null }
+  rent: { y1: number | null; y3: number | null; y5: number | null }
+  population: Array<{ year: number; pop: number }>
+  trackedSince: string | null
+  snapshots: number
+  verdicts: TrendVerdict[]
+  trajectory: "improving" | "mixed" | "declining" | "too-early"
+}
+const DIR_ICON: Record<string, string> = { improving: "📈", declining: "📉", flat: "➖" }
+const TRAJ_CLS: Record<string, string> = { improving: "bg-emerald-700/60 border-emerald-500/50 text-emerald-100", declining: "bg-rose-800/60 border-rose-600/50 text-rose-100", mixed: "bg-amber-700/50 border-amber-500/50 text-amber-100", "too-early": "bg-gray-800 border-gray-700 text-gray-300" }
 interface ChecklistRow { label: string; value: string; ok: "good" | "ok" | "bad"; why: string }
 interface RentalStrategy { score: number; grade: string; roi: string; checklist: ChecklistRow[]; dealbreakers: string[]; estimated: boolean }
 interface RentalIntelData {
@@ -167,7 +179,7 @@ function MarketCard({ m, rank, onClick, busy, entry, rankBy }: { m: Market; rank
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; rental: RentalIntelData | null; fundConfigured: boolean } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; rental: RentalIntelData | null; history: MarketHistoryData | null; fundConfigured: boolean } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
   const [rankBy, setRankBy]   = useState<RankBy>("overall")
@@ -207,7 +219,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error || !data?.report) { setError(data?.error ?? `No data for ${m.city} yet — run it again; the cache fills over time.`) }
-      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], factors: Array.isArray(data.factors) ? data.factors : [], jobMoves: data.jobMoves ?? null, rental: data.rental ?? null, fundConfigured: !!data.fundConfigured }) }
+      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], factors: Array.isArray(data.factors) ? data.factors : [], jobMoves: data.jobMoves ?? null, rental: data.rental ?? null, history: data.history ?? null, fundConfigured: !!data.fundConfigured }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
@@ -218,7 +230,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons, factors, jobMoves, rental } = report
+    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons, factors, jobMoves, rental, history } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -297,6 +309,59 @@ export default function MarketAnalysis({ password }: { password: string }) {
           <StrategyCard title="Mid-term rental"     emoji="🛏" s={strat.midRental} />
           <StrategyCard title="Long-term rental"    emoji="🏘" s={strat.longRental} />
         </div>
+
+        {/* 📈 Over the Years — measured series + our own longitudinal tracker */}
+        {history && (
+          <div className="bg-gray-900/60 border border-cyan-500/25 rounded-2xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-cyan-200">📈 Over the Years <span className="text-[10px] font-normal text-gray-500">· Zillow series · Census population history · our weekly tracker</span></p>
+              <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${TRAJ_CLS[history.trajectory]}`}>
+                {history.trajectory === "too-early" ? "Building the record…" : `Trajectory: ${history.trajectory}`}
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="text-[11px] w-full max-w-md">
+                <thead><tr className="text-gray-600 text-left"><th className="pr-3 pb-1"></th><th className="pr-3 pb-1">1yr</th><th className="pr-3 pb-1">3yr/yr</th><th className="pr-3 pb-1">5yr/yr</th><th className="pb-1">10yr/yr</th></tr></thead>
+                <tbody>
+                  <tr className="text-gray-300 border-t border-gray-800/60">
+                    <td className="pr-3 py-1 font-semibold">Prices</td>
+                    {[history.price.y1, history.price.y3, history.price.y5, history.price.y10].map((v, i) => (
+                      <td key={i} className={`pr-3 py-1 font-bold ${v == null ? "text-gray-600" : v >= 3 ? "text-emerald-300" : v >= 0 ? "text-gray-200" : "text-rose-300"}`}>{v != null ? `${v > 0 ? "+" : ""}${v}%` : "—"}</td>
+                    ))}
+                  </tr>
+                  <tr className="text-gray-300 border-t border-gray-800/60">
+                    <td className="pr-3 py-1 font-semibold">Rents</td>
+                    {[history.rent.y1, history.rent.y3, history.rent.y5, null].map((v, i) => (
+                      <td key={i} className={`pr-3 py-1 font-bold ${v == null ? "text-gray-600" : v >= 2.5 ? "text-emerald-300" : v >= 0 ? "text-gray-200" : "text-rose-300"}`}>{v != null ? `${v > 0 ? "+" : ""}${v}%` : "—"}</td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {history.population.length >= 2 && (
+              <p className="text-[11px] text-gray-400">👥 Population: {history.population.map((pt) => `${pt.year}: ${(pt.pop / 1000).toFixed(0)}k`).join(" → ")}</p>
+            )}
+
+            <div className="space-y-1">
+              {history.verdicts.map((v, i) => (
+                <div key={i} className="flex items-center gap-2 text-[11px]">
+                  <span>{DIR_ICON[v.direction]}</span>
+                  <span className="text-gray-300 font-semibold w-36 shrink-0">{v.metric === "price5" ? "5-yr prices" : v.metric === "rent3" ? "3-yr rents" : v.metric === "pop" ? "Population" : v.metric}</span>
+                  <span className="text-gray-400">{v.from && v.to ? `${v.from} → ${v.to}` : v.to}</span>
+                  <span className="text-gray-600">· {v.note}</span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-[10px] text-gray-600">
+              {history.snapshots >= 2
+                ? `Our tracker: ${history.snapshots} snapshots since ${history.trackedSince?.slice(0, 10)} — vacancy/migration/jobs deltas above come from OUR longitudinal record (no public source keeps these over time).`
+                : `Vacancy, migration & jobs have no public historical source — so we snapshot them on every analysis. Tracking ${history.trackedSince ? `since ${history.trackedSince.slice(0, 10)}` : "starts now"}; deltas appear as the record accumulates.`}
+            </p>
+          </div>
+        )}
 
         {/* 🏠 Rental Deep Dive — the full LTR/MTR/STR criteria, every box checked */}
         {rental && (

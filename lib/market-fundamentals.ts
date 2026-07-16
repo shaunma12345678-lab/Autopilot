@@ -39,6 +39,7 @@ export interface Fundamentals {
   healthcareSharePct:  number | null   // healthcare share of employment — MTR (travel-nurse) demand
   collegeSharePct:     number | null   // college students as % of residents — MTR/LTR student demand
   growthFrom?:     string          // the growth period, e.g. "2010→2020"
+  popSeries?:      Array<{ year: number; pop: number }>   // the actual population time-series
   source?:         string
 }
 
@@ -199,7 +200,7 @@ async function fetchJobGrowth(state: string): Promise<{ growth: number | null; n
 // ── Wikidata: real population growth from the time-series (keyless) ──────────
 interface PopPoint { pop: number; year: number | null }
 
-async function fetchWikidataGrowth(city: string, state: string): Promise<{ population: number | null; growth5yr: number | null; growthFrom?: string } | null> {
+async function fetchWikidataGrowth(city: string, state: string): Promise<{ population: number | null; growth5yr: number | null; growthFrom?: string; series?: Array<{ year: number; pop: number }> } | null> {
   const stateName = STATE_NAME[(state || "").toUpperCase()]
   if (!stateName || !city.trim()) return null
   const c = city.trim().replace(/\\/g, "\\\\").replace(/"/g, '\\"')
@@ -245,7 +246,8 @@ async function fetchWikidataGrowth(city: string, state: string): Promise<{ popul
         growthFrom = `${older.year}→${newest.year}`
       }
     }
-    return { population, growth5yr, growthFrom }
+    const series = dated.slice(0, 10).map((p) => ({ year: p.year as number, pop: p.pop })).sort((a, b) => a.year - b.year)
+    return { population, growth5yr, growthFrom, series }
   } catch {
     return null
   }
@@ -288,6 +290,7 @@ export async function fetchFundamentals(city: string, state: string): Promise<Fu
     healthcareSharePct:  cr?.healthcareSharePct ?? null,
     collegeSharePct:     cr?.collegeSharePct ?? null,
     growthFrom:       wiki?.growthFrom,
+    popSeries:        wiki?.series,
     source:           [cr && "Census ACS", wiki && "Wikidata", jobs && "BLS"].filter(Boolean).join(" · ") || undefined,
   }
 }

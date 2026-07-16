@@ -22,6 +22,7 @@ export default function ViralIdeas({ password }: { password: string }) {
   const [result, setResult] = useState<IdeasResult | null>(null)
   const [open, setOpen] = useState<number | null>(null)
   const [copied, setCopied] = useState<number | null>(null)
+  const [scripts, setScripts] = useState<Record<number, string>>({})
 
   const generate = async (fresh = false) => {
     if (!city.trim() || !stateAbbr.trim()) { setNote("Enter your market's city and state."); return }
@@ -37,8 +38,26 @@ export default function ViralIdeas({ password }: { password: string }) {
     setLoading(false)
   }
 
+  const fullScript = async (i: number, idea: ViralIdea) => {
+    setScripts((sc) => ({ ...sc, [i]: "…writing the word-for-word script…" }))
+    try {
+      const res = await fetch("/api/content/viral-ideas", {
+        method: "POST", headers: apiHeaders,
+        body: JSON.stringify({
+          action: "script", city: city.trim(), state: stateAbbr.trim(), situation: situation.trim() || undefined,
+          idea: { hook: idea.hook, format: idea.format, platform: idea.platform, beats: idea.beats, caption: idea.caption },
+          facts: result?.groundedOn ?? [],
+        }),
+      })
+      const d = await res.json()
+      setScripts((sc) => ({ ...sc, [i]: d.script ?? d.error ?? "failed — try again" }))
+    } catch { setScripts((sc) => ({ ...sc, [i]: "failed — try again" })) }
+  }
+
   const copyIdea = async (i: number, idea: ViralIdea) => {
-    const text = `HOOK: ${idea.hook}\n\nSCRIPT:\n${idea.beats.map((b, k) => `${k + 1}. ${b}`).join("\n")}\n\nCAPTION: ${idea.caption}\n${idea.hashtags.map((h) => `#${h}`).join(" ")}`
+    const text = scripts[i] && !scripts[i].startsWith("…")
+      ? `${scripts[i]}\n\nCAPTION: ${idea.caption}\n${idea.hashtags.map((h) => `#${h}`).join(" ")}`
+      : `HOOK: ${idea.hook}\n\nSCRIPT:\n${idea.beats.map((b, k) => `${k + 1}. ${b}`).join("\n")}\n\nCAPTION: ${idea.caption}\n${idea.hashtags.map((h) => `#${h}`).join(" ")}`
     try { await navigator.clipboard.writeText(text); setCopied(i); setTimeout(() => setCopied(null), 1500) } catch { setNote("Copy failed — select the text manually.") }
   }
 
@@ -90,7 +109,11 @@ export default function ViralIdeas({ password }: { password: string }) {
                 </div>
                 <p className="text-[11px] text-gray-400"><b className="text-gray-300">Caption:</b> {idea.caption}</p>
                 <p className="text-[11px] text-fuchsia-300">{idea.hashtags.map((h) => `#${h}`).join(" ")}</p>
-                <button onClick={() => copyIdea(i, idea)} className="bg-fuchsia-700/50 hover:bg-fuchsia-600 text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg">{copied === i ? "✓ Copied" : "📋 Copy full script"}</button>
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => fullScript(i, idea)} className="bg-emerald-700/60 hover:bg-emerald-600 text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg">🎯 Full word-for-word script</button>
+                  <button onClick={() => copyIdea(i, idea)} className="bg-fuchsia-700/50 hover:bg-fuchsia-600 text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg">{copied === i ? "✓ Copied" : "📋 Copy"}</button>
+                </div>
+                {scripts[i] && <pre className="text-[11px] text-gray-200 whitespace-pre-wrap bg-gray-950/70 border border-emerald-800/40 rounded-lg p-3 font-sans max-h-80 overflow-y-auto">{scripts[i]}</pre>}
               </div>
             )}
           </div>

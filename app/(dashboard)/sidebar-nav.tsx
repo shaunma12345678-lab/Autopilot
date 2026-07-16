@@ -16,7 +16,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Revenue",
     items: [
-      { href: "/content",         label: "Content",         icon: "✎" },
+      { href: "/content",         label: "Content Engine",  icon: "🎬" },
+      { href: "/content-agent",   label: "Content Agent",   icon: "✎" },
       { href: "/leads",           label: "Leads",           icon: "◎" },
       { href: "/ads",             label: "Ad Copy",         icon: "📢" },
       { href: "/email-marketing", label: "Email Marketing", icon: "✉" },

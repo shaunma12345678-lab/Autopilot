@@ -366,3 +366,110 @@ model ScheduledRun {
   @@unique([businessId, agentSlug])
   @@index([businessId])
 }
+
+// ═══════════════ Content Engine (CONTENT_ENGINE_SPEC.md) ═══════════════
+
+model BrandProfile {
+  id            String   @id @default(cuid())
+  name          String
+  niche         String
+  audienceNotes String?
+  voiceRules    String?
+  platforms     String[]
+  weights       Json?    // per-profile virality dimension weights (learned)
+  exemplars     ContentExemplar[]
+  ideas         ContentIdea[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model ContentExemplar {
+  id             String       @id @default(cuid())
+  brandProfileId String
+  brandProfile   BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+  platform       String
+  sourceUrl      String?
+  transcript     String?
+  hook           String?
+  isOwn          Boolean      @default(true)
+  performance    Json?
+  whyItWorked    String?
+  createdAt      DateTime     @default(now())
+}
+
+model ContentIdea {
+  id             String       @id @default(cuid())
+  brandProfileId String
+  brandProfile   BrandProfile @relation(fields: [brandProfileId], references: [id], onDelete: Cascade)
+  runId          String
+  platform       String
+  format         String
+  title          String
+  premise        String
+  hooks          String[]
+  angle          String
+  whyItTravels   String
+  viralityScore  Float
+  scoreBreakdown Json
+  confidence     Float
+  status         String       @default("new")
+  expansions     ContentExpansion[]
+  outcome        ContentOutcome?
+  createdAt      DateTime     @default(now())
+
+  @@index([brandProfileId, status])
+  @@index([runId])
+}
+
+model ContentExpansion {
+  id        String      @id @default(cuid())
+  ideaId    String
+  idea      ContentIdea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  kind      String
+  body      String
+  version   Int         @default(1)
+  createdAt DateTime    @default(now())
+}
+
+model TrendSignal {
+  id           String    @id @default(cuid())
+  platform     String
+  kind         String
+  label        String
+  description  String?
+  velocity     Float?
+  saturation   Float?
+  peakEstimate DateTime?
+  sourceUrl    String?
+  capturedAt   DateTime  @default(now())
+
+  @@index([platform, capturedAt])
+}
+
+model ContentOutcome {
+  id               String      @id @default(cuid())
+  ideaId           String      @unique
+  idea             ContentIdea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  publishedAt      DateTime?
+  postUrl          String?
+  views            Int?
+  likes            Int?
+  comments         Int?
+  shares           Int?
+  saves            Int?
+  followsGained    Int?
+  watchThrough     Float?
+  actualPercentile Float?
+  shaunNotes       String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+}
+
+model ScoreCalibration {
+  id         String   @id @default(cuid())
+  runId      String
+  predicted  Float
+  actual     Float
+  dimension  String?
+  recordedAt DateTime @default(now())
+}

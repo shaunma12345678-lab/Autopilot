@@ -21,7 +21,7 @@ const ZORI_URL = "https://files.zillowstatic.com/research/public_csvs/zori/Metro
 const ZHVI_URL = "https://files.zillowstatic.com/research/public_csvs/zhvi/Metro_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv"
 const PMMS_URL = "https://www.freddiemac.com/pmms/docs/PMMS_history.csv"
 
-interface MetroSeries { name: string; state: string; last: number; yoy: number | null; m3Annualized: number | null; y3Annual: number | null; drawdown10y: number | null }
+interface MetroSeries { name: string; state: string; last: number; yoy: number | null; m3Annualized: number | null; y3Annual: number | null; y5Annual: number | null; y10Annual: number | null; drawdown10y: number | null }
 
 const seriesCache = new Map<string, { at: number; rows: MetroSeries[] }>()
 const CACHE_TTL = 24 * 60 * 60 * 1000
@@ -67,7 +67,7 @@ async function loadZillow(url: string, key: string): Promise<MetroSeries[]> {
       }
       const last = at(0)
       if (!name || last == null) continue
-      const m12 = at(12), m3 = at(3), m36 = at(36)
+      const m12 = at(12), m3 = at(3), m36 = at(36), m60 = at(60), m120 = at(120)
       const pct = (a: number, b: number | null) => (b ? Math.round(((a / b - 1) * 100) * 10) / 10 : null)
       // Max drawdown over the trailing ~10 years.
       let peak = 0, dd = 0
@@ -82,6 +82,8 @@ async function loadZillow(url: string, key: string): Promise<MetroSeries[]> {
         yoy: pct(last, m12),
         m3Annualized: m3 ? Math.round((Math.pow(last / m3, 4) - 1) * 1000) / 10 : null,
         y3Annual: m36 ? Math.round((Math.pow(last / m36, 1 / 3) - 1) * 1000) / 10 : null,
+        y5Annual: m60 ? Math.round((Math.pow(last / m60, 1 / 5) - 1) * 1000) / 10 : null,
+        y10Annual: m120 ? Math.round((Math.pow(last / m120, 1 / 10) - 1) * 1000) / 10 : null,
         drawdown10y: peak > 0 ? Math.round(dd * 1000) / 10 : null,
       })
     }
@@ -210,9 +212,13 @@ export interface RentalIntel {
   metro: string | null
   rentYoY: number | null
   rent3yrAnnual: number | null
+  rent5yrAnnual: number | null
   zoriRent: number | null
   priceYoY: number | null
   priceMomentum: number | null   // 3-mo annualized
+  price3yrAnnual: number | null
+  price5yrAnnual: number | null
+  price10yrAnnual: number | null
   zhviValue: number | null
   drawdown10y: number | null
   mortgageRate: number | null
@@ -390,9 +396,13 @@ export async function buildRentalIntel(city: string, state: string, f: Fundament
     metro: zhvi?.name ?? zori?.name ?? null,
     rentYoY: zori?.yoy ?? null,
     rent3yrAnnual: zori?.y3Annual ?? null,
+    rent5yrAnnual: zori?.y5Annual ?? null,
     zoriRent: zori?.last != null ? Math.round(zori.last) : null,
     priceYoY: zhvi?.yoy ?? null,
     priceMomentum: zhvi?.m3Annualized ?? null,
+    price3yrAnnual: zhvi?.y3Annual ?? null,
+    price5yrAnnual: zhvi?.y5Annual ?? null,
+    price10yrAnnual: zhvi?.y10Annual ?? null,
     zhviValue: zhvi?.last != null ? Math.round(zhvi.last) : null,
     drawdown10y: zhvi?.drawdown10y ?? null,
     mortgageRate: rate,

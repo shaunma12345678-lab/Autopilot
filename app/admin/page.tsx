@@ -19,6 +19,7 @@ import AcquisitionCenter from "@/components/dashboard/AcquisitionCenter"
 import SellerFinder from "@/components/dashboard/SellerFinder"
 import PropertyIndexPanel from "@/components/dashboard/PropertyIndexPanel"
 import ViralIdeas from "@/components/dashboard/ViralIdeas"
+import ContentEngine from "@/components/dashboard/ContentEngine"
 import AIHelperWidget from "@/components/AIHelperWidget"
 import WorkspaceSync from "@/components/WorkspaceSync"
 
@@ -1984,7 +1985,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder" | "index" | "viral">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder" | "index" | "viral" | "content-engine">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2064,7 +2065,8 @@ export default function AdminPage() {
     { id: "pipeline",     label: "📋 Pipeline" },
     { id: "simulator",    label: "🎲 Deal Simulator" },
     { id: "voice",        label: "🎙 Voice" },
-    { id: "viral",        label: "🎬 Viral Ideas" },
+    { id: "viral",        label: "🎬 RE Content" },
+    { id: "content-engine", label: "🎬 Content Engine" },
     { id: "distress-map", label: "🗺️ Distress Map" },
     { id: "markets",      label: "📈 Markets" },
     { id: "fixers",       label: "🔧 Fixer-Uppers" },
@@ -2149,6 +2151,7 @@ export default function AdminPage() {
           {tab === "seller-finder" && <SellerFinder password={pw} />}
           {tab === "index" && <PropertyIndexPanel password={pw} />}
           {tab === "viral" && <ViralIdeas password={pw} />}
+          {tab === "content-engine" && <ContentEngine password={pw} />}
           {tab === "queue" && <QueuePanel password={pw} />}
           {tab === "integrations" && <ConnectorsPanel password={sessionStorage.getItem("ap_admin_pw") ?? password} />}
           {tab === "sandbox" && <SandboxTab password={pw} />}
