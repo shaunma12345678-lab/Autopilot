@@ -7,6 +7,7 @@ import { potentialScore, zipDensityMap, POTENTIAL_VERSION } from "@/lib/potentia
 import { applyOutcomes, computeForecastStats, emptyLedger } from "@/lib/forecast-ledger"
 import { indexSig, computeConfidence, SOURCE_TRUST } from "@/lib/property-index"
 import { hasFeature } from "@/lib/plans"
+import { dealBrief } from "@/lib/deal-brief"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
 function lead(over: Partial<ForeclosureLead> = {}): ForeclosureLead {
@@ -162,5 +163,27 @@ describe("plan gating", () => {
     expect(hasFeature("GROWTH", "deep-search")).toBe(true)         // legacy → STARTER-equivalent
     expect(hasFeature(null, "deep-search")).toBe(false)
     expect(hasFeature("ENTERPRISE", "inbound-sellers")).toBe(true)
+  })
+})
+
+describe("dealBrief (due diligence)", () => {
+  it("rich lead: high confidence, few gaps, explanation cites the verdict", () => {
+    const b = dealBrief(lead({ occupancy: "vacant", phone: "555-1234" } as never))
+    expect(b.confidence).toBeGreaterThanOrEqual(60)
+    expect(b.gaps.filter((g) => g.severity === "high")).toHaveLength(0)
+    expect(b.explanation).toContain("Verdict:")
+    expect(b.checklist.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it("thin lead: flags the blocking gaps with fixes, low confidence", () => {
+    const b = dealBrief(lead({ estimatedValue: null, avmValue: null, sqft: null, purchasePrice: null, ownerName: "", comps: [] }))
+    expect(b.confidence).toBeLessThan(45)
+    const keys = b.gaps.map((g) => g.key)
+    expect(keys).toContain("value")
+    expect(keys).toContain("owner")
+    for (const g of b.gaps) expect(g.fillWith.length).toBeGreaterThan(0)
+    // High-severity gaps must sort first.
+    const sev = b.gaps.map((g) => g.severity)
+    expect(sev.indexOf("high")).toBe(0)
   })
 })

@@ -15,6 +15,7 @@ import { loadBuyers, matchBuyers, BUYERS_EVENT, type Buyer } from "@/lib/buyers"
 import { predictPreForeclosure } from "@/lib/predictive"
 import { fuseSignals } from "@/lib/signal-fusion"
 import { exitOptions } from "@/lib/exit-options"
+import { dealBrief } from "@/lib/deal-brief"
 
 // Today's 30-yr rate — fetched once per session (module cache), null until it lands.
 let ratePromise: Promise<number | null> | null = null
@@ -85,6 +86,72 @@ function ExitPlaybook({ lead }: { lead: ForeclosureLead }) {
         )}
         {refi.buyerNote && <p className="text-[10px] text-gray-500 mt-0.5">{refi.buyerNote}</p>}
       </div>
+    </div>
+  )
+}
+
+const SEV_CLS: Record<string, string> = {
+  high: "bg-rose-950/50 border-rose-700/50 text-rose-200",
+  medium: "bg-amber-950/40 border-amber-700/40 text-amber-200",
+  low: "bg-gray-900/60 border-gray-700/50 text-gray-300",
+}
+
+// 🔬 Due diligence: what we know, every gap (with its dollar consequence and
+// the exact button that fills it), the pre-offer checklist, and a plain-English
+// explanation — deterministic from the numbers, nothing invented.
+function DueDiligence({ lead, a }: { lead: ForeclosureLead; a: DealAnalysisType }) {
+  const [expanded, setExpanded] = useState(false)
+  const brief = useMemo(() => dealBrief(lead, a), [lead, a])
+  const highGaps = brief.gaps.filter((g) => g.severity === "high").length
+
+  return (
+    <div className="bg-gray-900/60 border border-gray-700/50 rounded-lg px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] text-gray-300 font-bold uppercase tracking-wide">🔬 Due diligence — what we know, what we don&apos;t</span>
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${brief.confidence >= 70 ? "bg-emerald-600 text-white" : brief.confidence >= 45 ? "bg-amber-600 text-white" : "bg-gray-700 text-gray-200"}`} title={brief.confidenceLabel}>
+          {brief.confidence}% verified
+        </span>
+      </div>
+
+      {/* The explanation, in plain English */}
+      <p className="text-[11px] text-gray-200 leading-relaxed">{brief.explanation}</p>
+      <p className="text-[10px] text-gray-500 italic">{brief.sensitivity}</p>
+
+      {/* Gaps — severity-ranked, each with the fix */}
+      {brief.gaps.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Gaps {highGaps ? `· ${highGaps} high` : ""}</p>
+          {brief.gaps.map((g) => (
+            <div key={g.key} className={`rounded-lg border px-2 py-1.5 ${SEV_CLS[g.severity]}`}>
+              <p className="text-[11px] font-semibold">{g.severity === "high" ? "⛔" : g.severity === "medium" ? "⚠️" : "▫️"} {g.label}</p>
+              <p className="text-[10px] opacity-90">{g.why}</p>
+              <p className="text-[10px] font-semibold mt-0.5">Fix: {g.fillWith}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {brief.gaps.length === 0 && <p className="text-[10px] text-emerald-300">No data gaps — every core fact on this lead is filled.</p>}
+
+      <button onClick={() => setExpanded((v) => !v)} className="text-[10px] text-indigo-300 hover:text-indigo-200 font-semibold">
+        {expanded ? "Hide" : "Show"} verified facts ({brief.knowns.length}) &amp; pre-offer checklist ({brief.checklist.length})
+      </button>
+      {expanded && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="bg-gray-950/50 border border-gray-800 rounded-lg px-2 py-1.5">
+            <p className="text-[10px] font-bold text-emerald-300 uppercase tracking-wide mb-1">✓ What we know</p>
+            {brief.knowns.map((k) => (
+              <p key={k.label} className="text-[10px] text-gray-300"><span className="text-gray-500">{k.label}:</span> {k.value}</p>
+            ))}
+            {brief.knowns.length === 0 && <p className="text-[10px] text-gray-600">Almost nothing yet — enrich this lead first.</p>}
+          </div>
+          <div className="bg-gray-950/50 border border-gray-800 rounded-lg px-2 py-1.5">
+            <p className="text-[10px] font-bold text-sky-300 uppercase tracking-wide mb-1">☑ Before you offer</p>
+            {brief.checklist.map((c) => (
+              <p key={c.item} className="text-[10px] text-gray-300" title={c.because}>• {c.item} <span className="text-gray-600">— {c.because}</span></p>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -343,6 +410,9 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
 
       {/* Cash-buyer matches */}
       <BuyerMatch lead={lead} a={a} />
+
+      {/* 🔬 What we know, the gaps, and the pre-offer checklist */}
+      <DueDiligence lead={lead} a={a} />
 
       {/* 🧭 Every exit, ranked by chance of profit + the refinance angle */}
       <ExitPlaybook lead={lead} />
