@@ -46,7 +46,8 @@ export const EXPAND_SYSTEM: Record<string, string> = {
     "Expand the content idea into a beat-by-beat OUTLINE a creator can shoot from: 5-8 beats, each one line, hook → escalation → payoff → CTA that fits the voice. Plain text, numbered lines.",
   script:
     "Write the FULL WORD-FOR-WORD script a creator reads on camera — every spoken line written out completely, no placeholders, no 'talk about X here'. " +
-    "Open with the BEST HOOK verbatim (first 1.5 seconds). Structure for virality: hook → open loop → the receipts (use the RUN CONTEXT's real facts/numbers verbatim — never invent) → escalation → payoff that closes the loop → one natural CTA that fits this exact business and situation. " +
+    "Open with the BEST HOOK verbatim (first 1.5 seconds). Structure for virality: hook → open loop → the receipts (use the RUN CONTEXT's real facts/numbers verbatim) → escalation → payoff that closes the loop → one natural CTA that fits this exact business and situation. " +
+    "NUMBERS RULE: market/area statistics only from the RUN CONTEXT, verbatim. For the business's own internals (hours, reps, counts) use ONLY what the context states — otherwise write the line without a made-up figure ('countless reps', 'months of work'), never invent a specific number. " +
     "Include [b-roll / on-screen text] directions between lines. 45-90 seconds of speech unless the format is long. Written in THIS account's voice per the rules — sentences a human says out loud. Plain text.",
   caption:
     "Write the post CAPTION: first line re-hooks (it's what shows before '...more'), 2-4 short lines total, then 4-6 hashtags on the final line. Plain text.",
