@@ -63,6 +63,9 @@ interface MarketHistoryData {
   verdicts: TrendVerdict[]
   trajectory: "improving" | "mixed" | "declining" | "too-early"
 }
+interface IdealRow { key: string; label: string; ideal: string; actual: string; status: "meets" | "close" | "miss" | "unknown"; gap: string }
+interface IdealData { rows: IdealRow[]; laws: IdealRow[]; fitScore: number; metCount: number; totalKnown: number; summary: string }
+const IDEAL_ICON: Record<string, string> = { meets: "✅", close: "🟡", miss: "❌", unknown: "▫️" }
 const DIR_ICON: Record<string, string> = { improving: "📈", declining: "📉", flat: "➖" }
 const TRAJ_CLS: Record<string, string> = { improving: "bg-emerald-700/60 border-emerald-500/50 text-emerald-100", declining: "bg-rose-800/60 border-rose-600/50 text-rose-100", mixed: "bg-amber-700/50 border-amber-500/50 text-amber-100", "too-early": "bg-gray-800 border-gray-700 text-gray-300" }
 interface ChecklistRow { label: string; value: string; ok: "good" | "ok" | "bad"; why: string }
@@ -179,7 +182,7 @@ function MarketCard({ m, rank, onClick, busy, entry, rankBy }: { m: Market; rank
 export default function MarketAnalysis({ password }: { password: string }) {
   const [loading, setLoading] = useState<string | null>(null)   // city being analyzed
   const [error, setError]     = useState<string | null>(null)
-  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; rental: RentalIntelData | null; history: MarketHistoryData | null; fundConfigured: boolean } | null>(null)
+  const [report, setReport]   = useState<{ m: Market | { city: string; state: string }; market: MarketReport; strat: MarketStrategies; leads: ForeclosureLead[]; depth: number; fund: Fund | null; fundScore: number | null; fundReasons: string[]; upside: number | null; upsideReasons: string[]; factors: Factor[]; jobMoves: JobMovesData | null; rental: RentalIntelData | null; history: MarketHistoryData | null; ideal: IdealData | null; fundConfigured: boolean } | null>(null)
   const [manual, setManual]   = useState("")
   const [cached, setCached]   = useState<Record<string, CachedEntry>>({})
   const [rankBy, setRankBy]   = useState<RankBy>("overall")
@@ -219,7 +222,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
       })
       const data = await res.json()
       if (data?.error || !data?.report) { setError(data?.error ?? `No data for ${m.city} yet — run it again; the cache fills over time.`) }
-      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], factors: Array.isArray(data.factors) ? data.factors : [], jobMoves: data.jobMoves ?? null, rental: data.rental ?? null, history: data.history ?? null, fundConfigured: !!data.fundConfigured }) }
+      else { setReport({ m, market: data.report, strat: data.strat, leads: data.leads ?? [], depth, fund: data.fundamentals ?? null, fundScore: data.fundScore ?? null, fundReasons: data.fundReasons ?? [], upside: data.upside ?? null, upsideReasons: data.upsideReasons ?? [], factors: Array.isArray(data.factors) ? data.factors : [], jobMoves: data.jobMoves ?? null, rental: data.rental ?? null, history: data.history ?? null, ideal: data.ideal ?? null, fundConfigured: !!data.fundConfigured }) }
     } catch { setError("Analysis failed — try again.") }
     setLoading(null)
   }
@@ -230,7 +233,7 @@ export default function MarketAnalysis({ password }: { password: string }) {
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (report) {
-    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons, factors, jobMoves, rental, history } = report
+    const { m, market, strat, leads, depth, fund, fundScore, upside, upsideReasons, factors, jobMoves, rental, history, ideal } = report
     const tl = topLeads(leads)
     return (
       <div className="space-y-4">
@@ -309,6 +312,43 @@ export default function MarketAnalysis({ password }: { password: string }) {
           <StrategyCard title="Mid-term rental"     emoji="🛏" s={strat.midRental} />
           <StrategyCard title="Long-term rental"    emoji="🏘" s={strat.longRental} />
         </div>
+
+        {/* 🎯 vs the Ideal Market — targets, gaps, and the law layer */}
+        {ideal && (
+          <div className="bg-gray-900/60 border border-amber-500/25 rounded-2xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-amber-200">🎯 vs the Ideal Market <span className="text-[10px] font-normal text-gray-500">· the numbers you&apos;d aim for, and where this market stands</span></p>
+              <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${ideal.fitScore >= 75 ? "bg-emerald-700/60 border-emerald-500/50 text-emerald-100" : ideal.fitScore >= 50 ? "bg-amber-700/50 border-amber-500/50 text-amber-100" : "bg-rose-800/60 border-rose-600/50 text-rose-100"}`}>
+                Ideal fit {ideal.fitScore}/100 · {ideal.metCount}/{ideal.totalKnown} met
+              </span>
+            </div>
+            <p className="text-[12px] text-gray-300">{ideal.summary}</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead><tr className="text-gray-600 text-left"><th className="pr-3 pb-1">Criterion</th><th className="pr-3 pb-1">This market</th><th className="pr-3 pb-1">The ideal</th><th className="pb-1">Read</th></tr></thead>
+                <tbody>
+                  {ideal.rows.map((r) => (
+                    <tr key={r.key} className="border-t border-gray-800/60">
+                      <td className="pr-3 py-1 text-gray-300">{r.label}</td>
+                      <td className={`pr-3 py-1 font-bold ${r.status === "meets" ? "text-emerald-300" : r.status === "close" ? "text-amber-300" : r.status === "miss" ? "text-rose-300" : "text-gray-600"}`}>{r.actual}</td>
+                      <td className="pr-3 py-1 text-gray-500">{r.ideal}</td>
+                      <td className="py-1 text-gray-500">{IDEAL_ICON[r.status]} {r.gap}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="bg-gray-950/50 border border-gray-800 rounded-lg p-2.5">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">⚖️ The law layer — friendliness of this state & city</p>
+              {ideal.laws.map((l) => (
+                <p key={l.key} className="text-[11px] text-gray-300">
+                  {IDEAL_ICON[l.status]} <b>{l.label}</b>: <span className={l.status === "meets" ? "text-emerald-300" : l.status === "miss" ? "text-rose-300" : "text-amber-300"}>{l.actual}</span>
+                  <span className="text-gray-500"> (ideal: {l.ideal}) — {l.gap}</span>
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 📈 Over the Years — measured series + our own longitudinal tracker */}
         {history && (

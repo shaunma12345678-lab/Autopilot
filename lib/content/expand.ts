@@ -17,7 +17,24 @@ export async function expandIdea(ideaId: string, kind: string): Promise<{ body: 
     if (!idea) return null
     const profile = await P().brandProfile.findFirst({ where: { id: idea.brandProfileId } }).catch(() => null)
 
+    // Pull the FULL grounding the generation run saw (business description,
+    // area numbers, trends, exemplars) so the expansion is ultra-specific to
+    // the exact situation — not a generic take on the title.
+    let runContext = ""
+    try {
+      const { resolveLearningBusinessId } = await import("@/lib/learning-store")
+      const bizId = await resolveLearningBusinessId()
+      if (bizId) {
+        const row = await P().agentMemory.findFirst({ where: { businessId: bizId, agentSlug: "content-runs", key: `${idea.runId}:context` } })
+        if (row?.value) {
+          const parsed = JSON.parse(row.value) as { block?: string }
+          if (parsed?.block) runContext = String(parsed.block).slice(0, 3000)
+        }
+      }
+    } catch { /* expansion still works without it */ }
+
     const context = [
+      runContext ? `RUN CONTEXT (the business's exact situation & real numbers — use these):\n${runContext}` : "",
       profile ? `BUSINESS: ${profile.name} — ${profile.niche}` : "",
       profile?.voiceRules ? `VOICE RULES: ${profile.voiceRules}` : "",
       `PLATFORM: ${idea.platform} · FORMAT: ${idea.format}`,

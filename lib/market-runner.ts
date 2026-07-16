@@ -11,6 +11,7 @@ import { fetchFundamentals, fundamentalsScore, upsidePotential, investorFactors,
 import { discoverJobMoves, type JobMoves } from "@/lib/job-moves"
 import { buildRentalIntel, type RentalIntel } from "@/lib/rental-intel"
 import { recordSnapshot, buildMarketHistory, type MarketHistory } from "@/lib/market-history"
+import { buildIdealComparison, type IdealComparison } from "@/lib/market-ideal"
 import { opportunityScore } from "@/lib/opportunity"
 import type { ForeclosureLead } from "@/lib/agents/foreclosure-agent"
 
@@ -26,6 +27,7 @@ export interface MarketAnalysisResult {
   jobMoves:    JobMoves | null   // which employers are coming / going (web+AI, cached)
   rental:      RentalIntel | null // the LTR/MTR/STR deep dive (trend + law + proxies + today's-rate cash flow)
   history:     MarketHistory | null // over-the-years: measured series + our longitudinal tracker
+  ideal:       IdealComparison | null // this market vs the ideal-market benchmark + law friendliness
   fundConfigured: boolean
   leads:       ForeclosureLead[]   // top leads in the market (for the find-leads list)
   total:       number
@@ -48,6 +50,7 @@ export async function runMarketAnalysis(city: string, state: string, depth = 250
   const up0 = upsidePotential(fundamentals)
   const snaps = await recordSnapshot(city, state, fundamentals, { health: fs0?.score ?? null, upside: up0?.score ?? null }).catch(() => [])
   const history = buildMarketHistory(fundamentals, rental, snaps)
+  const ideal = buildIdealComparison(fundamentals, rental)
   const fs     = fs0
   const up     = up0
   // Return only the top leads by opportunity to keep the payload small.
@@ -60,6 +63,7 @@ export async function runMarketAnalysis(city: string, state: string, depth = 250
     jobMoves,
     rental,
     history,
+    ideal,
     fundConfigured: isFundamentalsConfigured(), leads, total: allLeads.length,
   }
 }
