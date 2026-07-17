@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       state: body.state,
       platforms: Array.isArray(body.platforms) ? body.platforms : undefined,
       count: typeof body.count === "number" ? body.count : undefined,
-      mode: body.mode === "individual" ? "individual" : "business",
+      mode: body.mode === "individual" || body.mode === "skit" || body.mode === "ad" ? body.mode : "business",
     })
     if (!result) return Response.json({ error: "Generation produced nothing usable — try again (the model may be rate-limited)." }, { status: 200 })
     return Response.json(result)

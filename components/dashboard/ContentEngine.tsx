@@ -28,7 +28,7 @@ export default function ContentEngine({ password }: { password?: string }) {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [profileId, setProfileId] = useState("")
   const [description, setDescription] = useState("")
-  const [mode, setMode] = useState<"business" | "individual">("business")
+  const [mode, setMode] = useState<"business" | "individual" | "skit" | "ad">("business")
   const [city, setCity] = useState("")
   const [stateAbbr, setStateAbbr] = useState("")
   const [count, setCount] = useState(10)
@@ -130,17 +130,25 @@ export default function ContentEngine({ password }: { password?: string }) {
 
       {/* The brief: who, where, and describe-it — plus how many ideas you want */}
       <div className="bg-gray-900/60 border border-fuchsia-500/25 rounded-2xl p-4 space-y-3">
-        {/* Business vs Individual — changes the GOAL the whole pipeline optimizes for */}
-        <div className="flex items-center gap-2">
-          <button onClick={() => setMode("business")}
-            className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${mode === "business" ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:text-white"}`}>
-            🏪 Business — bring in customers
-          </button>
-          <button onClick={() => setMode("individual")}
-            className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${mode === "individual" ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:text-white"}`}>
-            👤 Individual — grow a personal brand
-          </button>
-          <span className="text-[11px] text-gray-500">{mode === "business" ? "Every idea is a post YOUR business publishes to pull in paying customers." : "Every idea grows YOUR audience — personality and expertise are the product."}</span>
+        {/* Section picker — changes the GOAL the whole pipeline optimizes for */}
+        <div className="flex flex-wrap items-center gap-2">
+          {([
+            ["business", "🏪 Business"],
+            ["individual", "👤 Individual"],
+            ["skit", "🎭 Skits"],
+            ["ad", "📣 Ads"],
+          ] as const).map(([m, label]) => (
+            <button key={m} onClick={() => setMode(m)}
+              className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${mode === m ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:text-white"}`}>
+              {label}
+            </button>
+          ))}
+          <span className="text-[11px] text-gray-500">
+            {mode === "business" && "Every idea is a post YOUR business publishes to pull in paying customers."}
+            {mode === "individual" && "Every idea grows YOUR audience — personality and expertise are the product."}
+            {mode === "skit" && "Viral Reels/TikTok-style comedy skits set in YOUR business — the engine tracks what formats are going viral right now and adapts."}
+            {mode === "ad" && "Advertisements built to convert — hook, offer shown vividly, reason to act now, one CTA."}
+          </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select value={profileId} onChange={(e) => setProfileId(e.target.value)} className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-fuchsia-500">

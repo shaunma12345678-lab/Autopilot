@@ -56,7 +56,47 @@ const newsAdapter: TrendAdapter = {
   },
 }
 
-const ADAPTERS: TrendAdapter[] = [newsAdapter]
+const FORMAT_EXTRACT_SYSTEM =
+  "You extract VIRAL SHORT-FORM FORMATS (skit structures, POV templates, sounds, meme formats) currently working on TikTok and Instagram Reels, from news/press headlines about them. " +
+  'Return raw JSON: { "trends": [{ "platform": "TikTok/Reels"|"Shorts"|"all", "kind": "format"|"sound"|"meme", "label": string ≤ 60 chars (the format, named so a creator recognizes it), "description": string ≤ 120 chars (HOW the format works — the beat structure a business could adapt), "velocity": 0-100, "saturation": 0-100 (be harsh; formats mainstream for weeks are 70+) }] }. ' +
+  "Only formats actually supported by the headlines. Max 6. Never invent."
+
+// Adapter 2: viral-format hunter — niche-independent. Keeps finding what skit
+// and reel formats are working RIGHT NOW, so skit-mode generation adapts to
+// the moment instead of recycling last year's templates. Daily cron feeds it;
+// getActiveTrends' 21-day decay retires formats as they age out.
+const viralFormatAdapter: TrendAdapter = {
+  id: "viral-formats",
+  async fetch() {
+    const items = await newsSweep([
+      "TikTok viral trend this week",
+      "Instagram Reels trend format",
+      "viral skit trend TikTok",
+    ], 7).catch(() => [])
+    if (!items.length) return []
+    const corpus = items.map((n) => `- (${n.publishedAt || "recent"}) ${n.title} — ${n.snippet.slice(0, 120)}`).join("\n")
+    try {
+      const out = await runAgent(FORMAT_EXTRACT_SYSTEM, `Headlines:\n${corpus}`, { jsonMode: true, maxTokens: 900 })
+      const obj = typeof out === "string" ? JSON.parse(out.match(/\{[\s\S]*\}/)?.[0] ?? "{}") : out as Record<string, unknown>
+      const raw = Array.isArray((obj as Record<string, unknown>).trends) ? ((obj as Record<string, unknown>).trends as unknown[]) : []
+      return raw
+        .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
+        .map((t) => ({
+          platform: typeof t.platform === "string" ? t.platform.slice(0, 20) : "all",
+          kind: typeof t.kind === "string" ? t.kind.slice(0, 20) : "format",
+          label: typeof t.label === "string" ? t.label.slice(0, 80) : "",
+          description: typeof t.description === "string" ? t.description.slice(0, 160) : undefined,
+          velocity: typeof t.velocity === "number" ? Math.max(0, Math.min(100, t.velocity)) : undefined,
+          saturation: typeof t.saturation === "number" ? Math.max(0, Math.min(100, t.saturation)) : undefined,
+        }))
+        .filter((t) => t.label.length > 2)
+    } catch {
+      return []
+    }
+  },
+}
+
+const ADAPTERS: TrendAdapter[] = [newsAdapter, viralFormatAdapter]
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trendModel = () => (prisma as any).trendSignal

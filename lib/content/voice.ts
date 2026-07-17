@@ -16,8 +16,28 @@ export interface RunBrief {
   state?: string
   platforms?: string[]
   count?: number          // how many ideas the user wants back
-  mode?: "business" | "individual"   // grow a business's customers vs a personal brand
+  mode?: ContentMode
 }
+
+// What the whole pipeline optimizes for: business = customer acquisition,
+// individual = personal brand, skit = viral Reels/TikTok comedy anchored in
+// the business, ad = direct-response advertisements that convert.
+export type ContentMode = "business" | "individual" | "skit" | "ad"
+
+// Proven viral skit structures — the evergreen floor. Live trend formats from
+// the daily hunter layer on top of these so skit ideas ride what's working NOW.
+const SKIT_STRUCTURES = [
+  "POV: you're the customer/employee in a hyper-specific relatable moment",
+  "Expectation vs reality — what people think we do vs what actually happens",
+  "Types of customers — rapid-fire characters everyone recognizes",
+  "Staff overreaction — a tiny everyday thing treated as life-or-death",
+  "Overheard conversation — camera catches an absurd but believable exchange",
+  "The new employee's first day — everything that can go wrong, escalating",
+  "Boss made us do it — staff reluctantly performing something ridiculous",
+  "Silent skit to a trending sound — the audio carries the joke, business is the set",
+  "Recurring character series — one exaggerated persona customers come back for",
+  "Reply-to-comment skit — act out an answer to a real (or plausible) comment",
+]
 
 export interface AssembledContext {
   block: string
@@ -62,10 +82,22 @@ export async function assembleContext(profileId: string | null, brief: RunBrief)
     profileName = profile ? profileName : brief.description.trim().slice(0, 40)
     parts.push(`THE BUSINESS (the owner's own words — this DEFINES what the business is; every idea must be about THIS business): ${brief.description.trim().slice(0, 600)}`)
   }
-  const mode = brief.mode ?? "business"
-  parts.push(mode === "individual"
-    ? "GOAL: grow this INDIVIDUAL's personal audience and brand — ideas are posts they personally make; personality, story, and expertise are the product."
-    : "GOAL: bring PAYING CUSTOMERS through the door. Every idea must be a post THIS business itself would publish to attract ITS OWN customers — signature products, offers, events, behind-the-scenes, staff skits, customer moments, local hooks. Industry commentary or content about other businesses is off-goal.")
+  const mode: ContentMode = brief.mode ?? "business"
+  if (mode === "individual") {
+    parts.push("GOAL: grow this INDIVIDUAL's personal audience and brand — ideas are posts they personally make; personality, story, and expertise are the product.")
+  } else if (mode === "skit") {
+    parts.push(
+      "GOAL — SKIT MODE: every single idea is a complete COMEDY SKIT in the style of viral Instagram Reels / TikToks. Each premise must name: the characters, the hyper-relatable tension the audience recognizes in the first second, the escalation, and the punchline. " +
+      "Anchor every skit in THIS business's real everyday world — its staff, customers, product, and place ARE the set and cast — so laughing at it makes viewers want to show up and spend. " +
+      "Optimize for maximum viral chance: instantly relatable, replayable, sendable to a friend, duet/stitch-able. Prefer the freshest 'format' entries in ACTIVE TRENDS when one fits; otherwise build on these proven structures:\n" +
+      SKIT_STRUCTURES.map((s) => `- ${s}`).join("\n"))
+  } else if (mode === "ad") {
+    parts.push(
+      "GOAL — AD MODE: every idea is an ADVERTISEMENT built to convert viewers into paying customers and make this business money. Each premise must contain: a scroll-stopping opening, the product/offer shown vividly and specifically, a concrete reason to act NOW (offer, event, scarcity, deadline), and ONE clear call to action. " +
+      "Native to the platform — it should feel like a creator's video, never a corporate commercial — but its job is direct revenue. Vary the vehicles: testimonial-style, demo/result, founder-to-camera, before/after, offer reveal, us-vs-the-usual-way.")
+  } else {
+    parts.push("GOAL: bring PAYING CUSTOMERS through the door. Every idea must be a post THIS business itself would publish to attract ITS OWN customers — signature products, offers, events, behind-the-scenes, staff skits, customer moments, local hooks. Industry commentary or content about other businesses is off-goal.")
+  }
   parts.push(`ENABLED PLATFORMS: ${platforms.join(", ")}`)
 
   // 2) The area's real numbers + fresh local headlines, when a city is given.
