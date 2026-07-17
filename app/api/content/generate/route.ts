@@ -8,7 +8,7 @@ import { contentAuth } from "../_shared"
 
 export async function POST(request: NextRequest) {
   if (!(await contentAuth(request))) return Response.json({ error: "Unauthorized" }, { status: 401 })
-  let body: { profileId?: string; description?: string; city?: string; state?: string; platforms?: string[]; count?: number }
+  let body: { profileId?: string; description?: string; city?: string; state?: string; platforms?: string[]; count?: number; mode?: string }
   try { body = await request.json() } catch { return Response.json({ error: "Invalid JSON body" }, { status: 400 }) }
   try {
     const result = await runGeneration(body.profileId?.trim() || null, {
@@ -17,6 +17,7 @@ export async function POST(request: NextRequest) {
       state: body.state,
       platforms: Array.isArray(body.platforms) ? body.platforms : undefined,
       count: typeof body.count === "number" ? body.count : undefined,
+      mode: body.mode === "individual" ? "individual" : "business",
     })
     if (!result) return Response.json({ error: "Generation produced nothing usable — try again (the model may be rate-limited)." }, { status: 200 })
     return Response.json(result)

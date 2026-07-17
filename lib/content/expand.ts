@@ -15,7 +15,10 @@ export async function expandIdea(ideaId: string, kind: string): Promise<{ body: 
   try {
     const idea = await P().contentIdea.findFirst({ where: { id: ideaId } })
     if (!idea) return null
-    const profile = await P().brandProfile.findFirst({ where: { id: idea.brandProfileId } }).catch(() => null)
+    // The ad-hoc sentinel profile carries no real identity — the run context
+    // (the owner's own description) is the business for those ideas.
+    const profileRow = await P().brandProfile.findFirst({ where: { id: idea.brandProfileId } }).catch(() => null)
+    const profile = profileRow?.id === "bp-adhoc-001" ? null : profileRow
 
     // Pull the FULL grounding the generation run saw (business description,
     // area numbers, trends, exemplars) so the expansion is ultra-specific to

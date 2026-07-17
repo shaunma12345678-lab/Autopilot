@@ -28,6 +28,7 @@ export default function ContentEngine({ password }: { password?: string }) {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [profileId, setProfileId] = useState("")
   const [description, setDescription] = useState("")
+  const [mode, setMode] = useState<"business" | "individual">("business")
   const [city, setCity] = useState("")
   const [stateAbbr, setStateAbbr] = useState("")
   const [count, setCount] = useState(10)
@@ -79,7 +80,7 @@ export default function ContentEngine({ password }: { password?: string }) {
     try {
       const r = await fetch("/api/content/generate", {
         method: "POST", headers,
-        body: JSON.stringify({ profileId: profileId || undefined, description: description.trim() || undefined, city: city.trim() || undefined, state: stateAbbr.trim() || undefined, count }),
+        body: JSON.stringify({ profileId: profileId || undefined, description: description.trim() || undefined, city: city.trim() || undefined, state: stateAbbr.trim() || undefined, count, mode }),
       })
       const d = await r.json()
       if (d.error) setNote(d.error)
@@ -129,6 +130,18 @@ export default function ContentEngine({ password }: { password?: string }) {
 
       {/* The brief: who, where, and describe-it — plus how many ideas you want */}
       <div className="bg-gray-900/60 border border-fuchsia-500/25 rounded-2xl p-4 space-y-3">
+        {/* Business vs Individual — changes the GOAL the whole pipeline optimizes for */}
+        <div className="flex items-center gap-2">
+          <button onClick={() => setMode("business")}
+            className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${mode === "business" ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:text-white"}`}>
+            🏪 Business — bring in customers
+          </button>
+          <button onClick={() => setMode("individual")}
+            className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${mode === "individual" ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:text-white"}`}>
+            👤 Individual — grow a personal brand
+          </button>
+          <span className="text-[11px] text-gray-500">{mode === "business" ? "Every idea is a post YOUR business publishes to pull in paying customers." : "Every idea grows YOUR audience — personality and expertise are the product."}</span>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <select value={profileId} onChange={(e) => setProfileId(e.target.value)} className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-fuchsia-500">
             <option value="">Ad-hoc (no saved profile)</option>
@@ -144,7 +157,7 @@ export default function ContentEngine({ password }: { password?: string }) {
           <button onClick={generate} disabled={running} className="bg-fuchsia-600 hover:bg-fuchsia-500 disabled:opacity-50 text-white text-sm font-bold px-5 py-2 rounded-lg">{running ? "Running pipeline…" : "🎬 Generate"}</button>
         </div>
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
-          placeholder="Describe the business / this week's situation in your own words (optional, weighs heaviest) — e.g. “Volleyball club, tryouts open next month, we just won regionals, parents are our real buyers.”"
+          placeholder="Describe the business / this week's situation in your own words — this DEFINES what the ideas are about. Ask for formats too (“skits”, “reels”, “talking videos”). e.g. “Local coffee shop looking to bring in new customers — give me skits and talking videos.”"
           className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-fuchsia-500" />
         {stageNote && <p className="text-xs text-fuchsia-300 flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-gray-600 border-t-fuchsia-400 rounded-full animate-spin" />{stageNote}</p>}
         {note && <p className="text-xs text-emerald-200">{note}</p>}

@@ -12,8 +12,9 @@ const P = () => prisma as any
 export async function GET(request: NextRequest) {
   if (!(await contentAuth(request))) return Response.json({ error: "Unauthorized" }, { status: 401 })
   try {
-    const profiles = await P().brandProfile.findMany({ orderBy: { createdAt: "asc" }, take: 50 })
-    return Response.json({ profiles })
+    const profiles = await P().brandProfile.findMany({ orderBy: { createdAt: "asc" }, take: 50 }) as Array<{ id: string }>
+    // bp-adhoc-001 is the internal bucket that persists ad-hoc ideas — not a real profile.
+    return Response.json({ profiles: profiles.filter((p) => p.id !== "bp-adhoc-001") })
   } catch {
     return Response.json({ profiles: [] })
   }

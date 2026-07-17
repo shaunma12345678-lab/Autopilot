@@ -34,6 +34,27 @@ export interface RunResult {
   stages: { divergent: number; survivors: number; scored: number }
 }
 
+// Ad-hoc runs (no saved profile) still need a BrandProfile row so their ideas
+// persist and the Script/outline/caption buttons can find them later — a
+// sentinel profile holds every ad-hoc idea. Context assembly never uses it.
+const ADHOC_PROFILE_ID = "bp-adhoc-001"
+
+async function ensureAdhocProfile(): Promise<string | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const P = prisma as any
+  try {
+    const existing = await P.brandProfile.findFirst({ where: { id: ADHOC_PROFILE_ID } })
+    if (existing) return ADHOC_PROFILE_ID
+    await P.brandProfile.create({ data: {
+      id: ADHOC_PROFILE_ID, name: "Ad-hoc briefs", niche: "described per run",
+      platforms: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } })
+    return ADHOC_PROFILE_ID
+  } catch {
+    return null
+  }
+}
+
 function parse(out: unknown): Record<string, unknown> | null {
   if (out && typeof out === "object") return out as Record<string, unknown>
   if (typeof out === "string") { try { const m = out.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } catch { return null } }
@@ -137,7 +158,9 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
     if (Number.isInteger(idx) && hooks.length) hooksByIdx.set(idx, hooks)
   }
 
-  // Stage 6 — persist + return.
+  // Stage 6 — persist + return. Ad-hoc runs persist under the sentinel
+  // profile so expansion (Script/outline/caption/shotlist) can find the ideas.
+  const persistProfileId = profileId ?? await ensureAdhocProfile()
   const ideas: GeneratedIdea[] = []
   for (let i = 0; i < top.length; i++) {
     const t = top[i]
@@ -156,10 +179,10 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
       confidence: t.confidence,
     }
     ideas.push(idea)
-    if (profileId) {
+    if (persistProfileId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (prisma as any).contentIdea.create({ data: {
-        id, brandProfileId: profileId, runId,
+        id, brandProfileId: persistProfileId, runId,
         platform: idea.platform, format: idea.format, title: idea.title, premise: idea.premise,
         hooks: idea.hooks, angle: idea.angle, whyItTravels: idea.whyItTravels,
         viralityScore: idea.viralityScore, scoreBreakdown: idea.scoreBreakdown, confidence: idea.confidence,

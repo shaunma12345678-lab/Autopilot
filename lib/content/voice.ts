@@ -16,6 +16,7 @@ export interface RunBrief {
   state?: string
   platforms?: string[]
   count?: number          // how many ideas the user wants back
+  mode?: "business" | "individual"   // grow a business's customers vs a personal brand
 }
 
 export interface AssembledContext {
@@ -46,7 +47,10 @@ export async function assembleContext(profileId: string | null, brief: RunBrief)
     parts.push(`BUSINESS: ${profile.name} — ${profile.niche}`)
     if (profile.audienceNotes) parts.push(`AUDIENCE: ${profile.audienceNotes}`)
     if (profile.voiceRules) parts.push(`VOICE RULES (hard constraints): ${profile.voiceRules}`)
-  } else {
+  } else if (!brief.description?.trim()) {
+    // Only fall back to the platform's Business record when the user gave us
+    // NOTHING — if they described the business, that description IS the
+    // business (a coffee-shop brief must never inherit our own record).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const biz = await (prisma.business as any).findFirst({ orderBy: { createdAt: "asc" } }).catch(() => null)
     if (biz) {
@@ -55,8 +59,13 @@ export async function assembleContext(profileId: string | null, brief: RunBrief)
     }
   }
   if (brief.description?.trim()) {
-    parts.push(`OWNER'S OWN DESCRIPTION (weigh this heaviest — it's how they see the business today): ${brief.description.trim().slice(0, 600)}`)
+    profileName = profile ? profileName : brief.description.trim().slice(0, 40)
+    parts.push(`THE BUSINESS (the owner's own words — this DEFINES what the business is; every idea must be about THIS business): ${brief.description.trim().slice(0, 600)}`)
   }
+  const mode = brief.mode ?? "business"
+  parts.push(mode === "individual"
+    ? "GOAL: grow this INDIVIDUAL's personal audience and brand — ideas are posts they personally make; personality, story, and expertise are the product."
+    : "GOAL: bring PAYING CUSTOMERS through the door. Every idea must be a post THIS business itself would publish to attract ITS OWN customers — signature products, offers, events, behind-the-scenes, staff skits, customer moments, local hooks. Industry commentary or content about other businesses is off-goal.")
   parts.push(`ENABLED PLATFORMS: ${platforms.join(", ")}`)
 
   // 2) The area's real numbers + fresh local headlines, when a city is given.
@@ -79,7 +88,7 @@ export async function assembleContext(profileId: string | null, brief: RunBrief)
   // 3) Live trends — unsaturated only (saturated ones are liabilities).
   const trends = await getActiveTrends().catch(() => [])
   if (trends.length) {
-    parts.push(`ACTIVE TRENDS (unsaturated — riding or subverting these is a plus):\n${trends.slice(0, 8).map((t) => `- [${t.platform}/${t.kind}] ${t.label}${t.description ? ` — ${t.description.slice(0, 90)}` : ""}`).join("\n")}`)
+    parts.push(`ACTIVE TRENDS (unsaturated; USE ONLY those genuinely relevant to THIS business — ignore the rest):\n${trends.slice(0, 8).map((t) => `- [${t.platform}/${t.kind}] ${t.label}${t.description ? ` — ${t.description.slice(0, 90)}` : ""}`).join("\n")}`)
   }
 
   if (profile) {
