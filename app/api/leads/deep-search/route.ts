@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
 
   // If timed out but we got partial results from a global variable set above, use them
   // If no results at all, return empty
-  const result = searchResult ?? { leads: [], newLeads: [], sourceCounts: {}, total: 0, newTotal: 0 }
+  const result: Awaited<ReturnType<typeof deepSearch>> = searchResult ?? { leads: [], newLeads: [], sourceCounts: {}, total: 0, newTotal: 0 }
 
   const leads = result.leads
     .map(fl => { try { return freeLeadToForeclosureLead(fl) } catch { return null } })
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
     dataSource:   "deep-search",
     note:         timedOut
       ? `Returned ${leads.length} leads found within the time budget. Run again or try a smaller target for more.`
-      : `Found ${leads.length} leads from ${Object.keys(result.sourceCounts).length} sources.`,
+      : result.note ?? `Found ${leads.length} leads from ${Object.keys(result.sourceCounts).length} sources.`,
   })
 }
 

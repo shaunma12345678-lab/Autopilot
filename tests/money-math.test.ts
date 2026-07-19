@@ -187,3 +187,54 @@ describe("dealBrief (due diligence)", () => {
     expect(sev.indexOf("high")).toBe(0)
   })
 })
+
+describe("financingPlan (deal financing)", () => {
+  it("valued lead: ranked viable options with real payment math at today's rate", async () => {
+    const { financingPlan } = await import("@/lib/deal-financing")
+    const p = financingPlan(lead(), { todayRate: 6.5 })
+    expect(p.best).not.toBeNull()
+    expect(p.options.length).toBeGreaterThanOrEqual(3)
+    // Viable options must come before non-viable, sorted by fit within each group.
+    const firstNonViable = p.options.findIndex((o) => !o.viable)
+    if (firstNonViable >= 0) for (const o of p.options.slice(firstNonViable)) expect(o.viable).toBe(false)
+    // Every option with a cash-to-close has positive monthly + rate.
+    for (const o of p.options) {
+      if (o.cashToClose != null) {
+        expect(o.cashToClose).toBeGreaterThan(0)
+        expect(o.monthly ?? 1).toBeGreaterThan(0)
+      }
+    }
+    expect(p.headline).toContain("Best fit")
+  })
+
+  it("no-value lead: honest headline, no invented numbers", async () => {
+    const { financingPlan } = await import("@/lib/deal-financing")
+    const p = financingPlan(lead({ estimatedValue: null, avmValue: null, purchasePrice: null, totalLiens: 0 }), { todayRate: 6.5 })
+    expect(p.headline).toContain("No value")
+    expect(p.options.filter((o) => o.cashToClose != null)).toHaveLength(0)
+  })
+})
+
+describe("riskReport (deal risk)", () => {
+  it("SFHA flood + underwater liens → high flags, honest sources", async () => {
+    const { riskReport } = await import("@/lib/deal-risk")
+    const r = riskReport(lead({ totalLiens: 260000, estimatedValue: 200000 }), { floodZone: "AE" })
+    const keys = r.flags.map((f) => f.key)
+    expect(keys).toContain("flood")
+    expect(keys).toContain("underwater")
+    expect(r.flags.find((f) => f.key === "flood")?.severity).toBe("high")
+    expect(r.grade === "elevated" || r.grade === "high").toBe(true)
+    for (const f of r.flags) { expect(f.source.length).toBeGreaterThan(0); expect(["verified", "estimate"]).toContain(f.confidence) }
+    // High severity sorts first.
+    expect(r.flags[0].severity).toBe("high")
+  })
+
+  it("clean lead in zone X → low risk with clean checks listed", async () => {
+    const { riskReport } = await import("@/lib/deal-risk")
+    const r = riskReport(lead({ lienCount: 1, taxDelinquent: false, yearBuilt: 1985 }), { floodZone: "X", priceYoY: 3.2, landlordGrade: "A" })
+    expect(r.flags.filter((f) => f.severity === "high")).toHaveLength(0)
+    expect(r.grade === "low" || r.grade === "moderate").toBe(true)
+    expect(r.clean.join(" ")).toContain("Flood")
+    expect(r.clean.join(" ")).toContain("Landlord law")
+  })
+})

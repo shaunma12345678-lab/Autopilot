@@ -843,7 +843,7 @@ function LeadRow({ lead, sel, onToggle, saved, onSave, saving, businessId, apiHe
                 )}
                 {detailTab === "deal" && (
                   <div className="space-y-3">
-                    <DealAnalysis lead={lead} />
+                    <DealAnalysis lead={lead} apiHeaders={apiHeaders} />
                     {liens.length > 0 && (
                       <div className="bg-red-950/30 border border-red-500/25 rounded-lg p-2.5">
                         <p className="text-[10px] font-bold text-red-300 uppercase tracking-wider mb-1">⚠ Junior liens behind the first</p>
@@ -1519,7 +1519,7 @@ function ForeclosureTab({ businessId, apiBase, apiHeaders, onLeads }: { business
           ...l,
           city:  l.city  || p.city || "",
           state: l.state || p.state || "",
-          zip:   l.zip   || (p.searchType === "zip" ? p.zipCode : "") || "",
+          zip:   l.zip   || "",   // never stamp the searched ZIP onto ZIP-less leads — labels stay honest
         }))
         let finalLeads = fillComps(rawLeads)
         // Keep ALL leads in the result so the category chips show real numbers for

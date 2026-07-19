@@ -16,6 +16,8 @@ import { predictPreForeclosure } from "@/lib/predictive"
 import { fuseSignals } from "@/lib/signal-fusion"
 import { exitOptions } from "@/lib/exit-options"
 import { dealBrief } from "@/lib/deal-brief"
+import DealFinancing from "@/components/dashboard/DealFinancing"
+import DealRisk from "@/components/dashboard/DealRisk"
 
 // Today's 30-yr rate — fetched once per session (module cache), null until it lands.
 let ratePromise: Promise<number | null> | null = null
@@ -187,9 +189,19 @@ const GRADE_COLOR: Record<string, string> = {
   F: "bg-red-500 text-red-950",
 }
 
-export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
+export default function DealAnalysis({ lead, apiHeaders }: { lead: ForeclosureLead; apiHeaders?: Record<string, string> }) {
   const [level, setLevel] = useState<RepairLevel>(() => recommendedRepairLevel(lead))
-  const a = useMemo(() => analyzeDeal(lead, level), [lead, level])
+  // MAO target % is investor preference (spec: configurable, 70% rule default).
+  const [maoPct, setMaoPct] = useState<number>(() => {
+    if (typeof window === "undefined") return 0.7
+    const saved = Number(window.localStorage.getItem("ap_mao_pct"))
+    return saved >= 0.6 && saved <= 0.85 ? saved : 0.7
+  })
+  const pickMaoPct = (p: number) => {
+    setMaoPct(p)
+    try { window.localStorage.setItem("ap_mao_pct", String(p)) } catch { /* preference only */ }
+  }
+  const a = useMemo(() => analyzeDeal(lead, level, { maoPct }), [lead, level, maoPct])
 
   const stat = (label: string, value: string, accent?: string) => (
     <div className="bg-gray-900/50 rounded-lg px-2.5 py-1.5">
@@ -316,6 +328,16 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
           ))}
         </div>
         <div className="text-[10px] text-gray-600 mt-1">{REPAIR_LABEL[level]} → {fmtMoney(a.repairCost)} estimated</div>
+        <div className="flex items-center gap-1.5 mt-2">
+          <span className="text-[11px] text-gray-500">MAO rule:</span>
+          {[0.65, 0.7, 0.75, 0.8].map((p) => (
+            <button key={p} onClick={() => pickMaoPct(p)} title={`MAO = ARV × ${Math.round(p * 100)}% − repairs − fee`}
+              className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${maoPct === p ? "bg-indigo-600 text-white" : "bg-gray-800/70 text-gray-400 hover:text-white"}`}>
+              {Math.round(p * 100)}%
+            </button>
+          ))}
+          <span className="text-[10px] text-gray-600">competitive markets run 75-80%, thin ones 65-70%</span>
+        </div>
       </div>
 
       {/* Number grid */}
@@ -416,6 +438,12 @@ export default function DealAnalysis({ lead }: { lead: ForeclosureLead }) {
 
       {/* 🧭 Every exit, ranked by chance of profit + the refinance angle */}
       <ExitPlaybook lead={lead} />
+
+      {/* 💳 Every way to fund the purchase, ranked by fit */}
+      <DealFinancing lead={lead} />
+
+      {/* 🛑 The downside story: flood, law, title, market, timing */}
+      <DealRisk lead={lead} apiHeaders={apiHeaders} />
 
       {/* Narrative */}
       <p className="text-[11px] text-gray-300 italic bg-gray-900/50 rounded-lg px-3 py-2">{a.narrative}</p>

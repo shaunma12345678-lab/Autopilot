@@ -388,6 +388,7 @@ export interface DeepSearchResult {
   sourceCounts: Record<string, number>
   total:        number
   newTotal:     number
+  note?:        string
 }
 
 export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchResult> {
@@ -602,7 +603,27 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     ((STAGE_ORDER[a.foreclosureStage] ?? 5) - (STAGE_ORDER[b.foreclosureStage] ?? 5))
   )
 
-  const leads    = deduped.slice(0, maxLeads)
+  // ZIP precision — a ZIP search returns listings IN that ZIP (then its
+  // immediate 3-digit-prefix neighbors), never the whole city/state, unless
+  // the local pool is too thin to be useful on its own. Leads without a
+  // parsed ZIP can't prove they're local, so they only survive in the
+  // thin-pool fallback.
+  let pool = deduped
+  let zipNote: string | undefined
+  if (target.searchType === "zip" && target.zipCode) {
+    const exact  = deduped.filter((l) => l.zip === target.zipCode)
+    const nearby = deduped.filter((l) => l.zip !== target.zipCode && !!l.zip && l.zip.slice(0, 3) === tZip3)
+    if (exact.length >= Math.min(maxLeads, 10)) {
+      pool = exact
+      zipNote = `All ${Math.min(exact.length, maxLeads)} listings are inside ZIP ${target.zipCode}.`
+    } else if (exact.length + nearby.length >= 10) {
+      pool = [...exact, ...nearby]
+      zipNote = `${exact.length} listings inside ZIP ${target.zipCode}, plus ${Math.min(nearby.length, Math.max(maxLeads - exact.length, 0))} in neighboring ${tZip3}xx ZIPs (closest first).`
+    } else {
+      zipNote = `Only ${exact.length} listings found inside ZIP ${target.zipCode} right now — widened to the surrounding area, closest first. Try Deep Search again later or search the city for more.`
+    }
+  }
+  const leads    = pool.slice(0, maxLeads)
 
   // Persist the merged pool (fresh ∪ cached) so the area's lead count keeps
   // growing and never collapses on a later flaky run. Fire-and-forget.
@@ -651,5 +672,6 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
     sourceCounts: combinedSourceCounts,
     total:        leads.length,
     newTotal:     newLeads.length,
+    note:         zipNote,
   }
 }
