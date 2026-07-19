@@ -620,6 +620,9 @@ export async function deepSearch(params: DeepSearchParams): Promise<DeepSearchRe
       pool = [...exact, ...nearby]
       zipNote = `${exact.length} listings inside ZIP ${target.zipCode}, plus ${Math.min(nearby.length, Math.max(maxLeads - exact.length, 0))} in neighboring ${tZip3}xx ZIPs (closest first).`
     } else {
+      // Thin pool: widen, but never across a state line — a ZIP search in OH
+      // must not surface California leads from nationwide direct feeds.
+      pool = targetState ? deduped.filter((l) => !l.state || l.state.toUpperCase() === targetState) : deduped
       zipNote = `Only ${exact.length} listings found inside ZIP ${target.zipCode} right now — widened to the surrounding area, closest first. Try Deep Search again later or search the city for more.`
     }
   }
