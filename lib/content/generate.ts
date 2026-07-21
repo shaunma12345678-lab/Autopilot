@@ -77,15 +77,17 @@ async function logStage(runId: string, stage: string, payload: unknown): Promise
 
 export async function runGeneration(profileId: string | null, brief: RunBrief): Promise<RunResult | null> {
   const runId = crypto.randomUUID()
-  const want = Math.min(Math.max(brief.count ?? 10, 4), 24)
+  // Series mode: an ordered, connected N-part set — no culling, order preserved.
+  const seriesN = brief.series && brief.series > 1 ? Math.min(Math.floor(brief.series), 12) : 0
+  const want = seriesN || Math.min(Math.max(brief.count ?? 10, 4), 24)
 
   // Stage 1 — context.
   const ctx = await assembleContext(profileId, brief)
   await logStage(runId, "context", { block: ctx.block, promptVersion: PROMPT_VERSION })
 
-  // Stage 2 — divergent generation, wide. Ask for ~3× what the user wants.
-  const rawCount = Math.min(Math.max(want * 3, 24), 40)
-  const divOut = await runAgent(DIVERGENT_SYSTEM, `${ctx.block}\n\nGenerate ${rawCount} premises.`, { jsonMode: true, maxTokens: 6000 })
+  // Stage 2 — divergent generation. Series asks for exactly N; otherwise ~3×.
+  const rawCount = seriesN || Math.min(Math.max(want * 3, 24), 40)
+  const divOut = await runAgent(DIVERGENT_SYSTEM, `${ctx.block}\n\nGenerate ${rawCount} premises${seriesN ? ` as a single connected ${seriesN}-part series, in order` : ""}.`, { jsonMode: true, maxTokens: 6000 })
   const premisesRaw = (parse(divOut)?.premises ?? []) as unknown[]
   const premises: Premise[] = premisesRaw
     .filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
@@ -94,21 +96,26 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
       premise: String(p.premise ?? "").slice(0, 300),
       angle: String(p.angle ?? "").slice(0, 200),
       platform: String(p.platform ?? ctx.platforms[0] ?? "TikTok/Reels").slice(0, 24),
-      format: String(p.format ?? "reel").slice(0, 16),
+      format: String(p.format ?? "reel").slice(0, 24),
     }))
     .filter((p) => p.title.length > 4 && p.premise.length > 20)
-  if (premises.length < 4) return null
+  if (premises.length < (seriesN ? Math.min(seriesN, 3) : 4)) return null
   await logStage(runId, "divergent", premises)
 
-  // Stage 3 — harsh critique. If the model under-kills, we still cap survivors.
-  const listText = premises.map((p, i) => `${i}. [${p.platform}/${p.format}] ${p.title} — ${p.premise} (angle: ${p.angle})`).join("\n")
-  const critOut = await runAgent(CRITIQUE_SYSTEM, `${ctx.block.slice(0, 1500)}\n\nPREMISES:\n${listText}`, { jsonMode: true, maxTokens: 1500 })
-  const crit = parse(critOut)
-  let survivorIdx = ((crit?.survivors ?? []) as unknown[]).map(Number).filter((i) => Number.isInteger(i) && i >= 0 && i < premises.length)
-  if (!survivorIdx.length) survivorIdx = premises.map((_, i) => i)   // critique failed — keep all rather than lose the run
-  survivorIdx = [...new Set(survivorIdx)].slice(0, Math.max(want + 4, 12))
+  // Stage 3 — harsh critique (skipped for series: parts are meant to stay).
+  let survivorIdx: number[]
+  if (seriesN) {
+    survivorIdx = premises.map((_, i) => i).slice(0, seriesN)
+  } else {
+    const listText = premises.map((p, i) => `${i}. [${p.platform}/${p.format}] ${p.title} — ${p.premise} (angle: ${p.angle})`).join("\n")
+    const critOut = await runAgent(CRITIQUE_SYSTEM, `${ctx.block.slice(0, 1500)}\n\nPREMISES:\n${listText}`, { jsonMode: true, maxTokens: 1500 })
+    const crit = parse(critOut)
+    survivorIdx = ((crit?.survivors ?? []) as unknown[]).map(Number).filter((i) => Number.isInteger(i) && i >= 0 && i < premises.length)
+    if (!survivorIdx.length) survivorIdx = premises.map((_, i) => i)   // critique failed — keep all rather than lose the run
+    survivorIdx = [...new Set(survivorIdx)].slice(0, Math.max(want + 4, 12))
+    await logStage(runId, "critique", { survivors: survivorIdx, kills: crit?.kills ?? [], killRate: 1 - survivorIdx.length / premises.length })
+  }
   const survivors = survivorIdx.map((i) => premises[i])
-  await logStage(runId, "critique", { survivors: survivorIdx, kills: crit?.kills ?? [], killRate: 1 - survivorIdx.length / premises.length })
 
   // Load this profile's learned weights (defaults until the loop has data).
   let weights: DimensionWeights = normalizeWeights(null)
@@ -122,7 +129,7 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
   const survText = survivors.map((p, i) => `${i}. [${p.platform}/${p.format}] ${p.title} — ${p.premise} (angle: ${p.angle})`).join("\n")
   const scoreOut = await runAgent(SCORE_SYSTEM, `${ctx.block.slice(0, 2500)}\n\nIDEAS:\n${survText}`, { jsonMode: true, maxTokens: 6000 })
   const scoredRaw = (parse(scoreOut)?.scored ?? []) as unknown[]
-  interface ScoredRow { p: Premise; dims: ReturnType<typeof sanitizeDimensions>; rationales: Record<string, unknown>; confidence: number; whyItTravels: string; composite: number }
+  interface ScoredRow { p: Premise; srcIdx: number; dims: ReturnType<typeof sanitizeDimensions>; rationales: Record<string, unknown>; confidence: number; whyItTravels: string; composite: number }
   const scored: ScoredRow[] = []
   for (const s of scoredRaw) {
     if (!s || typeof s !== "object") continue
@@ -133,6 +140,7 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
     if (!dims) continue
     scored.push({
       p: survivors[idx],
+      srcIdx: idx,
       dims,
       rationales: (row.rationales && typeof row.rationales === "object" ? row.rationales : {}) as Record<string, unknown>,
       confidence: Math.max(0, Math.min(1, Number(row.confidence) || 0.5)),
@@ -141,7 +149,9 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
     })
   }
   if (!scored.length) return null
-  scored.sort((a, b) => b.composite - a.composite)
+  // Series keeps its authored order (Part 1→N); everything else ranks by score.
+  if (seriesN) scored.sort((a, b) => a.srcIdx - b.srcIdx)
+  else scored.sort((a, b) => b.composite - a.composite)
   const top = scored.slice(0, want)
   await logStage(runId, "scored", top.map((t) => ({ title: t.p.title, composite: t.composite, dims: t.dims })))
 

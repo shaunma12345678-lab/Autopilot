@@ -20,6 +20,7 @@ interface Idea {
 const DIM_LABEL: Record<string, string> = {
   hook: "Hook", share: "Share", save: "Save", novelty: "Novelty", trendTiming: "Trend timing",
   audienceFit: "Audience fit", voiceFit: "Voice fit", productionCost: "Cheap to make", downsideRisk: "Safe",
+  retention: "Gets stuck", conversion: "Converts",
 }
 const scoreCls = (s: number) => (s >= 70 ? "bg-emerald-600 text-white" : s >= 55 ? "bg-amber-600 text-white" : "bg-gray-700 text-gray-200")
 
@@ -32,6 +33,18 @@ export default function ContentEngine({ password }: { password?: string }) {
   const [city, setCity] = useState("")
   const [stateAbbr, setStateAbbr] = useState("")
   const [count, setCount] = useState(10)
+  // ── Advanced steering ──
+  const [showSteer, setShowSteer] = useState(false)
+  const [goal, setGoal] = useState("")
+  const [formats, setFormats] = useState<string[]>([])
+  const [audience, setAudience] = useState("")
+  const [tone, setTone] = useState<string[]>([])
+  const [avoid, setAvoid] = useState("")
+  const [reference, setReference] = useState("")
+  const [cta, setCta] = useState("")
+  const [offer, setOffer] = useState("")
+  const [series, setSeries] = useState(0)
+  const [durationSec, setDurationSec] = useState(0)
   const [running, setRunning] = useState(false)
   const [stageNote, setStageNote] = useState<string | null>(null)
   const [ideas, setIdeas] = useState<Idea[]>([])
@@ -80,7 +93,20 @@ export default function ContentEngine({ password }: { password?: string }) {
     try {
       const r = await fetch("/api/content/generate", {
         method: "POST", headers,
-        body: JSON.stringify({ profileId: profileId || undefined, description: description.trim() || undefined, city: city.trim() || undefined, state: stateAbbr.trim() || undefined, count, mode }),
+        body: JSON.stringify({
+          profileId: profileId || undefined, description: description.trim() || undefined,
+          city: city.trim() || undefined, state: stateAbbr.trim() || undefined, count, mode,
+          goal: goal || undefined,
+          formats: formats.length ? formats : undefined,
+          audience: audience.trim() || undefined,
+          tone: tone.length ? tone : undefined,
+          avoid: avoid.trim() || undefined,
+          reference: reference.trim() || undefined,
+          cta: cta.trim() || undefined,
+          offer: offer.trim() || undefined,
+          series: series > 1 ? series : undefined,
+          durationSec: durationSec > 0 ? durationSec : undefined,
+        }),
       })
       const d = await r.json()
       if (d.error) setNote(d.error)
@@ -167,6 +193,86 @@ export default function ContentEngine({ password }: { password?: string }) {
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
           placeholder="Describe the business / this week's situation in your own words — this DEFINES what the ideas are about. Ask for formats too (“skits”, “reels”, “talking videos”). e.g. “Local coffee shop looking to bring in new customers — give me skits and talking videos.”"
           className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-fuchsia-500" />
+
+        {/* Advanced steering — command exactly what you want */}
+        <button onClick={() => setShowSteer((v) => !v)} className="text-xs font-semibold text-fuchsia-300 hover:text-fuchsia-200">
+          {showSteer ? "▾" : "▸"} 🎯 Advanced steering — command exactly what you want{!showSteer && (goal || formats.length || audience || tone.length || avoid || reference || cta || offer || series > 1 || durationSec > 0) ? " (active)" : ""}
+        </button>
+        {showSteer && (
+          <div className="border border-gray-800 rounded-xl p-3 space-y-3 bg-gray-950/40">
+            <div className="grid md:grid-cols-2 gap-3">
+              {/* #1 Objective */}
+              <label className="text-[11px] text-gray-400 space-y-1 block">Objective — what a “win” is
+                <select value={goal} onChange={(e) => setGoal(e.target.value)} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white focus:outline-none focus:border-fuchsia-500">
+                  <option value="">Auto (from mode)</option>
+                  <option value="customers">Bring in customers</option>
+                  <option value="awareness">Maximize reach / awareness</option>
+                  <option value="appointments">Booked appointments</option>
+                  <option value="sell-item">Sell a specific item/listing</option>
+                  <option value="leads">Capture leads (DM/form)</option>
+                  <option value="loyalty">Repeat business / loyalty</option>
+                </select>
+              </label>
+              {/* #10 Platform length */}
+              <label className="text-[11px] text-gray-400 space-y-1 block">Target length
+                <select value={durationSec} onChange={(e) => setDurationSec(Number(e.target.value))} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white focus:outline-none focus:border-fuchsia-500">
+                  <option value={0}>Any</option>
+                  <option value={15}>~15s (TikTok/Reel)</option>
+                  <option value={30}>~30s</option>
+                  <option value={60}>~60s (Short)</option>
+                  <option value={90}>~90s</option>
+                  <option value={180}>~3 min (long)</option>
+                </select>
+              </label>
+            </div>
+
+            {/* #2 Formats */}
+            <div className="space-y-1">
+              <p className="text-[11px] text-gray-400">Force formats (leave empty for auto)</p>
+              <div className="flex flex-wrap gap-1.5">
+                {["skit", "talking-head", "voiceover-broll", "greenscreen-react", "carousel", "duet-stitch", "tutorial", "listicle"].map((f) => (
+                  <button key={f} onClick={() => setFormats((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f])}
+                    className={`text-[11px] px-2 py-1 rounded-lg border ${formats.includes(f) ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:text-white"}`}>{f}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* #4 Tone */}
+            <div className="space-y-1">
+              <p className="text-[11px] text-gray-400">Tone</p>
+              <div className="flex flex-wrap gap-1.5">
+                {["funny", "authoritative", "heartfelt", "bold", "educational", "luxury", "edgy", "wholesome"].map((t) => (
+                  <button key={t} onClick={() => setTone((p) => p.includes(t) ? p.filter((x) => x !== t) : [...p, t])}
+                    className={`text-[11px] px-2 py-1 rounded-lg border ${tone.includes(t) ? "bg-fuchsia-600 border-fuchsia-500 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:text-white"}`}>{t}</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              {/* #3 Audience */}
+              <input value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="#3 Target audience (e.g. first-time buyers, busy parents)" className="bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-fuchsia-500" />
+              {/* #8 Offer */}
+              <input value={offer} onChange={(e) => setOffer(e.target.value)} placeholder="#8 Offer to feature (e.g. $500 off, free valuation)" className="bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-fuchsia-500" />
+              {/* #8 CTA */}
+              <input value={cta} onChange={(e) => setCta(e.target.value)} placeholder="#8 Call to action (e.g. DM 'HOME', book online)" className="bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-fuchsia-500" />
+              {/* #6 Avoid */}
+              <input value={avoid} onChange={(e) => setAvoid(e.target.value)} placeholder="#6 Never do / avoid (e.g. no dancing, don't mention price)" className="bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-fuchsia-500" />
+            </div>
+
+            {/* #7 Reference */}
+            <input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="#7 Reverse-engineer a reference — paste a link or describe a video you loved (copies its STRUCTURE, not its topic)" className="w-full bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-fuchsia-500" />
+
+            {/* #9 Series */}
+            <label className="flex items-center gap-2 text-[11px] text-gray-400">#9 Make it a connected series:
+              <select value={series} onChange={(e) => setSeries(Number(e.target.value))} className="bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white focus:outline-none focus:border-fuchsia-500">
+                <option value={0}>No — standalone ideas</option>
+                {[3, 4, 5, 6, 8, 10].map((n) => <option key={n} value={n}>{n}-part series</option>)}
+              </select>
+              <span className="text-gray-600">(overrides Ideas count)</span>
+            </label>
+          </div>
+        )}
+
         {stageNote && <p className="text-xs text-fuchsia-300 flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-gray-600 border-t-fuchsia-400 rounded-full animate-spin" />{stageNote}</p>}
         {note && <p className="text-xs text-emerald-200">{note}</p>}
       </div>

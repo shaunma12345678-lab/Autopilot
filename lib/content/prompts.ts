@@ -22,7 +22,8 @@ export const DIVERGENT_SYSTEM =
   `Cover as many DISTINCT angle families as possible (a run that returns ten variations of one angle is a failed run):\n${ANGLE_FAMILIES.join("\n")}\n` +
   "Ground every premise in the CONTEXT block (the business, its audience, its area's real numbers, live trends). Never invent statistics — use only numbers present in the context. " +
   "EVERY premise must be a post THE BUSINESS ITSELF publishes to pull in ITS OWN customers per the GOAL — name the business's actual product/offer/place in the premise. Industry commentary, news-anchor takes, or ideas about OTHER businesses are automatic failures. Use concrete content styles: talking-to-camera, skit, POV, behind-the-scenes, before/after, customer-reaction, offer/event reveal. If the business description asks for specific formats (skits, reels, talking videos), MOST premises must use exactly those formats. " +
-  'Return raw JSON: { "premises": [{ "title": string ≤ 70 chars, "premise": string ≤ 240 chars (what the piece IS and its specific take), "angle": string (the family name + the specific tension in one line), "platform": string (from the enabled platforms), "format": "reel"|"carousel"|"short"|"long"|"thread"|"static"|"skit"|"talking" }] }. ' +
+  "OBEY THE STEERING in the CONTEXT block as HARD constraints, not suggestions: the OBJECTIVE, TARGET AUDIENCE, TONE, REQUIRED FORMATS, FEATURED OFFER, CALL TO ACTION, REFERENCE structure, SERIES instruction, TARGET LENGTH, and especially the 'DO NOT' list. Apply the ATTENTION ENGINEERING + CONVERSION rules to every single premise. " +
+  'Return raw JSON: { "premises": [{ "title": string ≤ 70 chars, "premise": string ≤ 240 chars (what the piece IS and its specific take), "angle": string (the family name + the specific tension in one line), "platform": string (from the enabled platforms), "format": "reel"|"carousel"|"short"|"long"|"thread"|"static"|"skit"|"talking-head"|"voiceover-broll"|"greenscreen-react"|"duet-stitch"|"tutorial"|"listicle" }] }. ' +
   "Write like a creator planning a shoot, not a marketer writing copy."
 
 export const CRITIQUE_SYSTEM =
@@ -33,9 +34,10 @@ export const CRITIQUE_SYSTEM =
 
 export const SCORE_SYSTEM =
   "You score content ideas for ONE specific account, dimension by dimension, each 0-100 with a one-line rationale. Score ruthlessly — 50 is average, reserve 80+ for exceptional. Dimensions: " +
-  "hook (survives the first 1.5s?), share (why would someone SEND this to a friend?), save (worth keeping?), novelty (vs what this feed has seen), trendTiming (riding a wave or after the peak — use the TRENDS block), audienceFit (lands with THIS audience?), voiceFit (could this operator plausibly say it?), productionCost (effort-to-payoff — high score = CHEAP to make), downsideRisk (high score = SAFE, low = cringe/backlash potential). " +
+  "hook (survives the first 1.5s?), share (why would someone SEND this to a friend?), save (worth keeping?), novelty (vs what this feed has seen), trendTiming (riding a wave or after the peak — use the TRENDS block), audienceFit (lands with THIS audience?), voiceFit (could this operator plausibly say it?), productionCost (effort-to-payoff — high score = CHEAP to make), downsideRisk (high score = SAFE, low = cringe/backlash potential), " +
+  "retention (will the viewer GET STUCK and watch to the end — open loop, re-watch reason, no slow intro?), conversion (does it drive the CONTEXT's OBJECTIVE/CTA — will the viewer take the next step toward buying/booking/leads? if there's no commercial pull, score this LOW). " +
   'Also output confidence 0-1 (how sure you are about this scoring) and whyItTravels: the explicit mechanism, falsifiable, ≥ 2 sentences — "it\'s engaging" is a rejected output. ' +
-  'Return raw JSON: { "scored": [{ "index": int, "dimensions": { "hook": n, "share": n, "save": n, "novelty": n, "trendTiming": n, "audienceFit": n, "voiceFit": n, "productionCost": n, "downsideRisk": n }, "rationales": { same keys, each ≤ 15 words }, "confidence": number, "whyItTravels": string } ] }.'
+  'Return raw JSON: { "scored": [{ "index": int, "dimensions": { "hook": n, "share": n, "save": n, "novelty": n, "trendTiming": n, "audienceFit": n, "voiceFit": n, "productionCost": n, "downsideRisk": n, "retention": n, "conversion": n }, "rationales": { same keys, each ≤ 15 words }, "confidence": number, "whyItTravels": string } ] }.'
 
 export const HOOKS_SYSTEM =
   "You write competing HOOKS — the first line / first 1.5 seconds — for content ideas. Hooks are where content lives or dies. " +
