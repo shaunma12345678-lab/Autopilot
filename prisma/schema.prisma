@@ -473,3 +473,50 @@ model ScoreCalibration {
   dimension  String?
   recordedAt DateTime @default(now())
 }
+
+// ── Finance Operator (own bank-data engine — no Plaid) ──────────────────────
+
+model FinanceAccount {
+  id          String    @id
+  businessId  String
+  name        String
+  institution String?
+  kind        String    @default("checking")   // checking | savings | card | stripe
+  currency    String    @default("USD")
+  balance     Float?
+  balanceAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model FinanceTxn {
+  id            String   @id
+  accountId     String
+  businessId    String
+  date          DateTime @db.Date
+  amount        Float                       // + income, − expense
+  name          String                      // raw statement descriptor
+  merchant      String                      // normalized merchant
+  category      String   @default("other")
+  catConfidence Float    @default(0)
+  catSource     String   @default("none")   // user | rule | builtin | keyword | ai
+  recurring     Boolean  @default(false)
+  transfer      Boolean  @default(false)
+  source        String   @default("csv")    // csv | ofx | qif | stripe
+  hash          String   @unique            // stable dedupe signature
+  meta          Json?
+  createdAt     DateTime @default(now())
+
+  @@index([businessId, date(sort: Desc)])
+  @@index([merchant])
+}
+
+model FinanceRule {
+  id         String   @id
+  businessId String
+  merchant   String
+  category   String
+  createdAt  DateTime @default(now())
+
+  @@unique([businessId, merchant])
+}

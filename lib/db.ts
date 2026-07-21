@@ -177,6 +177,9 @@ export const db = {
   trendSignal:      model("TrendSignal"),
   contentOutcome:   model("ContentOutcome"),
   scoreCalibration: model("ScoreCalibration"),
+  financeAccount:   model("FinanceAccount"),
+  financeTxn:       model("FinanceTxn"),
+  financeRule:      model("FinanceRule"),
 
   // Prisma transaction compatibility — runs promises sequentially
   $transaction: async (fns: unknown[]) => {
