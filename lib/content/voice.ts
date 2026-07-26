@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma"
 import { fetchFundamentals } from "@/lib/market-fundamentals"
 import { newsSweep } from "@/lib/own-access"
 import { getActiveTrends } from "@/lib/content/trends"
+import { getSteerHints, steerHintDirectives } from "@/lib/content/steer-hints"
 
 export interface RunBrief {
   description?: string    // "just describe it" free text
@@ -150,6 +151,8 @@ export async function assembleContext(profileId: string | null, brief: RunBrief)
   // Steering commands (objective, audience, tone, formats, offer, CTA,
   // reference, series, length, don'ts) + the attention/conversion science.
   for (const d of steeringDirectives(brief)) parts.push(d)
+  // "More like this / less like this" learned from the operator's thumbs.
+  for (const d of steerHintDirectives(await getSteerHints(profileId).catch(() => ({ more: [], less: [] })))) parts.push(d)
   parts.push(STICK_AND_CONVERT)
 
   parts.push(`ENABLED PLATFORMS: ${platforms.join(", ")}`)

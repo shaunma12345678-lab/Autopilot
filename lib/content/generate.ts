@@ -171,6 +171,13 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
   // Stage 6 — persist + return. Ad-hoc runs persist under the sentinel
   // profile so expansion (Script/outline/caption/shotlist) can find the ideas.
   const persistProfileId = profileId ?? await ensureAdhocProfile()
+  // The steering this run used — stored per idea so the engine can later learn
+  // which objective/tone/format actually drove reach AND foot traffic.
+  const steering = {
+    goal: brief.goal ?? null, mode: brief.mode ?? "business",
+    tone: brief.tone ?? [], formats: brief.formats ?? [],
+    audience: brief.audience ?? null, series: brief.series ?? null,
+  }
   const ideas: GeneratedIdea[] = []
   for (let i = 0; i < top.length; i++) {
     const t = top[i]
@@ -196,7 +203,7 @@ export async function runGeneration(profileId: string | null, brief: RunBrief): 
         platform: idea.platform, format: idea.format, title: idea.title, premise: idea.premise,
         hooks: idea.hooks, angle: idea.angle, whyItTravels: idea.whyItTravels,
         viralityScore: idea.viralityScore, scoreBreakdown: idea.scoreBreakdown, confidence: idea.confidence,
-        status: "new", createdAt: new Date().toISOString(),
+        steering, status: "new", createdAt: new Date().toISOString(),
       } }).catch(() => null)
     }
   }

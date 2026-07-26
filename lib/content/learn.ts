@@ -25,6 +25,10 @@ export interface OutcomeInput {
   saves?: number
   followsGained?: number
   watchThrough?: number
+  hookUsed?: string       // which hook variant was posted (hook tournament)
+  couponCode?: string     // the code tied to this post (conversion tracking)
+  redemptions?: number    // real customers through the door
+  revenue?: number        // real $ attributed
   shaunNotes?: string
 }
 
@@ -46,13 +50,19 @@ export async function logOutcome(input: OutcomeInput): Promise<{ ok: boolean; pe
         publishedAt: input.publishedAt ?? now, postUrl: input.postUrl ?? null,
         views: input.views ?? null, likes: input.likes ?? null, comments: input.comments ?? null,
         shares: input.shares ?? null, saves: input.saves ?? null, followsGained: input.followsGained ?? null,
-        watchThrough: input.watchThrough ?? null, shaunNotes: input.shaunNotes ?? null,
+        watchThrough: input.watchThrough ?? null,
+        hookUsed: input.hookUsed ?? null, couponCode: input.couponCode ?? null,
+        redemptions: input.redemptions ?? null, revenue: input.revenue ?? null,
+        shaunNotes: input.shaunNotes ?? null,
         updatedAt: now, createdAt: now,
       },
       update: {
         views: input.views ?? null, likes: input.likes ?? null, comments: input.comments ?? null,
         shares: input.shares ?? null, saves: input.saves ?? null, followsGained: input.followsGained ?? null,
-        watchThrough: input.watchThrough ?? null, shaunNotes: input.shaunNotes ?? null, postUrl: input.postUrl ?? null,
+        watchThrough: input.watchThrough ?? null,
+        hookUsed: input.hookUsed ?? null, couponCode: input.couponCode ?? null,
+        redemptions: input.redemptions ?? null, revenue: input.revenue ?? null,
+        shaunNotes: input.shaunNotes ?? null, postUrl: input.postUrl ?? null,
       },
     })
 

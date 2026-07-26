@@ -8,6 +8,7 @@
 // logging — the feedback loop that makes runs smarter over time.
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { couponFor } from "@/lib/content/attribution"
 
 interface Profile { id: string; name: string; niche: string; platforms: string[] }
 interface Idea {
@@ -15,6 +16,13 @@ interface Idea {
   hooks: string[]; angle: string; whyItTravels: string
   viralityScore: number; scoreBreakdown: { dimensions?: Record<string, number>; rationales?: Record<string, string> }
   confidence: number; status: string
+}
+interface LeverStat { value: string; label: string; n: number; avgImpact: number; totalRedemptions: number; totalRevenue: number }
+interface Insights {
+  n: number; ready: boolean; summary: string
+  byGoal: LeverStat[]; byTone: LeverStat[]; byFormat: LeverStat[]; byHookStyle: LeverStat[]
+  recommend: { goal?: string; tone?: string[]; formats?: string[]; hookStyle?: string }
+  topPosts: Array<{ title: string; impact: number; redemptions: number | null; revenue: number | null }>
 }
 
 const DIM_LABEL: Record<string, string> = {
@@ -52,7 +60,8 @@ export default function ContentEngine({ password }: { password?: string }) {
   const [note, setNote] = useState<string | null>(null)
   const [expansions, setExpansions] = useState<Record<string, string>>({})
   const [logFor, setLogFor] = useState<string | null>(null)
-  const [logForm, setLogForm] = useState({ views: "", likes: "", shares: "", saves: "", url: "" })
+  const [logForm, setLogForm] = useState({ views: "", likes: "", shares: "", saves: "", url: "", hookUsed: "", redemptions: "", revenue: "" })
+  const [insights, setInsights] = useState<Insights | null>(null)
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -74,6 +83,14 @@ export default function ContentEngine({ password }: { password?: string }) {
     } catch { /* keep current */ }
   }, [headers])
 
+  const loadInsights = useCallback(async (pid: string) => {
+    try {
+      const r = await fetch(`/api/content/insights?profileId=${encodeURIComponent(pid || "bp-adhoc-001")}`, { headers })
+      const d = await r.json()
+      if (!d.error) setInsights(d)
+    } catch { /* banner just hides */ }
+  }, [headers])
+
   useEffect(() => {
     const t = setTimeout(() => { void loadProfiles() }, 0)
     return () => clearTimeout(t)
@@ -83,6 +100,10 @@ export default function ContentEngine({ password }: { password?: string }) {
     const t = setTimeout(() => { void loadFeed(profileId) }, 0)
     return () => clearTimeout(t)
   }, [profileId, loadFeed])
+  useEffect(() => {
+    const t = setTimeout(() => { void loadInsights(profileId) }, 0)
+    return () => clearTimeout(t)
+  }, [profileId, loadInsights])
 
   const generate = async () => {
     setRunning(true); setNote(null)
@@ -124,6 +145,24 @@ export default function ContentEngine({ password }: { password?: string }) {
     try { await fetch("/api/content/ideas", { method: "PATCH", headers, body: JSON.stringify({ id, status }) }) } catch { /* optimistic */ }
   }
 
+  // #2 — thumbs that steer the next batch toward / away from this idea's pattern.
+  const steer = async (idea: Idea, direction: "more" | "less") => {
+    setNote(direction === "more" ? `👍 More like “${idea.title}” — next run leans this way.` : `👎 Less like “${idea.title}” — next run avoids this.`)
+    if (direction === "less") setIdeas((p) => p.filter((i) => i.id !== idea.id))
+    try { await fetch("/api/content/steer", { method: "POST", headers, body: JSON.stringify({ ideaId: idea.id, direction }) }) } catch { /* optimistic */ }
+  }
+
+  // #1 — one click loads the objective/tone/format the engine learned convert best.
+  const applyRecommendation = () => {
+    const r = insights?.recommend
+    if (!r) return
+    if (r.goal) setGoal(r.goal)
+    if (r.tone?.length) setTone(r.tone)
+    if (r.formats?.length) setFormats(r.formats)
+    setShowSteer(true)
+    setNote("🎯 Loaded your best-performing steering — generate to use it, or tweak first.")
+  }
+
   const expand = async (id: string, kind: string) => {
     setExpansions((e) => ({ ...e, [id]: "…writing…" }))
     try {
@@ -138,12 +177,19 @@ export default function ContentEngine({ password }: { password?: string }) {
     try {
       const r = await fetch("/api/content/outcomes", {
         method: "POST", headers,
-        body: JSON.stringify({ ideaId: id, views: n(logForm.views), likes: n(logForm.likes), shares: n(logForm.shares), saves: n(logForm.saves), postUrl: logForm.url.trim() || undefined }),
+        body: JSON.stringify({
+          ideaId: id, views: n(logForm.views), likes: n(logForm.likes), shares: n(logForm.shares), saves: n(logForm.saves),
+          postUrl: logForm.url.trim() || undefined,
+          hookUsed: logForm.hookUsed.trim() || undefined,
+          couponCode: couponFor(id),
+          redemptions: n(logForm.redemptions), revenue: n(logForm.revenue),
+        }),
       })
       const d = await r.json()
       setNote(d.ok ? `✓ Logged — that post ranks in the top ${100 - (d.percentile ?? 50)}% of this account's results. The engine just got smarter.` : "Logging failed — try again.")
-      setLogFor(null); setLogForm({ views: "", likes: "", shares: "", saves: "", url: "" })
+      setLogFor(null); setLogForm({ views: "", likes: "", shares: "", saves: "", url: "", hookUsed: "", redemptions: "", revenue: "" })
       void triage(id, "published")
+      void loadInsights(profileId)
     } catch { setNote("Logging failed — try again.") }
   }
 
@@ -153,6 +199,29 @@ export default function ContentEngine({ password }: { password?: string }) {
         <h3 className="text-lg font-bold text-white">🎬 Content Engine <span className="text-xs font-normal text-gray-500">— general business</span></h3>
         <p className="text-sm text-gray-400 mt-0.5">Reads your business first, grounds in your area&apos;s real numbers and live trends, generates wide, kills the derivative, scores every dimension, and learns from what you actually publish.</p>
       </div>
+
+      {/* #1 — what the engine has learned brings THIS account business */}
+      {insights && insights.n > 0 && (
+        <div className="bg-emerald-950/25 border border-emerald-600/30 rounded-2xl p-3 space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1">
+              <p className="text-[10px] text-emerald-300 font-bold uppercase tracking-wide">🧠 What&apos;s working for you</p>
+              <p className="text-sm text-gray-200 leading-relaxed mt-0.5">{insights.summary}</p>
+            </div>
+            {insights.ready && Object.keys(insights.recommend).length > 0 && (
+              <button onClick={applyRecommendation} className="shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2 rounded-lg">🎯 Use best steering</button>
+            )}
+          </div>
+          {(insights.byGoal.length > 0 || insights.byHookStyle.length > 0 || insights.byFormat.length > 0) && (
+            <div className="flex flex-wrap gap-1.5">
+              {insights.byGoal.slice(0, 1).map((s) => <span key={s.value} className="text-[10px] bg-gray-900/70 border border-gray-700 rounded px-1.5 py-0.5 text-emerald-200">🎯 {s.label} · impact {s.avgImpact}{s.totalRedemptions ? ` · ${s.totalRedemptions} walk-ins` : ""}</span>)}
+              {insights.byHookStyle.slice(0, 1).map((s) => <span key={s.value} className="text-[10px] bg-gray-900/70 border border-gray-700 rounded px-1.5 py-0.5 text-emerald-200">🪝 {s.label} hooks win</span>)}
+              {insights.byFormat.slice(0, 1).map((s) => <span key={s.value} className="text-[10px] bg-gray-900/70 border border-gray-700 rounded px-1.5 py-0.5 text-emerald-200">🎬 {s.label} format</span>)}
+              {insights.byTone.slice(0, 1).map((s) => <span key={s.value} className="text-[10px] bg-gray-900/70 border border-gray-700 rounded px-1.5 py-0.5 text-emerald-200">🎭 {s.label} tone</span>)}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* The brief: who, where, and describe-it — plus how many ideas you want */}
       <div className="bg-gray-900/60 border border-fuchsia-500/25 rounded-2xl p-4 space-y-3">
@@ -305,22 +374,47 @@ export default function ContentEngine({ password }: { password?: string }) {
                       <span key={k} className={`text-[10px] px-1.5 py-0.5 rounded border ${v >= 70 ? "bg-emerald-950/50 border-emerald-700/40 text-emerald-200" : v >= 50 ? "bg-gray-800 border-gray-700 text-gray-300" : "bg-rose-950/40 border-rose-800/40 text-rose-200"}`} title={idea.scoreBreakdown?.rationales?.[k] ?? ""}>{DIM_LABEL[k] ?? k}: {v}</span>
                     ))}
                   </div>
+                  {/* #4 — the coupon that ties a real walk-in back to this exact post */}
+                  <div className="flex items-center gap-2 bg-gray-950/50 border border-amber-700/30 rounded-lg px-2.5 py-1.5">
+                    <span className="text-[10px] text-amber-300 font-bold uppercase tracking-wide">🎟 Track walk-ins:</span>
+                    <code className="text-[11px] text-amber-200 font-mono bg-gray-900 px-1.5 py-0.5 rounded">{couponFor(idea.id)}</code>
+                    <span className="text-[10px] text-gray-500">say this code in the post — count redemptions when you log results, and the engine learns what drives real business.</span>
+                  </div>
                   <div className="flex flex-wrap gap-1.5">
                     {["outline", "script", "caption", "shotlist"].map((k) => (
                       <button key={k} onClick={() => expand(idea.id, k)} className="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg capitalize">📝 {k}</button>
                     ))}
+                    {/* #7 — one idea, every platform */}
+                    <button onClick={() => expand(idea.id, "repurpose")} className="bg-indigo-800/60 hover:bg-indigo-700 border border-indigo-700 text-indigo-100 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg">♻ All platforms</button>
                     <button onClick={() => triage(idea.id, "saved")} className="bg-emerald-700/60 hover:bg-emerald-600 text-white text-[11px] font-semibold px-2.5 py-1.5 rounded-lg">💾 Save</button>
                     <button onClick={() => setLogFor(logFor === idea.id ? null : idea.id)} className="bg-sky-700/60 hover:bg-sky-600 text-white text-[11px] font-semibold px-2.5 py-1.5 rounded-lg">📈 I posted this</button>
+                    {/* #2 — more/less like this */}
+                    <button onClick={() => steer(idea, "more")} className="bg-gray-800 hover:bg-emerald-700 border border-gray-700 text-gray-200 text-[11px] font-semibold px-2 py-1.5 rounded-lg" title="More like this next time">👍</button>
+                    <button onClick={() => steer(idea, "less")} className="bg-gray-800 hover:bg-rose-800 border border-gray-700 text-gray-200 text-[11px] font-semibold px-2 py-1.5 rounded-lg" title="Less like this next time">👎</button>
                     <button onClick={() => triage(idea.id, "killed")} className="bg-rose-900/60 hover:bg-rose-800 text-rose-100 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg">✕ Kill</button>
                   </div>
                   {expansions[idea.id] && <pre className="text-[11px] text-gray-300 whitespace-pre-wrap bg-gray-950/60 border border-gray-800 rounded-lg p-3 font-sans max-h-72 overflow-y-auto">{expansions[idea.id]}</pre>}
                   {logFor === idea.id && (
-                    <div className="flex flex-wrap items-center gap-1.5 bg-gray-950/60 border border-sky-800/40 rounded-lg p-2">
-                      {(["views", "likes", "shares", "saves"] as const).map((k) => (
-                        <input key={k} value={logForm[k]} onChange={(e) => setLogForm((f) => ({ ...f, [k]: e.target.value }))} placeholder={k} inputMode="numeric" className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[11px] text-white placeholder-gray-600 w-20 focus:outline-none focus:border-sky-500" />
-                      ))}
-                      <input value={logForm.url} onChange={(e) => setLogForm((f) => ({ ...f, url: e.target.value }))} placeholder="post URL (optional)" className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[11px] text-white placeholder-gray-600 flex-1 min-w-[120px] focus:outline-none focus:border-sky-500" />
-                      <button onClick={() => logOutcome(idea.id)} className="bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold px-3 py-1.5 rounded">Log it</button>
+                    <div className="space-y-1.5 bg-gray-950/60 border border-sky-800/40 rounded-lg p-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {(["views", "likes", "shares", "saves"] as const).map((k) => (
+                          <input key={k} value={logForm[k]} onChange={(e) => setLogForm((f) => ({ ...f, [k]: e.target.value }))} placeholder={k} inputMode="numeric" className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[11px] text-white placeholder-gray-600 w-20 focus:outline-none focus:border-sky-500" />
+                        ))}
+                        <input value={logForm.url} onChange={(e) => setLogForm((f) => ({ ...f, url: e.target.value }))} placeholder="post URL (optional)" className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[11px] text-white placeholder-gray-600 flex-1 min-w-[120px] focus:outline-none focus:border-sky-500" />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {/* #3 hook tournament — which hook you actually posted */}
+                        {idea.hooks?.length > 1 && (
+                          <select value={logForm.hookUsed} onChange={(e) => setLogForm((f) => ({ ...f, hookUsed: e.target.value }))} className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[11px] text-white max-w-[220px] focus:outline-none focus:border-sky-500">
+                            <option value="">Which hook did you use?</option>
+                            {idea.hooks.map((h, i) => <option key={i} value={h}>{`Hook ${i + 1}: ${h.slice(0, 40)}`}</option>)}
+                          </select>
+                        )}
+                        {/* #4 conversion */}
+                        <input value={logForm.redemptions} onChange={(e) => setLogForm((f) => ({ ...f, redemptions: e.target.value }))} placeholder="walk-ins/redemptions" inputMode="numeric" title={`Customers who used code ${couponFor(idea.id)}`} className="bg-gray-900 border border-amber-700/40 rounded px-2 py-1.5 text-[11px] text-white placeholder-gray-500 w-36 focus:outline-none focus:border-amber-500" />
+                        <input value={logForm.revenue} onChange={(e) => setLogForm((f) => ({ ...f, revenue: e.target.value }))} placeholder="$ revenue" inputMode="numeric" className="bg-gray-900 border border-amber-700/40 rounded px-2 py-1.5 text-[11px] text-white placeholder-gray-500 w-24 focus:outline-none focus:border-amber-500" />
+                        <button onClick={() => logOutcome(idea.id)} className="bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold px-3 py-1.5 rounded ml-auto">Log it</button>
+                      </div>
                     </div>
                   )}
                 </div>

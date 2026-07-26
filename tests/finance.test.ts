@@ -121,3 +121,24 @@ describe("summarizeBooks", () => {
     expect(s.briefing.join(" ")).toContain("Facebook Ads")
   })
 })
+
+// ── Content attribution & hook-style (pure) ─────────────────────────────────
+import { couponFor, hookStyle } from "@/lib/content/attribution"
+
+describe("content attribution", () => {
+  it("coupon is deterministic per idea and offer-flavored", () => {
+    expect(couponFor("idea-123")).toBe(couponFor("idea-123"))
+    expect(couponFor("idea-123")).not.toBe(couponFor("idea-999"))
+    expect(couponFor("x", "BOGO Latte")).toMatch(/^BOGOLA-/)
+    expect(couponFor("x")).toMatch(/^REEL-/)
+  })
+
+  it("classifies hook structural styles", () => {
+    expect(hookStyle("5 ways to fix your latte")).toBe("number-led")
+    expect(hookStyle("Are you making this coffee mistake?")).toBe("question")
+    expect(hookStyle("How I doubled my morning rush")).toBe("how-to")
+    expect(hookStyle("Stop ordering plain coffee")).toBe("bold-claim")
+    expect(hookStyle("Wait for it — the foam trick")).toBe("curiosity-gap")
+    expect(hookStyle("Our barista tried something wild today")).toBe("cold-open")
+  })
+})

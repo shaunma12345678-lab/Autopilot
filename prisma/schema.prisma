@@ -413,6 +413,7 @@ model ContentIdea {
   scoreBreakdown Json
   confidence     Float
   status         String       @default("new")
+  steering       Json?        // the brief's steering (goal/tone/formats/audience) — for learning what converts
   expansions     ContentExpansion[]
   outcome        ContentOutcome?
   createdAt      DateTime     @default(now())
@@ -460,6 +461,10 @@ model ContentOutcome {
   followsGained    Int?
   watchThrough     Float?
   actualPercentile Float?
+  hookUsed         String?     // which hook variant was actually posted (hook tournament)
+  couponCode       String?     // the code tied to this post (conversion tracking)
+  redemptions      Int?        // real business walked through the door from this post
+  revenue          Float?      // real $ attributed to this post
   shaunNotes       String?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt

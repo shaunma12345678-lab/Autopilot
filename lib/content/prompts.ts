@@ -57,4 +57,11 @@ export const EXPAND_SYSTEM: Record<string, string> = {
     "Write the post CAPTION: first line re-hooks (it's what shows before '...more'), 2-4 short lines total, then 4-6 hashtags on the final line. Plain text.",
   shotlist:
     "Write a SHOT LIST: numbered shots with framing, location, and what's said/shown in each. Practical for one person with a phone unless the profile says otherwise. Plain text.",
+  repurpose:
+    "Repurpose this ONE idea into a full multi-platform pack so the operator posts it EVERYWHERE from one shoot. Keep the viral hook intact and carry the CTA/offer into every version so each one still drives people through the door. Output these clearly-labeled sections, in order, plain text:\n" +
+    "=== TIKTOK / REEL (spoken script) ===\nThe word-for-word 20-40s script, opening on the best hook, [b-roll] cues, ending on the CTA.\n" +
+    "=== INSTAGRAM CAROUSEL ===\nSlide 1 (the hook) through Slide 5-7, one punchy line per slide, last slide = the CTA/offer.\n" +
+    "=== EMAIL ===\nSubject line (curiosity + benefit), then a 4-6 sentence email in the brand voice, one clear CTA button line.\n" +
+    "=== X / THREAD ===\nTweet 1 = the hook, 3-5 numbered tweets, last tweet = CTA. ≤ 270 chars each.\n" +
+    "=== GOOGLE BUSINESS / FACEBOOK POST ===\nA 3-4 sentence local post version with the offer and a 'come in' CTA for the people most likely to actually walk in.",
 }

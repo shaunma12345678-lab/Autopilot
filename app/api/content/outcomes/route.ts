@@ -18,6 +18,10 @@ export async function POST(request: NextRequest) {
     views: num(body.views), likes: num(body.likes), comments: num(body.comments),
     shares: num(body.shares), saves: num(body.saves), followsGained: num(body.followsGained),
     watchThrough: typeof body.watchThrough === "number" ? Math.max(0, Math.min(1, body.watchThrough)) : undefined,
+    hookUsed: typeof body.hookUsed === "string" ? body.hookUsed.slice(0, 200) : undefined,
+    couponCode: typeof body.couponCode === "string" ? body.couponCode.slice(0, 40) : undefined,
+    redemptions: num(body.redemptions),
+    revenue: typeof body.revenue === "number" && Number.isFinite(body.revenue) && body.revenue >= 0 ? Math.round(body.revenue) : undefined,
     shaunNotes: typeof body.notes === "string" ? body.notes.slice(0, 1000) : undefined,
   })
   return Response.json(result)
