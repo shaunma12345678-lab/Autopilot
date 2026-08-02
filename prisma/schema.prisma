@@ -93,6 +93,7 @@ model Business {
   agentMemory    AgentMemory[]
   fewShotExamples FewShotExample[]
   scheduledRuns  ScheduledRun[]
+  exchangeRequests ExchangeRequest[]
 
   @@index([userId])
 }
@@ -159,6 +160,9 @@ model Lead {
   earlyWarning         Boolean     @default(false)
   confidenceScore      Int?
   timeToDistressMonths Int?
+  assetClass           String      @default("residential")
+  propertyType         String?
+  estimatedValue       Float?
   rawSignals           RawSignal[]
   createdAt            DateTime    @default(now())
 
@@ -166,6 +170,7 @@ model Lead {
   @@index([status])
   @@index([earlyWarning])
   @@index([distressLayer])
+  @@index([assetClass])
 }
 
 model RawSignal {
@@ -179,12 +184,14 @@ model RawSignal {
   signalDate DateTime
   rawData    Json
   source     String
+  assetClass String   @default("residential")
   createdAt  DateTime @default(now())
 
   @@index([leadId])
   @@index([apn])
   @@index([county, signalType])
   @@index([address])
+  @@index([assetClass, signalType])
 }
 
 model Source {
@@ -195,6 +202,7 @@ model Source {
   lastSuccess DateTime?
   lastError   String?
   status      String    @default("active")
+  assetClass  String?
   updatedAt   DateTime  @updatedAt
   createdAt   DateTime  @default(now())
 
@@ -524,4 +532,290 @@ model FinanceRule {
   createdAt  DateTime @default(now())
 
   @@unique([businessId, merchant])
+}
+
+// ── Stocks vertical (SEC EDGAR fundamentals + proprietary quality scoring) ──
+model Ticker {
+  id                       String        @id @default(cuid())
+  cik                      String        @unique
+  symbol                   String        @unique
+  name                     String
+  sector                   String?
+  exchange                 String?
+
+  // Growth / profitability / returns
+  revenueTtm               Float?
+  revenueGrowthYoyPct      Float?
+  grossMarginPct           Float?
+  operatingMarginPct       Float?
+  netMarginPct             Float?
+  roePct                   Float?
+  roicPct                  Float?
+
+  // Balance sheet
+  debtToEquity             Float?
+  interestCoveragePct      Float?
+  currentRatio             Float?
+
+  // Cash flow quality
+  freeCashFlowTtm          Float?
+  fcfMarginPct             Float?
+  accrualsRatioPct         Float?
+
+  // Dividends
+  dividendYieldPct         Float?
+  payoutRatioEarningsPct   Float?
+  payoutRatioFcfPct        Float?
+  dividendGrowthStreakYears Int?
+
+  // Valuation (needs price feed)
+  priceUsd                 Float?
+  peRatio                  Float?
+  pfcfRatio                Float?
+  evEbitda                 Float?
+  pegRatio                 Float?
+
+  // Insider activity
+  insiderNetSharesTtm      Int?
+
+  // Validated academic composites (see lib/stock-scores/)
+  piotroskiScore           Int?          // 0-9, Piotroski (2000)
+  piotroskiDetail          Json?
+  altmanZScore             Float?        // Altman (1968) bankruptcy predictor
+  altmanZone               String?       // safe | grey | distress
+  beneishMScore            Float?        // Beneish (1999) earnings-manipulation detector
+  beneishFlag              Boolean?      // true when M > -1.78
+
+  // Price-derived (Stooq daily history)
+  momentum12m1Pct          Float?        // 12-month return excluding most recent month
+  pctFrom52WeekHigh        Float?
+  volatility30dPct         Float?        // annualized
+  maxDrawdown1yPct         Float?
+  betaVsSpy                Float?
+
+  // Dilution
+  sharesOutstanding        Float?
+  buybackYieldPct          Float?        // negative = dilution
+
+  // Sector-relative context
+  sicCode                  String?
+  sectorRelativeScore      Int?          // 0-100 vs. same-sector peers in our own dataset
+  sectorPeerCount          Int?
+
+  // Composite scoring + quality gate
+  qualityScore             Int?          // retained: the opportunity/fundamental-strength composite
+  qualityReasons           Json?
+  riskScore                Int?          // 0-100, higher = more risk (separate axis, mirrors Deal Card v2)
+  riskFlags                Json?
+  strengthTier             String?       // strong | mixed | weak  (descriptive summary of fundamentals)
+  actionSignal             String?       // buy | hold | pass — two-axis matrix (see lib/action-signal.ts)
+  actionRationale          String?
+  dataCompletenessPct      Int?
+  dataConfidence           String        @default("insufficient")   // insufficient | low | medium | high
+  fieldSources             Json?         // per-field { source, fetchedAt, isEstimate } attribution
+  earlyWarning             Boolean       @default(false)
+
+  lastScoredAt             DateTime?
+  signals                  TickerSignal[]
+  updatedAt                DateTime      @updatedAt
+  createdAt                DateTime      @default(now())
+
+  @@index([dataConfidence])
+  @@index([qualityScore])
+  @@index([riskScore])
+  @@index([lastScoredAt])
+  @@index([sicCode])
+}
+
+model TickerSignal {
+  id         String   @id @default(cuid())
+  tickerId   String
+  ticker     Ticker   @relation(fields: [tickerId], references: [id], onDelete: Cascade)
+  signalType String   // going_concern_8k | insider_selling_cluster | form4_sale | form4_buy
+  signalDate DateTime
+  rawData    Json
+  source     String
+  createdAt  DateTime @default(now())
+
+  @@index([tickerId])
+  @@index([signalType])
+}
+
+// ── Crypto vertical (market data + proprietary quality scoring) ──
+model CryptoAsset {
+  id                     String        @id @default(cuid())
+  coingeckoId            String        @unique
+  symbol                 String
+  name                   String
+
+  marketCapRank          Int?
+  priceUsd               Float?
+  volume24hUsd           Float?
+  marketCapUsd           Float?
+  priceChange24hPct      Float?
+  priceChange7dPct       Float?
+  circulatingSupplyPct   Float?
+
+  // "Dividend equivalent" + tokenomics
+  protocolRevenue30dUsd  Float?
+  stakingYieldPct        Float?
+  nextUnlockDate         DateTime?
+  nextUnlockPctSupply    Float?
+
+  // Dilution overhang
+  fdvUsd                 Float?
+  fdvToMcapRatio         Float?
+
+  // Dev / network activity
+  devActivityScore       Int?
+
+  // Contract identity (needed for on-chain security checks)
+  contractAddress        String?
+  chainId                String?
+  chainSlug              String?
+
+  // Token security / rug risk (GoPlus) — binary risk, highest-value crypto criteria
+  isHoneypot             Boolean?
+  isMintable             Boolean?
+  ownershipRenounced     Boolean?
+  lpLocked               Boolean?
+  isProxy                Boolean?
+  buyTaxPct              Float?
+  sellTaxPct             Float?
+  holderCount            Int?
+  topHolderPct           Float?        // largest single non-LP holder, % of supply
+  top10HolderPct         Float?
+  creatorPct             Float?
+  securityScore          Int?          // 0-100, higher = safer
+  securityFlags          Json?
+
+  // Market microstructure (volume is wash-tradeable; depth is much harder to fake)
+  orderbookDepth2PctUsd  Float?
+
+  // Self-computed from price history
+  volatility30dPct       Float?
+  maxDrawdown1yPct       Float?
+  btcCorrelation         Float?
+
+  // Composite scoring + quality gate
+  qualityScore           Int?
+  qualityReasons         Json?
+  riskScore              Int?          // 0-100, higher = more risk (separate axis)
+  riskFlags              Json?
+  strengthTier           String?       // strong | mixed | weak (descriptive summary of fundamentals)
+  actionSignal           String?       // buy | hold | pass — two-axis matrix (see lib/action-signal.ts)
+  actionRationale        String?
+  dataCompletenessPct    Int?
+  dataConfidence         String        @default("insufficient")   // insufficient | low | medium | high
+  fieldSources           Json?
+
+  lastScoredAt           DateTime?
+  signals                CryptoSignal[]
+  updatedAt              DateTime      @updatedAt
+  createdAt               DateTime     @default(now())
+
+  @@index([dataConfidence])
+  @@index([qualityScore])
+  @@index([riskScore])
+  @@index([lastScoredAt])
+}
+
+model CryptoSignal {
+  id         String      @id @default(cuid())
+  assetId    String
+  asset      CryptoAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  signalType String      // unlock_upcoming | liquidity_thin | dev_activity_drop
+  signalDate DateTime
+  rawData    Json
+  source     String
+  createdAt  DateTime    @default(now())
+
+  @@index([assetId])
+  @@index([signalType])
+}
+
+// ── 1031 exchange matching ──
+model ExchangeRequest {
+  id                      String    @id @default(cuid())
+  businessId              String
+  business                Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sellingPropertyAddress  String
+  saleClosingDate         DateTime
+  identificationDeadline  DateTime  // saleClosingDate + 45 days, IRS 1031 rule
+  closingDeadline         DateTime  // saleClosingDate + 180 days, IRS 1031 rule
+  targetPriceMin          Float?
+  targetPriceMax          Float?
+  targetPropertyType      String    @default("any") // residential | commercial | any
+  targetCounties          String[]  @default([])
+  status                  String    @default("active") // active | matched | closed | expired
+  notes                   String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  @@index([businessId])
+  @@index([status])
+}
+
+// ── Portfolio owner graph (entity resolution across distressed properties) ──
+model Entity {
+  id             String         @id @default(cuid())
+  canonicalName  String
+  entityType     String?        // llc | lp | corp | trust | individual
+  state          String?
+  propertyCount  Int            @default(0)
+  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime       @default(now())
+  aliases        EntityAlias[]
+  properties     EntityProperty[]
+
+  @@index([canonicalName])
+}
+
+model EntityAlias {
+  id         String   @id @default(cuid())
+  entityId   String
+  entity     Entity   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  alias      String
+  source     String
+  confidence Float    @default(0.5)
+  createdAt  DateTime @default(now())
+
+  @@index([entityId])
+  @@index([alias])
+}
+
+model EntityProperty {
+  id         String   @id @default(cuid())
+  entityId   String
+  entity     Entity   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  leadId     String   // soft reference to Lead.id, no formal relation (Lead is business-scoped/duplicated per-tenant; the entity graph is cross-tenant market intelligence)
+  address    String
+  assetClass String   @default("residential")
+  confidence Float    @default(0.5)
+  createdAt  DateTime @default(now())
+
+  @@index([entityId])
+  @@index([leadId])
+}
+
+// ── AI Underwriter track record (predicted vs actual outcome) ──
+model UnderwriteCall {
+  id               String    @id @default(cuid())
+  subjectType      String    // cre_lead | residential_lead | stock | crypto
+  subjectId        String    // soft reference — Lead.id / Ticker.id / CryptoAsset.id depending on subjectType
+  subjectLabel     String    // human-readable snapshot (address or symbol+name) at prediction time
+  verdict          String    // buy | pass | hold
+  predictedScore   Int
+  rationale        Json
+  confidenceAtCall Int
+  predictedAt      DateTime  @default(now())
+  reviewAt         DateTime  // when we should check the outcome
+  actualOutcome    String?   // closed_won | closed_lost | still_open | price_up | price_down | user_reported
+  actualOutcomeAt  DateTime?
+  correct          Boolean?
+  createdAt        DateTime  @default(now())
+
+  @@index([subjectType, subjectId])
+  @@index([reviewAt])
+  @@index([correct])
 }

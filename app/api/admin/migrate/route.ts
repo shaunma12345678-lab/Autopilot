@@ -28,6 +28,8 @@ export async function POST(request: NextRequest) {
     "Conversation", "Message", "AgentMemory",
     "FewShotExample", "CustomTool", "ScheduledRun",
     "RawSignal", "Source",
+    "Ticker", "TickerSignal", "CryptoAsset", "CryptoSignal",
+    "ExchangeRequest", "Entity", "EntityAlias", "EntityProperty", "UnderwriteCall",
   ]
 
   for (const t of tables) {

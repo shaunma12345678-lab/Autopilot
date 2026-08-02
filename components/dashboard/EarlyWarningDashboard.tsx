@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import SignalTimeline from "./SignalTimeline"
 import DealCalculator from "./DealCalculator"
+import FloodRiskCard from "./FloodRiskCard"
 
 interface RawSignalRow {
   id: string
@@ -453,11 +454,12 @@ export default function EarlyWarningDashboard({ businessId }: Props) {
 
                     <SignalTimeline signals={lead.signals} />
 
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                       <button onClick={() => setShowCalc(p => !p)}
                         className="px-4 py-2 bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold rounded-xl border border-indigo-500/40 transition-all">
                         {showCalc ? "Hide Calculator" : "Deal Calculator"}
                       </button>
+                      <FloodRiskCard leadId={lead.id} />
                     </div>
 
                     {showCalc && <DealCalculator prefillAddress={lead.name} />}

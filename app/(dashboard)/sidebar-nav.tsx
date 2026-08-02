@@ -38,7 +38,18 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/foreclosure-leads", label: "Pre-Foreclosure Leads", icon: "🏚" },
       { href: "/foreclosure-leads?tab=early-warning", label: "Early Warning",         icon: "⚡" },
+      { href: "/cre-leads",         label: "CRE Distress Leads",     icon: "🏢" },
+      { href: "/portfolio-owners",  label: "Portfolio Operators",    icon: "🗂" },
+      { href: "/1031-exchange",     label: "1031 Exchange Matching", icon: "🔄" },
       { href: "/agents",            label: "Agent Health",           icon: "🛰" },
+    ],
+  },
+  {
+    label: "Stocks & Crypto",
+    items: [
+      { href: "/markets",              label: "Markets Overview", icon: "📊" },
+      { href: "/markets?tab=crypto",   label: "Crypto",           icon: "🪙" },
+      { href: "/markets?tab=accuracy", label: "Scoring Accuracy", icon: "🎯" },
     ],
   },
   {

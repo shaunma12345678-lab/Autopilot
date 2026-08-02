@@ -16,6 +16,7 @@ import DealSimulator from "@/components/dashboard/DealSimulator"
 import VoiceAssistant from "@/components/dashboard/VoiceAssistant"
 import InboundSellers from "@/components/dashboard/InboundSellers"
 import AcquisitionCenter from "@/components/dashboard/AcquisitionCenter"
+import StocksCrypto from "@/components/dashboard/StocksCrypto"
 import SellerFinder from "@/components/dashboard/SellerFinder"
 import PropertyIndexPanel from "@/components/dashboard/PropertyIndexPanel"
 import ViralIdeas from "@/components/dashboard/ViralIdeas"
@@ -1986,7 +1987,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder" | "index" | "viral" | "content-engine" | "finance">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder" | "index" | "viral" | "content-engine" | "finance" | "stocks-crypto">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2056,6 +2057,7 @@ export default function AdminPage() {
     { id: "automations",  label: "Automations" },
     { id: "agent",        label: "🤖 Agent" },
     { id: "real-estate",  label: "🏚 Real Estate" },
+    { id: "stocks-crypto", label: "📈 Stocks & Crypto" },
     { id: "seller-finder", label: "🧲 Seller Finder" },
     { id: "index",        label: "🧬 The Index" },
     { id: "inbound",      label: "📥 Inbound Sellers" },
@@ -2137,6 +2139,7 @@ export default function AdminPage() {
           {tab === "real-estate" && (
             <AdminRealEstate password={pw} />
           )}
+          {tab === "stocks-crypto" && <StocksCrypto password={pw} />}
           {tab === "distress-map" && <AdminDistressMap password={pw} />}
           {tab === "markets" && <MarketAnalysis password={pw} />}
           {tab === "fixers" && <FixerUppers password={pw} />}

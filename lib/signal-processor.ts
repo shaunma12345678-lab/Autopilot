@@ -81,7 +81,8 @@ export interface ProcessResult {
 
 export async function processSignals(
   rawSignals: RawSignalInput[],
-  businessId: string
+  businessId: string,
+  assetClass: "residential" | "commercial" = "residential"
 ): Promise<ProcessResult> {
   let created = 0
   let updated = 0
@@ -99,11 +100,14 @@ export async function processSignals(
     const first = signals[0]
     const county = first.county
 
-    // Find or create matching lead by address
+    // Find or create matching lead by address, scoped to this asset class so a
+    // residential and commercial lead at a coincidentally identical address
+    // string never collide.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const existing = await (prisma.lead as any).findFirst({
       where: {
         businessId,
+        assetClass,
         name: { contains: first.address },
       },
     })
@@ -127,14 +131,19 @@ export async function processSignals(
       .map(t => t.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()))
       .join(", ")
 
+    const sourceLabel = assetClass === "commercial"
+      ? (layer === 1 ? "CMBS Distress" : "Commercial Early Warning")
+      : (layer === 1 ? "Pre-Foreclosure" : layer === 2 ? "Early Warning" : "Life Event")
+
     const leadData = {
       name: first.address,
-      source: `${layer === 1 ? "Pre-Foreclosure" : layer === 2 ? "Early Warning"  : "Life Event"} · ${county} · Layer ${layer}`,
+      source: `${sourceLabel} · ${county} · Layer ${layer}`,
       score: dealScore,
       distressLayer: layer,
       earlyWarning,
       confidenceScore,
       timeToDistressMonths: timeToDistressMonths ?? undefined,
+      assetClass,
       notes: [
         `Signals: ${distressSignalsSummary}`,
         hasVelocity ? "⚡ Signal velocity detected — accelerating distress" : null,
@@ -188,6 +197,7 @@ export async function processSignals(
           signalDate: new Date(sig.signalDate).toISOString(),
           rawData: sig.rawData,
           source: sig.source,
+          assetClass,
         },
       })
     }
@@ -202,6 +212,7 @@ export async function upsertSource(params: {
   layer: number
   success: boolean
   errorMsg?: string
+  assetClass?: "residential" | "commercial"
 }): Promise<void> {
   const now = new Date().toISOString()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -228,6 +239,7 @@ export async function upsertSource(params: {
         name: params.name,
         county: params.county,
         layer: params.layer,
+        assetClass: params.assetClass ?? null,
         lastSuccess: params.success ? now : null,
         lastError: params.success ? null : (params.errorMsg ?? "Unknown error"),
         status: params.success ? "active" : "error",

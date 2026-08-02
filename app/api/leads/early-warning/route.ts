@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
     const businessId = searchParams.get("businessId")
     const layerFilter = searchParams.get("layer") ? Number(searchParams.get("layer")) : null
     const earlyOnly = searchParams.get("earlyOnly") !== "false"
+    const assetClass = searchParams.get("assetClass") === "commercial" ? "commercial" : "residential"
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const business = await (prisma.business as any).findFirst({
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
     })
     if (!business) return Response.json({ error: "Business not found" }, { status: 404 })
 
-    const where: Record<string, unknown> = { businessId: (business as { id: string }).id }
+    const where: Record<string, unknown> = { businessId: (business as { id: string }).id, assetClass }
     if (earlyOnly) where.earlyWarning = true
     if (layerFilter) where.distressLayer = layerFilter
 

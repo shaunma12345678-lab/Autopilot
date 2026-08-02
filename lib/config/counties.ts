@@ -244,6 +244,13 @@ export const SIGNAL_LAYER_MAP: Record<string, 1 | 2 | 3> = {
   divorce: 3,
   obituary_match: 3,
   business_closure: 3,
+  // Commercial real estate (see lib/config/cre-counties.ts)
+  cmbs_special_servicing: 1,
+  sba_default: 1,
+  llc_bankruptcy: 1,
+  ucc_lien: 2,
+  commercial_code_violation: 2,
+  commercial_vacancy: 2,
 }
 
 export function getDistressLayer(signalTypes: string[]): 1 | 2 | 3 {

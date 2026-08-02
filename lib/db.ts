@@ -180,6 +180,15 @@ export const db = {
   financeAccount:   model("FinanceAccount"),
   financeTxn:       model("FinanceTxn"),
   financeRule:      model("FinanceRule"),
+  ticker:           model("Ticker"),
+  tickerSignal:     model("TickerSignal"),
+  cryptoAsset:      model("CryptoAsset"),
+  cryptoSignal:     model("CryptoSignal"),
+  exchangeRequest:  model("ExchangeRequest"),
+  entity:           model("Entity"),
+  entityAlias:      model("EntityAlias"),
+  entityProperty:   model("EntityProperty"),
+  underwriteCall:   model("UnderwriteCall"),
 
   // Prisma transaction compatibility — runs promises sequentially
   $transaction: async (fns: unknown[]) => {

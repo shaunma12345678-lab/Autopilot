@@ -12,6 +12,13 @@ const SIGNAL_CONFIG: Record<string, { label: string; color: string; dot: string;
   divorce:          { label: "Divorce / Dissolution",   color: "border-teal-500/40 bg-teal-500/8 text-teal-300",  dot: "bg-teal-400",    layer: 3 },
   obituary_match:   { label: "Owner Obituary Match",    color: "border-gray-500/40 bg-gray-500/8 text-gray-300",  dot: "bg-gray-400",    layer: 3 },
   business_closure: { label: "Business Closure",        color: "border-slate-500/40 bg-slate-500/8 text-slate-300", dot: "bg-slate-400",  layer: 3 },
+  // Commercial real estate (see lib/config/cre-counties.ts)
+  cmbs_special_servicing: { label: "CMBS Special Servicing", color: "border-red-500/40 bg-red-500/8 text-red-300", dot: "bg-red-500", layer: 1 },
+  sba_default:            { label: "SBA Loan Default",       color: "border-red-500/40 bg-red-500/8 text-red-300", dot: "bg-red-500", layer: 1 },
+  llc_bankruptcy:         { label: "LLC Bankruptcy Filing",  color: "border-red-600/50 bg-red-600/12 text-red-200", dot: "bg-red-600", layer: 1 },
+  ucc_lien:                { label: "UCC-1 Lien Filed",       color: "border-orange-500/40 bg-orange-500/8 text-orange-300", dot: "bg-orange-500", layer: 2 },
+  commercial_code_violation: { label: "Commercial Code Violation", color: "border-yellow-500/40 bg-yellow-500/8 text-yellow-300", dot: "bg-yellow-500", layer: 2 },
+  commercial_vacancy:      { label: "Commercial Vacancy Signal", color: "border-amber-500/40 bg-amber-500/8 text-amber-300", dot: "bg-amber-500", layer: 2 },
 }
 
 interface RawSignalRow {
