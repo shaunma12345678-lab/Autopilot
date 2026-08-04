@@ -8,8 +8,7 @@
 import { prisma } from "@/lib/prisma"
 import { resolveCik, getSubmissions, getCompanyFacts, searchGoingConcern } from "@/lib/edgar-client"
 import { normalizeFundamentals, extractSeries } from "@/lib/edgar-normalize"
-import { fetchStockPrice } from "@/lib/price-feed"
-import { fetchDailyHistory, getBenchmarkHistory, computePriceMetrics } from "@/lib/price-history"
+import { fetchHistory, getBenchmarkHistory, computePriceMetrics } from "@/lib/price-history"
 import { computePiotroski } from "@/lib/stock-scores/piotroski"
 import { computeAltmanZ } from "@/lib/stock-scores/altman"
 import { computeBeneishM } from "@/lib/stock-scores/beneish"
@@ -36,20 +35,25 @@ export async function analyzeAndUpsertTicker(symbolRaw: string): Promise<Analyze
   const resolved = await resolveCik(symbol)
   if (!resolved) return { ok: false, error: `"${symbol}" is not a known SEC-registered ticker` }
 
-  const [submissions, facts, goingConcern, price, history, benchmark] = await Promise.all([
+  // One provider call returns both the daily series and the live quote, so
+  // there's no separate price request to pay for.
+  const [submissions, facts, goingConcern, history, benchmark] = await Promise.all([
     getSubmissions(resolved.cik),
     getCompanyFacts(resolved.cik),
     searchGoingConcern(resolved.cik),
-    fetchStockPrice(symbol),
-    fetchDailyHistory(symbol),
+    fetchHistory(symbol),
     getBenchmarkHistory(),
   ])
 
   if (!facts) return { ok: false, error: `No SEC XBRL filing data found for ${symbol}` }
 
+  const price = history.latestPrice !== null
+    ? { symbol, price: history.latestPrice, date: history.bars.at(-1)?.date ?? "" }
+    : null
+
   const series = extractSeries(facts)
   const fundamentals = normalizeFundamentals(facts, series)
-  const priceMetrics = history.length > 0 ? computePriceMetrics(history, benchmark) : null
+  const priceMetrics = history.bars.length > 0 ? computePriceMetrics(history.bars, benchmark) : null
 
   const marketCap = price && fundamentals.sharesOutstanding
     ? price.price * fundamentals.sharesOutstanding

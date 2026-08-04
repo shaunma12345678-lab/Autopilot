@@ -32,10 +32,23 @@ function gaap(...tags: string[]): TagRef[] {
 // Returns annual observations for a concept, newest first, deduped by period end.
 // Duration concepts (revenue, net income) require an annual-length window;
 // instant concepts (assets, equity) have no start date and match on `end` alone.
+//
+// CRITICAL: this merges ALL tags in the fallback chain rather than returning the
+// first one that has any data. Filers migrate between tags over time — Apple
+// reported under `Revenues` through FY2018 then switched to
+// `RevenueFromContractWithCustomerExcludingAssessedTax`. Returning the first
+// non-empty tag would have pinned revenue to 2018 forever while other concepts
+// resolved to the current year, silently producing nonsense ratios (a 73% gross
+// margin for Apple, whose real figure is ~46%). Merging and preferring the most
+// recent observation per period fixes that class of bug outright.
 function annualSeries(facts: CompanyFacts, refs: TagRef[], isInstant = false): AnnualObservation[] {
   const byTaxonomy = (facts as { facts?: Record<string, Record<string, unknown>> }).facts
   if (!byTaxonomy) return []
 
+  const byEnd = new Map<string, AnnualObservation>()
+
+  // Iterate in priority order; earlier tags in the chain win ties for the same
+  // period end, later tags fill in periods the earlier ones don't cover.
   for (const ref of refs) {
     const concept = byTaxonomy[ref.taxonomy]?.[ref.tag] as
       | { units?: Record<string, Array<{ val: number; end: string; start?: string; form: string; fy?: number }>> }
@@ -45,26 +58,39 @@ function annualSeries(facts: CompanyFacts, refs: TagRef[], isInstant = false): A
     const units = concept.units.USD ?? concept.units["USD/shares"] ?? concept.units.shares
     if (!units || units.length === 0) continue
 
-    const annual = units.filter(u => {
-      if (u.form !== "10-K") return false
-      if (typeof u.val !== "number" || !isFinite(u.val)) return false
-      if (isInstant) return true
-      if (!u.start) return false
-      return new Date(u.end).getTime() - new Date(u.start).getTime() >= ANNUAL_MS
-    })
-    if (annual.length === 0) continue
-
-    // Dedupe by period end (amended filings restate the same period), newest first
-    const byEnd = new Map<string, AnnualObservation>()
-    for (const u of annual) {
-      if (!byEnd.has(u.end)) {
-        byEnd.set(u.end, { value: u.val, fiscalYear: u.fy ?? new Date(u.end).getFullYear(), end: u.end })
+    for (const u of units) {
+      if (u.form !== "10-K") continue
+      if (typeof u.val !== "number" || !isFinite(u.val)) continue
+      if (!isInstant) {
+        if (!u.start) continue
+        if (new Date(u.end).getTime() - new Date(u.start).getTime() < ANNUAL_MS) continue
       }
+      if (byEnd.has(u.end)) continue // higher-priority tag already covered this period
+      byEnd.set(u.end, { value: u.val, fiscalYear: u.fy ?? new Date(u.end).getFullYear(), end: u.end })
     }
-    const series = [...byEnd.values()].sort((a, b) => new Date(b.end).getTime() - new Date(a.end).getTime())
-    if (series.length > 0) return series
   }
-  return []
+
+  return [...byEnd.values()].sort((a, b) => new Date(b.end).getTime() - new Date(a.end).getTime())
+}
+
+// Picks the observation whose period end is closest to `anchorEnd`, within a
+// tolerance. Fiscal period ends differ by a few days across concepts within the
+// same 10-K, so exact string matching is too strict — but a year apart is a
+// different fiscal year and must not be mixed in.
+const PERIOD_MATCH_TOLERANCE_MS = 75 * 24 * 60 * 60 * 1000
+
+function alignedTo(series: AnnualObservation[], anchorEnd: string | null): AnnualObservation | null {
+  if (series.length === 0) return null
+  if (!anchorEnd) return series[0]
+
+  const anchor = new Date(anchorEnd).getTime()
+  let best: AnnualObservation | null = null
+  let bestDelta = Infinity
+  for (const obs of series) {
+    const delta = Math.abs(new Date(obs.end).getTime() - anchor)
+    if (delta < bestDelta) { bestDelta = delta; best = obs }
+  }
+  return bestDelta <= PERIOD_MATCH_TOLERANCE_MS ? best : null
 }
 
 function at(series: AnnualObservation[], index: number): number | null {
@@ -170,23 +196,36 @@ const EXPECTED_FIELD_COUNT = 15
 export function normalizeFundamentals(facts: CompanyFacts, series?: FundamentalSeries): NormalizedFundamentals {
   const s = series ?? extractSeries(facts)
 
-  const revenue = at(s.revenue, 0)
-  const revenuePrior = at(s.revenue, 1)
-  const netIncome = at(s.netIncome, 0)
-  const grossProfit = at(s.grossProfit, 0)
-  const costOfRevenue = at(s.costOfRevenue, 0)
-  const operatingIncome = at(s.operatingIncome, 0)
-  const cfo = at(s.cfo, 0)
-  const capex = at(s.capex, 0)
-  const totalAssets = at(s.totalAssets, 0)
-  const currentAssets = at(s.currentAssets, 0)
-  const currentLiabilities = at(s.currentLiabilities, 0)
-  const totalLiabilities = at(s.totalLiabilities, 0)
-  const equity = at(s.stockholdersEquity, 0)
-  const longTermDebt = at(s.longTermDebt, 0)
-  const shortTermDebt = at(s.shortTermDebt, 0)
-  const interestExpense = at(s.interestExpense, 0)
-  const dividendsPaid = at(s.dividendsPaid, 0)
+  // Anchor every concept to ONE fiscal period. Without this, each concept
+  // independently resolves to its own latest available period and ratios mix
+  // years — e.g. this year's gross profit over a five-year-old revenue figure.
+  // Revenue is the anchor because it's the most consistently tagged concept;
+  // total assets is the fallback for filers with unusual revenue tagging.
+  const anchorEnd = s.revenue[0]?.end ?? s.totalAssets[0]?.end ?? null
+  const priorAnchorEnd = s.revenue[1]?.end ?? s.totalAssets[1]?.end ?? null
+
+  const val = (arr: AnnualObservation[], anchor: string | null): number | null =>
+    alignedTo(arr, anchor)?.value ?? null
+
+  const revenue = val(s.revenue, anchorEnd)
+  const revenuePrior = val(s.revenue, priorAnchorEnd)
+  const netIncome = val(s.netIncome, anchorEnd)
+  const grossProfit = val(s.grossProfit, anchorEnd)
+  const costOfRevenue = val(s.costOfRevenue, anchorEnd)
+  const operatingIncome = val(s.operatingIncome, anchorEnd)
+  const cfo = val(s.cfo, anchorEnd)
+  const capex = val(s.capex, anchorEnd)
+  const totalAssets = val(s.totalAssets, anchorEnd)
+  const currentAssets = val(s.currentAssets, anchorEnd)
+  const currentLiabilities = val(s.currentLiabilities, anchorEnd)
+  const totalLiabilities = val(s.totalLiabilities, anchorEnd)
+  const equity = val(s.stockholdersEquity, anchorEnd)
+  const longTermDebt = val(s.longTermDebt, anchorEnd)
+  const shortTermDebt = val(s.shortTermDebt, anchorEnd)
+  const interestExpense = val(s.interestExpense, anchorEnd)
+  const dividendsPaid = val(s.dividendsPaid, anchorEnd)
+  // Share count is often tagged with a cover-page date rather than the fiscal
+  // period end, so it uses the plain latest value rather than the anchor.
   const shares = at(s.sharesOutstanding, 0)
   const sharesPrior = at(s.sharesOutstanding, 1)
 
@@ -244,10 +283,13 @@ export function normalizeFundamentals(facts: CompanyFacts, series?: FundamentalS
   const buybackYieldPct = shares !== null && sharesPrior !== null && sharesPrior !== 0
     ? ((sharesPrior - shares) / sharesPrior) * 100 : null
 
+  const dividendPerShare = val(s.dividendPerShare, anchorEnd)
+  const epsDiluted = val(s.epsDiluted, anchorEnd)
+
   const scoredFields = [
     revenue, revenueGrowthYoyPct, grossMarginPct, operatingMarginPct, netMarginPct,
     roePct, roicPct, debtToEquity, interestCoveragePct, currentRatio,
-    freeCashFlowTtm, fcfMarginPct, accrualsRatioPct, at(s.dividendPerShare, 0), at(s.epsDiluted, 0),
+    freeCashFlowTtm, fcfMarginPct, accrualsRatioPct, dividendPerShare, epsDiluted,
   ]
   const fieldsPresent = scoredFields.filter(f => f !== null).length
 
@@ -265,14 +307,14 @@ export function normalizeFundamentals(facts: CompanyFacts, series?: FundamentalS
     freeCashFlowTtm,
     fcfMarginPct,
     accrualsRatioPct,
-    dividendPerShare: at(s.dividendPerShare, 0),
+    dividendPerShare,
     payoutRatioEarningsPct,
     payoutRatioFcfPct,
-    epsDiluted: at(s.epsDiluted, 0),
+    epsDiluted,
     sharesOutstanding: shares,
     buybackYieldPct,
     fiscalYear: s.revenue[0]?.fiscalYear ?? s.totalAssets[0]?.fiscalYear ?? null,
-    periodEnd: s.revenue[0]?.end ?? s.totalAssets[0]?.end ?? null,
+    periodEnd: anchorEnd,
     fieldsPresent,
     fieldsExpected: EXPECTED_FIELD_COUNT,
   }

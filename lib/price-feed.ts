@@ -1,8 +1,18 @@
-// Free, no-key price feed for the stocks vertical. SEC EDGAR has zero price
-// data (it's a filings archive, not a market feed), so valuation/dividend-yield
-// ratios need this supplementary source. Stooq's CSV "last quote" endpoint is
-// free and unauthenticated — no SLA, so every call degrades to null on failure
-// rather than throwing.
+// Free, no-key price quote for the stocks vertical. SEC EDGAR has zero price
+// data (it's a filings archive, not a market feed), so valuation and
+// dividend-yield ratios need this supplementary source.
+//
+// Delegates to lib/price-history.ts so there is ONE place that knows how to
+// talk to a price provider. That module fetches the live quote and the full
+// daily series in a single request, so callers that need both (the analysis
+// pipeline) should call fetchHistory directly rather than paying for two round
+// trips. This wrapper exists for callers that only want a spot price — notably
+// the underwrite backtest.
+//
+// Note: the original Stooq CSV endpoint no longer works server-side (it now
+// serves a JavaScript proof-of-work challenge). See price-history.ts.
+import { fetchHistory } from "./price-history"
+
 export interface StockQuote {
   symbol: string
   price: number
@@ -10,30 +20,11 @@ export interface StockQuote {
 }
 
 export async function fetchStockPrice(symbol: string): Promise<StockQuote | null> {
-  try {
-    const stooqSymbol = `${symbol.toLowerCase()}.us`
-    const url = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSymbol)}&f=sd2t2ohlcv&h&e=csv`
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
-    if (!res.ok) return null
-
-    const text = await res.text()
-    const lines = text.trim().split("\n")
-    if (lines.length < 2) return null
-
-    const header = lines[0].split(",")
-    const row = lines[1].split(",")
-    const closeIdx = header.indexOf("Close")
-    const dateIdx = header.indexOf("Date")
-    if (closeIdx === -1 || dateIdx === -1) return null
-
-    const closeStr = row[closeIdx]
-    if (!closeStr || closeStr === "N/D") return null
-
-    const price = Number(closeStr)
-    if (!isFinite(price) || price <= 0) return null
-
-    return { symbol: symbol.toUpperCase(), price, date: row[dateIdx] }
-  } catch {
-    return null
+  const { bars, latestPrice } = await fetchHistory(symbol)
+  if (latestPrice === null || !isFinite(latestPrice) || latestPrice <= 0) return null
+  return {
+    symbol: symbol.toUpperCase(),
+    price: latestPrice,
+    date: bars.length > 0 ? bars[bars.length - 1].date : new Date().toISOString().slice(0, 10),
   }
 }

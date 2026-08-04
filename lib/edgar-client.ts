@@ -136,18 +136,60 @@ export async function getCompanyConcept(cik: string, tag: string, taxonomy = "us
   }
 }
 
-// Cheap "going concern" discovery via EDGAR full-text search, without
-// downloading every 8-K for a company.
+// Going-concern discovery via EDGAR full-text search.
+//
+// Query design matters enormously here, and getting it wrong is not a subtle
+// failure. Searching the bare phrase "going concern" flagged Coca-Cola with 4
+// hits — all of them 2010-2013 EXHIBIT files (bylaws, a merger agreement)
+// containing routine legal boilerplate. That produced a PASS signal on a
+// blue-chip company. Three corrections, all verified against live EDGAR:
+//
+//   1. Require "substantial doubt" AND "going concern" together. That pairing
+//      is the ASC 205-40 trigger language management must use when disclosing
+//      genuine doubt about continuing operations. It returns 0 for Coca-Cola
+//      and 10,000+ for the micro-caps and clinical-stage biotechs that
+//      actually carry the disclosure.
+//   2. Restrict to the last two years. A 2012 filing says nothing about
+//      solvency today.
+//   3. Ignore exhibit attachments (EX-*) — the disclosure lives in the primary
+//      10-K/10-Q/8-K document, not in an appended contract.
+const GOING_CONCERN_LOOKBACK_DAYS = 730
+
 export async function searchGoingConcern(cik: string): Promise<{ hits: number; latestDate?: string }> {
   try {
     const padded = padCik(cik)
-    const url = `${BASE_FULLTEXT}?q=%22going+concern%22&forms=8-K,10-K,10-Q&ciks=${padded}`
-    const res = await throttledFetch(url)
+    const enddt = new Date().toISOString().slice(0, 10)
+    const startdt = new Date(Date.now() - GOING_CONCERN_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10)
+
+    const params = new URLSearchParams({
+      q: '"substantial doubt" "going concern"',
+      forms: "10-K,10-Q,8-K",
+      dateRange: "custom",
+      startdt,
+      enddt,
+      ciks: padded,
+    })
+    const res = await throttledFetch(`${BASE_FULLTEXT}?${params}`)
     if (!res.ok) return { hits: 0 }
+
     const data = await res.json()
-    const hits = data?.hits?.total?.value ?? 0
-    const latestDate = data?.hits?.hits?.[0]?._source?.file_date
-    return { hits, latestDate }
+    const rawHits = (data?.hits?.hits ?? []) as Array<{ _source?: { file_type?: string; file_date?: string } }>
+
+    // Count only primary filing documents, never exhibits.
+    const primary = rawHits.filter(h => {
+      const type = h._source?.file_type ?? ""
+      return !type.toUpperCase().startsWith("EX")
+    })
+
+    if (primary.length === 0) return { hits: 0 }
+
+    const latestDate = primary
+      .map(h => h._source?.file_date)
+      .filter((d): d is string => Boolean(d))
+      .sort()
+      .at(-1)
+
+    return { hits: primary.length, latestDate }
   } catch {
     return { hits: 0 }
   }

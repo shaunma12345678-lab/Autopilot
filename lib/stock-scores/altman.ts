@@ -49,7 +49,12 @@ export function computeAltmanZ(s: FundamentalSeries, marketCapUsd: number | null
   const currentLiabilities = at(s.currentLiabilities, 0)
   const retainedEarnings = at(s.retainedEarnings, 0)
   const operatingIncome = at(s.operatingIncome, 0)
+  const equity = at(s.stockholdersEquity, 0)
+  // Many filers never tag `Liabilities` directly. Assets − Equity is the
+  // balance-sheet identity, not an estimate, so deriving it here recovers the
+  // Z-Score for companies that would otherwise return N/A.
   const totalLiabilities = at(s.totalLiabilities, 0)
+    ?? (equity !== null ? totalAssets - equity : null)
   const revenue = at(s.revenue, 0)
 
   const x1 = currentAssets !== null && currentLiabilities !== null ? (currentAssets - currentLiabilities) / totalAssets : null
