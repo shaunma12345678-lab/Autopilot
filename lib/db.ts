@@ -184,6 +184,7 @@ export const db = {
   tickerSignal:     model("TickerSignal"),
   cryptoAsset:      model("CryptoAsset"),
   cryptoSignal:     model("CryptoSignal"),
+  discoveryEvent:   model("DiscoveryEvent"),
   exchangeRequest:  model("ExchangeRequest"),
   entity:           model("Entity"),
   entityAlias:      model("EntityAlias"),

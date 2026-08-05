@@ -21,6 +21,8 @@ import { computePositionContext, describeSituation } from "@/lib/position-contex
 import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
 import { summarizeLiveEvents } from "@/lib/live-events"
 import { scanCompanyNews } from "@/lib/company-news"
+import { computeConsistency } from "@/lib/consistency"
+import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
 
 export interface AnalyzeStockResult {
   ok: boolean
@@ -83,8 +85,15 @@ export async function analyzeAndUpsertTicker(
     debtToEquity: fundamentals.debtToEquity,
   }, sectorBenchmark)
 
-  // Forward signals gate the BUY decision, so they're computed before scoring.
+  // Forward signals and multi-year consistency both feed scoring, so they're
+  // computed before it. Both are pure computation over data already fetched.
   const forward = computeForwardSignals(series)
+  const consistency = computeConsistency(series)
+
+  // Form 4 parsing costs one small fetch per filing, so it's capped and
+  // guarded rather than gated behind an opt-in flag.
+  const insider = await analyzeInsiderActivity(resolved.cik, submissions?.recentForms ?? [])
+    .catch(() => null)
 
   // Live 8-K events are free (already in the submissions payload) so they
   // always run. This is what catches a restatement filed last week that no
@@ -107,6 +116,8 @@ export async function analyzeAndUpsertTicker(
     ],
     hasRestatement: liveEvents.hasRestatement,
     forwardScore: forward.forwardScore,
+    consistencyScore: consistency.score,
+    insiderScoreBonus: insider?.scoreBonus ?? 0,
   })
 
   const positionCtx = computePositionContext(history.bars)
@@ -210,7 +221,17 @@ export async function analyzeAndUpsertTicker(
     deferredRevenueGrowthYoyPct: forward.deferredRevenueGrowthYoyPct,
     revenueAccelerationPct: forward.revenueAccelerationPct,
     forwardScore: forward.forwardScore,
-    forwardReasons: forward.forwardReasons,
+    forwardReasons: [...forward.forwardReasons, ...consistency.reasons],
+
+    consistencyScore: consistency.score,
+    consistencyDetail: consistency.detail,
+    yearsOfData: consistency.yearsOfData,
+
+    insiderBuyCount90d: insider?.buyCount90d ?? null,
+    insiderSellCount90d: insider?.sellCount90d ?? null,
+    insiderNetSharesBought90d: insider?.netSharesBought90d ?? null,
+    insiderClusterBuy: insider?.clusterBuy ?? null,
+    insiderSummary: insider?.summary ?? null,
 
     liveEvents: liveEvents.events,
     liveEventFlags: liveEvents.flags,
@@ -284,6 +305,17 @@ export async function analyzeAndUpsertTicker(
         })
       }
     } catch { /* signal logging is best-effort, never blocks scoring */ }
+  }
+
+  // Surface genuine cluster buying in the discovery feed alongside late
+  // filings and IPO registrations.
+  if (insider?.clusterBuy) {
+    await recordClusterBuyDiscovery({
+      cik: resolved.cik,
+      symbol,
+      companyName: submissions?.name ?? resolved.name,
+      activity: insider,
+    }).catch(() => {})
   }
 
   await logStockUnderwriteCall(saved).catch(() => {})

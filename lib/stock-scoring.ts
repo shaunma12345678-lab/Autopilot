@@ -45,6 +45,10 @@ export interface StockScoreInput {
   hasRestatement?: boolean
   /** Forward composite, used to gate BUY (see lib/action-signal.ts). */
   forwardScore?: number | null
+  /** Multi-year durability, 0-100 (see lib/consistency.ts). */
+  consistencyScore?: number | null
+  /** Small additive bonus for genuine insider cluster buying. */
+  insiderScoreBonus?: number
 }
 
 export type StrengthTier = "strong" | "mixed" | "weak"
@@ -138,6 +142,11 @@ export function scoreStock(input: StockScoreInput): StockScoreResult {
     { key: "dividendSafety", label: "Dividend safety (FCF coverage)", weight: 5, isCore: false,
       value: f.payoutRatioFcfPct,
       score: v => (v > 100 ? clamp(100 - (v - 100) * 2, 0, 40) : clamp(100 - v * 0.3, 40, 100)) },
+    // Multi-year durability. Weighted heavily because one good year is the
+    // easiest thing in the world to mistake for a good business.
+    { key: "consistency", label: "Multi-year consistency", weight: 12, isCore: false,
+      value: input.consistencyScore ?? null,
+      score: v => clamp(v, 0, 100) },
     { key: "valuation", label: "Valuation (P/E)", weight: 7, isCore: false,
       value: (input.price && f.epsDiluted && f.epsDiluted > 0) ? input.price.price / f.epsDiluted : null,
       score: v => clamp(100 - Math.abs(v - 18) * 2.5, 0, 100) },
@@ -169,6 +178,11 @@ export function scoreStock(input: StockScoreInput): StockScoreResult {
   let qualityScore = totalWeight > 0
     ? Math.round(scored.reduce((s, x) => s + x.points * x.criterion.weight, 0) / totalWeight)
     : 50
+
+  // Insider cluster buying is a real but modest effect — added as a small
+  // bonus rather than a weighted criterion so it can never outvote the
+  // fundamentals on its own.
+  qualityScore += input.insiderScoreBonus ?? 0
 
   // ── Risk axis: scored independently, never netted against strength ────────
   const riskFlags: string[] = [...(input.externalRiskFlags ?? [])]

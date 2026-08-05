@@ -631,6 +631,18 @@ model Ticker {
   hasAuditorChange         Boolean?
   execChangeCount          Int?
 
+  // Insider activity from Form 4 (see lib/form4-insider.ts)
+  insiderBuyCount90d       Int?
+  insiderSellCount90d      Int?
+  insiderNetSharesBought90d Float?
+  insiderClusterBuy        Boolean?
+  insiderSummary           String?
+
+  // Multi-year consistency (see lib/consistency.ts)
+  consistencyScore         Int?
+  consistencyDetail        Json?
+  yearsOfData              Int?
+
   // Recent news scan (see lib/company-news.ts)
   newsSummary              String?
   newsTone                 String?
@@ -681,6 +693,31 @@ model TickerSignal {
 
   @@index([tickerId])
   @@index([signalType])
+}
+
+// ── Discovery: companies surfaced by event, not by hand ──
+// Mirrors the residential RawSignal -> Lead pipeline: discovery writes cheap
+// event rows, a second pass analyzes the high-priority ones.
+model DiscoveryEvent {
+  id            String   @id @default(cuid())
+  cik           String
+  symbol        String?
+  companyName   String
+  eventType     String   // late_filing | ipo_pipeline | insider_cluster_buy | material_agreement
+  eventDate     DateTime
+  formType      String
+  accessionNumber String?
+  sourceUrl     String?
+  priority      Int      @default(50)   // 0-100, drives which get analyzed first
+  rationale     String?
+  processed     Boolean  @default(false)
+  processedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  @@unique([cik, eventType, eventDate])
+  @@index([processed, priority])
+  @@index([eventType])
+  @@index([eventDate])
 }
 
 // ── Crypto vertical (market data + proprietary quality scoring) ──
