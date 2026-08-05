@@ -14,6 +14,7 @@ import CryptoLookup from "./CryptoLookup"
 import CryptoTopPicks from "./CryptoTopPicks"
 import CryptoMarketsDashboard from "./CryptoMarketsDashboard"
 import MarketsDisclaimer from "./MarketsDisclaimer"
+import MarketScreens from "./MarketScreens"
 
 type SubTab = "stocks" | "crypto"
 
@@ -59,12 +60,14 @@ export default function StocksCrypto({ password }: { password: string }) {
       {subTab === "stocks" ? (
         <>
           <StockLookup password={password} />
+          <MarketScreens kind="stock" password={password} />
           <StockTopPicks password={password} />
           <StockEarlyWarningDashboard password={password} />
         </>
       ) : (
         <>
           <CryptoLookup password={password} />
+          <MarketScreens kind="crypto" password={password} />
           <CryptoTopPicks password={password} />
           <CryptoMarketsDashboard password={password} />
         </>

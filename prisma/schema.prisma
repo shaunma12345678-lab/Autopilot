@@ -602,6 +602,35 @@ model Ticker {
   sectorRelativeScore      Int?          // 0-100 vs. same-sector peers in our own dataset
   sectorPeerCount          Int?
 
+  // Forward-looking signals (see lib/forward-signals.ts)
+  rpoUsd                       Float?    // contracted revenue not yet recognized
+  rpoToRevenueYears            Float?
+  rpoGrowthYoyPct              Float?
+  rndIntensityPct              Float?
+  capexIntensityPct            Float?
+  capexGrowthYoyPct            Float?
+  deferredRevenueGrowthYoyPct  Float?
+  revenueAccelerationPct       Float?
+  forwardScore                 Int?
+  forwardReasons               Json?
+
+  // What management actually says in the filing (see lib/edgar-narrative.ts)
+  narrativeSummary         String?
+  narrativeStrategy        Json?
+  narrativeGrowthDrivers   Json?
+  narrativeHeadwinds       Json?
+  narrativeCapitalPlans    Json?
+  narrativeOutlookTone     String?       // constructive | mixed | cautious | unclear
+  narrativeSourceUrl       String?
+  narrativeFilingDate      String?
+
+  // Position context — where price sits vs its own history
+  pricePercentile1y        Int?
+  trendState               String?       // uptrend | downtrend | sideways | unknown
+  ma50                     Float?
+  ma200                    Float?
+  situationSummary         String?
+
   // Composite scoring + quality gate
   qualityScore             Int?          // retained: the opportunity/fundamental-strength composite
   qualityReasons           Json?

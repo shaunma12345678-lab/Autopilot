@@ -9,6 +9,7 @@ import CryptoTopPicks from "@/components/dashboard/CryptoTopPicks"
 import CryptoMarketsDashboard from "@/components/dashboard/CryptoMarketsDashboard"
 import MarketsDisclaimer from "@/components/dashboard/MarketsDisclaimer"
 import TrackRecordPanel from "@/components/dashboard/TrackRecordPanel"
+import MarketScreens from "@/components/dashboard/MarketScreens"
 
 export const metadata = {
   title: "Markets | Autopilot",
@@ -71,6 +72,7 @@ export default async function MarketsPage({
       {activeTab === "stocks" && (
         <>
           <StockLookup />
+          <MarketScreens kind="stock" />
           <StockTopPicks />
           <StockEarlyWarningDashboard />
         </>
@@ -79,6 +81,7 @@ export default async function MarketsPage({
       {activeTab === "crypto" && (
         <>
           <CryptoLookup />
+          <MarketScreens kind="crypto" />
           <CryptoTopPicks />
           <CryptoMarketsDashboard />
         </>

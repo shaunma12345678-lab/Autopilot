@@ -129,6 +129,11 @@ export interface FundamentalSeries {
   dividendPerShare: AnnualObservation[]
   epsDiluted: AnnualObservation[]
   sharesOutstanding: AnnualObservation[]
+  // Forward-looking concepts — what the company has committed to or is
+  // investing in, as opposed to what it already earned.
+  remainingPerformanceObligation: AnnualObservation[]
+  researchAndDevelopment: AnnualObservation[]
+  deferredRevenue: AnnualObservation[]
 }
 
 export function extractSeries(facts: CompanyFacts): FundamentalSeries {
@@ -139,7 +144,7 @@ export function extractSeries(facts: CompanyFacts): FundamentalSeries {
     costOfRevenue: annualSeries(facts, gaap("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold")),
     operatingIncome: annualSeries(facts, gaap("OperatingIncomeLoss")),
     cfo: annualSeries(facts, gaap("NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations")),
-    capex: annualSeries(facts, gaap("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsForCapitalImprovements")),
+    capex: annualSeries(facts, gaap("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements", "PaymentsToAcquirePropertyPlantAndEquipmentExcludingCapitalizedInterest")),
     totalAssets: annualSeries(facts, gaap("Assets"), true),
     currentAssets: annualSeries(facts, gaap("AssetsCurrent"), true),
     currentLiabilities: annualSeries(facts, gaap("LiabilitiesCurrent"), true),
@@ -156,6 +161,9 @@ export function extractSeries(facts: CompanyFacts): FundamentalSeries {
     dividendsPaid: annualSeries(facts, gaap("PaymentsOfDividends", "PaymentsOfDividendsCommonStock")),
     dividendPerShare: annualSeries(facts, gaap("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid")),
     epsDiluted: annualSeries(facts, gaap("EarningsPerShareDiluted", "EarningsPerShareBasic")),
+    remainingPerformanceObligation: annualSeries(facts, gaap("RevenueRemainingPerformanceObligation"), true),
+    researchAndDevelopment: annualSeries(facts, gaap("ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost")),
+    deferredRevenue: annualSeries(facts, gaap("ContractWithCustomerLiability", "ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"), true),
     sharesOutstanding: annualSeries(facts, [
       { taxonomy: "dei", tag: "EntityCommonStockSharesOutstanding" },
       { taxonomy: "us-gaap", tag: "CommonStockSharesOutstanding" },

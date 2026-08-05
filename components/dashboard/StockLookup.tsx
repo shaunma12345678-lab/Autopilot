@@ -41,6 +41,21 @@ interface TickerRow {
   buybackYieldPct: number | null
   sectorRelativeScore: number | null
   sectorPeerCount: number | null
+  forwardScore: number | null
+  forwardReasons: string[] | null
+  rpoToRevenueYears: number | null
+  revenueAccelerationPct: number | null
+  rndIntensityPct: number | null
+  pricePercentile1y: number | null
+  trendState: string | null
+  situationSummary: string | null
+  narrativeSummary: string | null
+  narrativeStrategy: string[] | null
+  narrativeGrowthDrivers: string[] | null
+  narrativeHeadwinds: string[] | null
+  narrativeOutlookTone: string | null
+  narrativeSourceUrl: string | null
+  narrativeFilingDate: string | null
 }
 
 function num(n: number | null | undefined, suffix = "", digits = 1): string {
@@ -95,6 +110,12 @@ export default function StockLookup({ password }: { password?: string } = {}) {
     { label: "Volatility (ann.)", value: num(result.volatility30dPct, "%") },
     { label: "Beta vs SPY", value: num(result.betaVsSpy, "", 2) },
     { label: "Sector Percentile", value: result.sectorRelativeScore !== null ? `${result.sectorRelativeScore}/100` : "Too few peers" },
+    { label: "Forward Score", value: result.forwardScore !== null ? `${result.forwardScore}/100` : "—", highlight: (result.forwardScore ?? 0) >= 65 },
+    { label: "Contracted Backlog", value: result.rpoToRevenueYears !== null ? `${result.rpoToRevenueYears.toFixed(1)} yrs` : "Not reported", highlight: (result.rpoToRevenueYears ?? 0) >= 1 },
+    { label: "Revenue Acceleration", value: num(result.revenueAccelerationPct, " pts"), highlight: (result.revenueAccelerationPct ?? 0) > 3 },
+    { label: "R&D Intensity", value: num(result.rndIntensityPct, "%") },
+    { label: "1yr Price Percentile", value: result.pricePercentile1y !== null ? `${result.pricePercentile1y}th` : "—" },
+    { label: "Trend", value: result.trendState ?? "—" },
   ] : []
 
   return (
@@ -149,6 +170,53 @@ export default function StockLookup({ password }: { password?: string } = {}) {
                 : "Fundamentals from SEC filings; price metrics computed from daily history."
             }
           />
+          {result.situationSummary && (
+            <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 px-4 py-3">
+              <p className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wide">Current Situation</p>
+              <p className="text-xs text-gray-300 mt-1">{result.situationSummary}</p>
+            </div>
+          )}
+
+          {result.forwardReasons && result.forwardReasons.length > 0 && (
+            <div className="rounded-xl bg-gray-800/60 border border-gray-700/30 px-4 py-3 space-y-1">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Forward Indicators</p>
+              {result.forwardReasons.map((r, i) => <p key={i} className="text-[11px] text-gray-400">{r}</p>)}
+            </div>
+          )}
+
+          {result.narrativeSummary && (
+            <div className="rounded-xl bg-gray-800/60 border border-gray-700/30 px-4 py-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                  What Management Says {result.narrativeOutlookTone ? `· tone: ${result.narrativeOutlookTone}` : ""}
+                </p>
+                {result.narrativeSourceUrl && (
+                  <a href={result.narrativeSourceUrl} target="_blank" rel="noreferrer"
+                    className="text-[10px] text-indigo-400 hover:underline shrink-0">
+                    Read the filing{result.narrativeFilingDate ? ` (${result.narrativeFilingDate})` : ""} →
+                  </a>
+                )}
+              </div>
+              <p className="text-xs text-gray-300">{result.narrativeSummary}</p>
+              {result.narrativeStrategy && result.narrativeStrategy.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-500 uppercase mt-1">Stated strategy</p>
+                  {result.narrativeStrategy.map((x, i) => <p key={i} className="text-[11px] text-gray-400">• {x}</p>)}
+                </div>
+              )}
+              {result.narrativeHeadwinds && result.narrativeHeadwinds.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-500 uppercase mt-1">Stated headwinds</p>
+                  {result.narrativeHeadwinds.map((x, i) => <p key={i} className="text-[11px] text-amber-300/80">• {x}</p>)}
+                </div>
+              )}
+              <p className="text-[10px] text-gray-600 pt-1 border-t border-gray-700/40">
+                This is management describing their own company — promotional by nature and legally hedged.
+                It reports what they state, not verified fact.
+              </p>
+            </div>
+          )}
+
           <MarketsDisclaimer compact />
         </>
       )}

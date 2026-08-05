@@ -16,6 +16,9 @@ import { getSectorBenchmark, scoreAgainstSector } from "@/lib/sector-benchmarks"
 import { scoreStock } from "@/lib/stock-scoring"
 import { logStockUnderwriteCall } from "@/lib/underwrite-tracker"
 import { stampFields, type ProvenanceMap } from "@/lib/data-integrity"
+import { computeForwardSignals } from "@/lib/forward-signals"
+import { computePositionContext, describeSituation } from "@/lib/position-context"
+import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
 
 export interface AnalyzeStockResult {
   ok: boolean
@@ -28,7 +31,10 @@ function makeCuid(): string {
   return `c${Array.from({ length: 24 }, () => chars[Math.floor(Math.random() * chars.length)]).join("")}`
 }
 
-export async function analyzeAndUpsertTicker(symbolRaw: string): Promise<AnalyzeStockResult> {
+export async function analyzeAndUpsertTicker(
+  symbolRaw: string,
+  opts: { includeNarrative?: boolean } = {}
+): Promise<AnalyzeStockResult> {
   const symbol = symbolRaw.trim().toUpperCase()
   if (!symbol) return { ok: false, error: "Symbol is required" }
 
@@ -80,6 +86,33 @@ export async function analyzeAndUpsertTicker(symbolRaw: string): Promise<Analyze
     goingConcernHits: goingConcern.hits,
   })
 
+  // Forward-looking signals and position context are cheap (pure computation
+  // over data already fetched), so they always run.
+  const forward = computeForwardSignals(series)
+  const positionCtx = computePositionContext(history.bars)
+  const situationSummary = describeSituation({
+    ctx: positionCtx,
+    qualityScore: result.qualityScore,
+    riskScore: result.riskScore,
+    forwardScore: forward.forwardScore,
+  })
+
+  // Reading the filing narrative costs an 8MB document fetch plus an AI call,
+  // so it's opt-in: on-demand lookups get it, bulk cron re-scoring doesn't.
+  let narrative: Awaited<ReturnType<typeof readFilingNarrative>> = null
+  if (opts.includeNarrative) {
+    try {
+      const latest10K = submissions?.recentForms?.find(f => f.form === "10-K")
+      if (latest10K) {
+        const sections = await fetchFilingSections(
+          resolved.cik, latest10K.accessionNumber, latest10K.primaryDocument,
+          latest10K.form, latest10K.filingDate
+        )
+        if (sections) narrative = await readFilingNarrative(sections)
+      }
+    } catch { /* narrative is an enhancement; never block the score on it */ }
+  }
+
   // Per-field source attribution — the integrity layer's core promise: a user
   // can always see whether a number was filed with the SEC, quoted from a
   // market feed, or computed by us.
@@ -95,6 +128,9 @@ export async function analyzeAndUpsertTicker(symbolRaw: string): Promise<Analyze
     ...stampFields(["momentum12m1Pct", "pctFrom52WeekHigh", "volatility30dPct", "maxDrawdown1yPct", "betaVsSpy"], "stooq-history"),
     ...stampFields(["piotroskiScore", "altmanZScore", "beneishMScore", "peRatio", "dividendYieldPct"], "derived", { isEstimate: true }),
     ...stampFields(["sectorRelativeScore"], "sector-benchmark", { isEstimate: true }),
+    ...stampFields(["rpoUsd", "rndIntensityPct", "capexIntensityPct", "deferredRevenueGrowthYoyPct"], "sec-edgar-xbrl"),
+    ...stampFields(["forwardScore", "pricePercentile1y", "trendState", "situationSummary"], "derived", { isEstimate: true }),
+    ...stampFields(["narrativeSummary", "narrativeStrategy", "narrativeHeadwinds"], "sec-edgar-submissions", { isEstimate: true, note: "AI reading of management's own narrative — reports what management states, not verified fact." }),
   }
 
   const data = {
@@ -144,6 +180,34 @@ export async function analyzeAndUpsertTicker(symbolRaw: string): Promise<Analyze
 
     sectorRelativeScore: sectorRelative.score,
     sectorPeerCount: sectorRelative.peerCount,
+
+    rpoUsd: forward.rpoUsd,
+    rpoToRevenueYears: forward.rpoToRevenueYears,
+    rpoGrowthYoyPct: forward.rpoGrowthYoyPct,
+    rndIntensityPct: forward.rndIntensityPct,
+    capexIntensityPct: forward.capexIntensityPct,
+    capexGrowthYoyPct: forward.capexGrowthYoyPct,
+    deferredRevenueGrowthYoyPct: forward.deferredRevenueGrowthYoyPct,
+    revenueAccelerationPct: forward.revenueAccelerationPct,
+    forwardScore: forward.forwardScore,
+    forwardReasons: forward.forwardReasons,
+
+    pricePercentile1y: positionCtx.pricePercentile1y,
+    trendState: positionCtx.trendState,
+    ma50: positionCtx.ma50,
+    ma200: positionCtx.ma200,
+    situationSummary,
+
+    ...(narrative ? {
+      narrativeSummary: narrative.summary,
+      narrativeStrategy: narrative.strategy,
+      narrativeGrowthDrivers: narrative.growthDrivers,
+      narrativeHeadwinds: narrative.headwinds,
+      narrativeCapitalPlans: narrative.capitalPlans,
+      narrativeOutlookTone: narrative.outlookTone,
+      narrativeSourceUrl: narrative.sourceUrl,
+      narrativeFilingDate: narrative.filingDate,
+    } : {}),
 
     qualityScore: result.qualityScore,
     qualityReasons: result.qualityReasons,
