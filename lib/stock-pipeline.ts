@@ -19,6 +19,8 @@ import { stampFields, type ProvenanceMap } from "@/lib/data-integrity"
 import { computeForwardSignals } from "@/lib/forward-signals"
 import { computePositionContext, describeSituation } from "@/lib/position-context"
 import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
+import { summarizeLiveEvents } from "@/lib/live-events"
+import { scanCompanyNews } from "@/lib/company-news"
 
 export interface AnalyzeStockResult {
   ok: boolean
@@ -33,7 +35,7 @@ function makeCuid(): string {
 
 export async function analyzeAndUpsertTicker(
   symbolRaw: string,
-  opts: { includeNarrative?: boolean } = {}
+  opts: { includeNarrative?: boolean; includeNews?: boolean } = {}
 ): Promise<AnalyzeStockResult> {
   const symbol = symbolRaw.trim().toUpperCase()
   if (!symbol) return { ok: false, error: "Symbol is required" }
@@ -81,14 +83,32 @@ export async function analyzeAndUpsertTicker(
     debtToEquity: fundamentals.debtToEquity,
   }, sectorBenchmark)
 
+  // Forward signals gate the BUY decision, so they're computed before scoring.
+  const forward = computeForwardSignals(series)
+
+  // Live 8-K events are free (already in the submissions payload) so they
+  // always run. This is what catches a restatement filed last week that no
+  // backward-looking ratio can see.
+  const liveEvents = summarizeLiveEvents(submissions?.recentForms ?? [])
+
+  // News costs a web search + AI call, so it's opt-in like the narrative read.
+  let news: Awaited<ReturnType<typeof scanCompanyNews>> = null
+  if (opts.includeNews) {
+    news = await scanCompanyNews(symbol, submissions?.name ?? resolved.name).catch(() => null)
+  }
+
   const result = scoreStock({
     fundamentals, price, priceMetrics, piotroski, altman, beneish, sectorRelative,
     goingConcernHits: goingConcern.hits,
+    externalRiskPenalty: liveEvents.riskPenalty + (news?.riskPenalty ?? 0),
+    externalRiskFlags: [
+      ...liveEvents.flags,
+      ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
+    ],
+    hasRestatement: liveEvents.hasRestatement,
+    forwardScore: forward.forwardScore,
   })
 
-  // Forward-looking signals and position context are cheap (pure computation
-  // over data already fetched), so they always run.
-  const forward = computeForwardSignals(series)
   const positionCtx = computePositionContext(history.bars)
   const situationSummary = describeSituation({
     ctx: positionCtx,
@@ -191,6 +211,19 @@ export async function analyzeAndUpsertTicker(
     revenueAccelerationPct: forward.revenueAccelerationPct,
     forwardScore: forward.forwardScore,
     forwardReasons: forward.forwardReasons,
+
+    liveEvents: liveEvents.events,
+    liveEventFlags: liveEvents.flags,
+    hasRestatement: liveEvents.hasRestatement,
+    hasAuditorChange: liveEvents.hasAuditorChange,
+    execChangeCount: liveEvents.execChangeCount,
+
+    ...(news ? {
+      newsSummary: news.summary,
+      newsTone: news.tone,
+      newsHeadlines: news.headlines,
+      newsMaterialConcerns: news.materialConcerns,
+    } : {}),
 
     pricePercentile1y: positionCtx.pricePercentile1y,
     trendState: positionCtx.trendState,

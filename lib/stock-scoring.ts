@@ -38,6 +38,13 @@ export interface StockScoreInput {
   beneish: BeneishResult | null
   sectorRelative: SectorRelativeResult | null
   goingConcernHits: number
+  /** Risk contributed by live 8-K events and recent news, with their flags. */
+  externalRiskPenalty?: number
+  externalRiskFlags?: string[]
+  /** A filed restatement invalidates the fundamentals these ratios come from. */
+  hasRestatement?: boolean
+  /** Forward composite, used to gate BUY (see lib/action-signal.ts). */
+  forwardScore?: number | null
 }
 
 export type StrengthTier = "strong" | "mixed" | "weak"
@@ -164,9 +171,10 @@ export function scoreStock(input: StockScoreInput): StockScoreResult {
     : 50
 
   // ── Risk axis: scored independently, never netted against strength ────────
-  const riskFlags: string[] = []
-  let riskScore = 20 // baseline; every equity carries some risk
+  const riskFlags: string[] = [...(input.externalRiskFlags ?? [])]
+  let riskScore = 20 + (input.externalRiskPenalty ?? 0) // baseline plus live-event/news risk
   let earlyWarning = false
+  if ((input.externalRiskPenalty ?? 0) >= 25) earlyWarning = true
 
   if (input.goingConcernHits > 0) {
     riskScore += 35
@@ -230,6 +238,9 @@ export function scoreStock(input: StockScoreInput): StockScoreResult {
   // of good ratios should out-vote an active going-concern disclosure.
   if (input.goingConcernHits > 0) qualityScore = Math.min(qualityScore, 35)
   if (input.altman?.zone === "distress") qualityScore = Math.min(qualityScore, 45)
+  // A restatement means the company itself said these financials shouldn't be
+  // relied on. Every ratio above derives from them, so the score can't stand.
+  if (input.hasRestatement) qualityScore = Math.min(qualityScore, 30)
 
   // ── Plain-English reasons ─────────────────────────────────────────────────
   const reasons: string[] = []
@@ -266,7 +277,10 @@ export function scoreStock(input: StockScoreInput): StockScoreResult {
     qualityScore,
     riskScore,
     dataConfidence,
-    hardFail: input.goingConcernHits > 0
+    forwardScore: input.forwardScore ?? null,
+    hardFail: input.hasRestatement
+      ? { active: true, reason: "Filed a restatement (8-K item 4.02) — the company stated its prior financial statements should not be relied on, so every metric derived from them is unreliable." }
+      : input.goingConcernHits > 0
       ? { active: true, reason: '"Going concern" language in recent SEC filings — the most serious solvency warning a company can disclose.' }
       : null,
   })

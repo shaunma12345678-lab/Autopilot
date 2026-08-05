@@ -7,15 +7,32 @@
 // throttle conservatively rather than assume a specific number.
 const BASE = "https://api.coingecko.com/api/v3"
 
+// CoinGecko's free tier throttles hard and answers 429 in bursts. Crucially,
+// a 429 must NEVER be reported as "coin not found" — that turns a transient
+// rate limit into a false claim that a real asset doesn't exist. Verified:
+// bulk seeding produced 21 "not found" failures for coins whose endpoints
+// return 200 when queried individually.
 let lastRequestAt = 0
+const MIN_REQUEST_GAP_MS = 3000
+const RETRY_BACKOFF_MS = [0, 6000, 15000]
+
 async function throttledFetch(url: string): Promise<Response> {
-  const now = Date.now()
-  const wait = Math.max(0, lastRequestAt + 2000 - now)
-  if (wait > 0) await new Promise(r => setTimeout(r, wait))
-  lastRequestAt = Date.now()
-  const headers: Record<string, string> = { Accept: "application/json" }
-  if (process.env.COINGECKO_API_KEY) headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY
-  return fetch(url, { headers, signal: AbortSignal.timeout(10000) })
+  for (let attempt = 0; attempt < RETRY_BACKOFF_MS.length; attempt++) {
+    if (RETRY_BACKOFF_MS[attempt] > 0) await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS[attempt]))
+
+    const gap = Math.max(0, lastRequestAt + MIN_REQUEST_GAP_MS - Date.now())
+    if (gap > 0) await new Promise(r => setTimeout(r, gap))
+    lastRequestAt = Date.now()
+
+    const headers: Record<string, string> = { Accept: "application/json" }
+    if (process.env.COINGECKO_API_KEY) headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY
+
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(15000) })
+    if (res.status !== 429 && res.status < 500) return res
+    if (attempt === RETRY_BACKOFF_MS.length - 1) return res
+  }
+  // Unreachable, but keeps the return type honest.
+  return fetch(url, { signal: AbortSignal.timeout(15000) })
 }
 
 export interface CoinSearchResult {
@@ -24,7 +41,38 @@ export interface CoinSearchResult {
   name: string
 }
 
+// Looks like a CoinGecko id already (lowercase, dashes, no spaces)?
+function looksLikeCoingeckoId(q: string): boolean {
+  return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(q) && q.length > 2
+}
+
 export async function searchCoin(query: string): Promise<CoinSearchResult | null> {
+  // Resolving a known id through /search wastes a request against a tight rate
+  // limit, so try the id directly first.
+  //
+  // CRITICAL: if the direct lookup fails for a TRANSIENT reason (rate limit,
+  // server error) we must return null rather than falling through to fuzzy
+  // search. Fuzzy search on an exact id can silently return a DIFFERENT asset —
+  // seeding "ripple" during a rate-limit burst resolved to RLUSD (Ripple's
+  // stablecoin) instead of XRP and wrote the wrong asset to the database.
+  // Returning nothing is recoverable; returning the wrong coin is not.
+  if (looksLikeCoingeckoId(query)) {
+    try {
+      const res = await throttledFetch(`${BASE}/coins/${encodeURIComponent(query)}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false&market_data=false`)
+      if (res.ok) {
+        const d = await res.json()
+        if (d?.id && d?.symbol) {
+          return { coingeckoId: d.id, symbol: String(d.symbol).toUpperCase(), name: d.name ?? d.id }
+        }
+      }
+      // 404 means it genuinely isn't an id — a free-text query like "ethereum
+      // classic" can still be searched. Anything else is transient: bail out.
+      if (res.status !== 404) return null
+    } catch {
+      return null // network failure — do not risk a fuzzy substitution
+    }
+  }
+
   try {
     const res = await throttledFetch(`${BASE}/search?query=${encodeURIComponent(query)}`)
     if (!res.ok) return null

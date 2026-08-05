@@ -32,21 +32,39 @@ export interface ActionSignalInput {
   qualityScore: number | null
   riskScore: number | null
   dataConfidence: string
+  /** Forward-looking composite. Strong current numbers with collapsing forward
+   *  indicators is not a BUY — see the gate below. */
+  forwardScore?: number | null
   /** Hard disqualifiers surfaced by the asset-specific scorer (honeypot, going concern, etc.). */
   hardFail?: { active: boolean; reason: string } | null
 }
 
-// Thresholds live here as named constants so the matrix can be tuned in one
-// place rather than being scattered through the scorers.
-const RISK_DISQUALIFYING = 70
-const RISK_CONTAINED = 45
-const RISK_LOW = 30
-const QUALITY_WEAK = 40
-const QUALITY_STRONG = 65
-const QUALITY_DECENT = 55
+// ── Thresholds, CALIBRATED against the real distribution ───────────────────
+//
+// These are not guesses. Scoring a diversified 80-company universe produced:
+//   quality: min 42 | p25 63 | median 69.5 | p75 75 | p90 79 | max 87
+//   risk:    mean 30 | max 63
+//   forward: mean 53
+//
+// The original BUY bar of 65 sat near the 35th percentile, so 78% of the
+// universe came back BUY and 0% came back PASS. A signal that fires on three
+// quarters of everything carries no information. These thresholds put BUY at
+// roughly the top 15-20% and let genuinely weak names reach PASS.
+//
+// Re-derive these if the universe composition changes materially — a screen
+// calibrated on large caps will behave differently on micro caps.
+const RISK_DISQUALIFYING = 60
+const RISK_CONTAINED = 40
+const RISK_LOW = 25
+const QUALITY_WEAK = 52          // below this, the fundamentals don't hold up
+const QUALITY_STRONG = 76        // ~p80 of the observed distribution
+const QUALITY_DECENT = 70        // ~p50-60, only reaches BUY with very low risk
+const FORWARD_WEAK = 35          // collapsing forward indicators block a BUY
+const FORWARD_ADEQUATE = 45
+const FORWARD_GOOD = 55
 
 export function deriveActionSignal(input: ActionSignalInput): ActionSignalResult {
-  const { qualityScore, riskScore, dataConfidence, hardFail } = input
+  const { qualityScore, riskScore, dataConfidence, forwardScore, hardFail } = input
 
   // 1. Never emit a signal we can't stand behind.
   if (qualityScore === null || dataConfidence === "insufficient") {
@@ -80,19 +98,32 @@ export function deriveActionSignal(input: ActionSignalInput): ActionSignalResult
     }
   }
 
-  if (qualityScore >= QUALITY_STRONG && risk <= RISK_CONTAINED) {
+  // Forward gate: a company can look excellent on trailing numbers while its
+  // contracted backlog shrinks and growth decelerates. That combination is the
+  // classic late-cycle trap, so weak forward indicators block a BUY outright
+  // rather than being averaged away against strong history.
+  const forward = forwardScore ?? null
+  if (qualityScore >= QUALITY_STRONG && forward !== null && forward < FORWARD_WEAK) {
     return {
-      signal: "buy",
-      label: "BUY",
-      rationale: `Strong fundamentals (${qualityScore}/100) with risk contained at ${risk}/100.`,
+      signal: "hold",
+      label: "HOLD",
+      rationale: `Trailing fundamentals are strong (${qualityScore}/100) but forward indicators are weak (${forward}/100) — backlog, reinvestment and growth trajectory aren't supporting the historical numbers.`,
     }
   }
 
-  if (qualityScore >= QUALITY_DECENT && risk <= RISK_LOW) {
+  if (qualityScore >= QUALITY_STRONG && risk <= RISK_CONTAINED && (forward === null || forward >= FORWARD_ADEQUATE)) {
     return {
       signal: "buy",
       label: "BUY",
-      rationale: `Solid fundamentals (${qualityScore}/100) paired with unusually low risk (${risk}/100).`,
+      rationale: `Top-tier fundamentals (${qualityScore}/100) with risk contained at ${risk}/100${forward !== null ? ` and forward indicators holding up (${forward}/100)` : ""}.`,
+    }
+  }
+
+  if (qualityScore >= QUALITY_DECENT && risk <= RISK_LOW && (forward === null || forward >= FORWARD_GOOD)) {
+    return {
+      signal: "buy",
+      label: "BUY",
+      rationale: `Solid fundamentals (${qualityScore}/100) paired with unusually low risk (${risk}/100)${forward !== null ? ` and healthy forward indicators (${forward}/100)` : ""}.`,
     }
   }
 

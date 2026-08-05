@@ -27,7 +27,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   if (!query) return { ok: false, error: "Symbol or coin name is required" }
 
   const found = await searchCoin(query)
-  if (!found) return { ok: false, error: `"${query}" was not found on CoinGecko` }
+  if (!found) return { ok: false, error: `Could not resolve "${query}" — either it is not listed on CoinGecko, or the API is currently rate-limiting. Retrying in a minute usually resolves the latter.` }
 
   const market = await getCoinMarketData(found.coingeckoId)
   if (!market) return { ok: false, error: `No market data available for ${found.symbol}` }

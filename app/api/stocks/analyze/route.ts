@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   if (!body.symbol) return Response.json({ error: "symbol is required" }, { status: 400 })
 
   try {
-    const result = await analyzeAndUpsertTicker(body.symbol, { includeNarrative: true })
+    const result = await analyzeAndUpsertTicker(body.symbol, { includeNarrative: true, includeNews: true })
     if (!result.ok) return Response.json({ error: result.error }, { status: 404 })
     return Response.json({ ticker: result.ticker })
   } catch (err) {

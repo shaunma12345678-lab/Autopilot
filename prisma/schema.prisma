@@ -624,6 +624,19 @@ model Ticker {
   narrativeSourceUrl       String?
   narrativeFilingDate      String?
 
+  // Live corporate events from 8-K filings (see lib/live-events.ts)
+  liveEvents               Json?
+  liveEventFlags           Json?
+  hasRestatement           Boolean?
+  hasAuditorChange         Boolean?
+  execChangeCount          Int?
+
+  // Recent news scan (see lib/company-news.ts)
+  newsSummary              String?
+  newsTone                 String?
+  newsHeadlines            Json?
+  newsMaterialConcerns     Json?
+
   // Position context — where price sits vs its own history
   pricePercentile1y        Int?
   trendState               String?       // uptrend | downtrend | sideways | unknown
