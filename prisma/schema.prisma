@@ -624,6 +624,28 @@ model Ticker {
   narrativeSourceUrl       String?
   narrativeFilingDate      String?
 
+  // Balance-sheet landmines (see lib/balance-sheet-risk.ts)
+  debtDueNext12MoUsd       Float?
+  debtWallToFcfYears       Float?
+  sbcToRevenuePct          Float?
+  goodwillToAssetsPct      Float?
+  hadGoodwillImpairment    Boolean?
+  effectiveTaxRatePct      Float?
+  balanceSheetFlags        Json?
+
+  // Capital allocation track record (see lib/capital-allocation.ts)
+  capitalAllocationScore   Int?
+  avgBuybackPricePercentile Float?
+  capitalAllocationReasons Json?
+
+  // Governance from DEF 14A (see lib/governance.ts)
+  governanceScore          Int?
+  payAlignment             String?
+  dualClass                Boolean?
+  governanceSummary        String?
+  governanceFlags          Json?
+  governanceSourceUrl      String?
+
   // Live corporate events from 8-K filings (see lib/live-events.ts)
   liveEvents               Json?
   liveEventFlags           Json?

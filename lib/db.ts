@@ -22,7 +22,15 @@ function applyFilters(q: unknown, where: W): unknown {
       r = (r as { in: (k: string, v: unknown[]) => unknown }).in(key, value.map(ser))
     } else if (typeof value === "object" && !(value instanceof Date) && value !== null) {
       const sub = value as W
-      if ("not" in sub) r = (r as { neq: (k: string, v: unknown) => unknown }).neq(key, ser(sub.not))
+      // `{ not: null }` means IS NOT NULL. PostgREST's neq.null matches
+      // NOTHING — SQL comparisons against NULL are never true — so routing it
+      // through neq silently emptied every "field is not null" query
+      // (top-picks, every screen, the markets list). Must use not.is.null.
+      if ("not" in sub) {
+        r = sub.not === null
+          ? (r as { not: (k: string, op: string, v: unknown) => unknown }).not(key, "is", null)
+          : (r as { neq: (k: string, v: unknown) => unknown }).neq(key, ser(sub.not))
+      }
       else if ("in" in sub) r = (r as { in: (k: string, v: unknown[]) => unknown }).in(key, (sub.in as unknown[]).map(ser))
       else if ("gt" in sub) r = (r as { gt: (k: string, v: unknown) => unknown }).gt(key, ser(sub.gt))
       else if ("lt" in sub) r = (r as { lt: (k: string, v: unknown) => unknown }).lt(key, ser(sub.lt))

@@ -134,6 +134,17 @@ export interface FundamentalSeries {
   remainingPerformanceObligation: AnnualObservation[]
   researchAndDevelopment: AnnualObservation[]
   deferredRevenue: AnnualObservation[]
+  // Balance-sheet landmines — obligations and exposures that don't appear in
+  // the headline debt-to-equity ratio.
+  debtDueNext12Mo: AnnualObservation[]
+  debtDueYear2: AnnualObservation[]
+  debtDueYear3: AnnualObservation[]
+  shareBasedComp: AnnualObservation[]
+  goodwill: AnnualObservation[]
+  goodwillImpairment: AnnualObservation[]
+  operatingLeaseLiability: AnnualObservation[]
+  effectiveTaxRate: AnnualObservation[]
+  treasuryStockPurchased: AnnualObservation[]
 }
 
 export function extractSeries(facts: CompanyFacts): FundamentalSeries {
@@ -161,6 +172,15 @@ export function extractSeries(facts: CompanyFacts): FundamentalSeries {
     dividendsPaid: annualSeries(facts, gaap("PaymentsOfDividends", "PaymentsOfDividendsCommonStock")),
     dividendPerShare: annualSeries(facts, gaap("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid")),
     epsDiluted: annualSeries(facts, gaap("EarningsPerShareDiluted", "EarningsPerShareBasic")),
+    debtDueNext12Mo: annualSeries(facts, gaap("LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths"), true),
+    debtDueYear2: annualSeries(facts, gaap("LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo"), true),
+    debtDueYear3: annualSeries(facts, gaap("LongTermDebtMaturitiesRepaymentsOfPrincipalInYearThree"), true),
+    shareBasedComp: annualSeries(facts, gaap("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense")),
+    goodwill: annualSeries(facts, gaap("Goodwill"), true),
+    goodwillImpairment: annualSeries(facts, gaap("GoodwillImpairmentLoss", "ImpairmentOfIntangibleAssetsIncludingGoodwill")),
+    operatingLeaseLiability: annualSeries(facts, gaap("OperatingLeaseLiability", "OperatingLeaseLiabilityNoncurrent"), true),
+    effectiveTaxRate: annualSeries(facts, gaap("EffectiveIncomeTaxRateContinuingOperations")),
+    treasuryStockPurchased: annualSeries(facts, gaap("PaymentsForRepurchaseOfCommonStock", "TreasuryStockValueAcquiredCostMethod")),
     remainingPerformanceObligation: annualSeries(facts, gaap("RevenueRemainingPerformanceObligation"), true),
     researchAndDevelopment: annualSeries(facts, gaap("ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost")),
     deferredRevenue: annualSeries(facts, gaap("ContractWithCustomerLiability", "ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"), true),

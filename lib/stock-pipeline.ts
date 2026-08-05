@@ -23,6 +23,9 @@ import { summarizeLiveEvents } from "@/lib/live-events"
 import { scanCompanyNews } from "@/lib/company-news"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
+import { computeBalanceSheetRisk } from "@/lib/balance-sheet-risk"
+import { computeCapitalAllocation } from "@/lib/capital-allocation"
+import { readProxyGovernance } from "@/lib/governance"
 
 export interface AnalyzeStockResult {
   ok: boolean
@@ -89,6 +92,8 @@ export async function analyzeAndUpsertTicker(
   // computed before it. Both are pure computation over data already fetched.
   const forward = computeForwardSignals(series)
   const consistency = computeConsistency(series)
+  const balanceSheet = computeBalanceSheetRisk(series, fundamentals.freeCashFlowTtm)
+  const capitalAllocation = computeCapitalAllocation(series, history.bars)
 
   // Form 4 parsing costs one small fetch per filing, so it's capped and
   // guarded rather than gated behind an opt-in flag.
@@ -106,12 +111,28 @@ export async function analyzeAndUpsertTicker(
     news = await scanCompanyNews(symbol, submissions?.name ?? resolved.name).catch(() => null)
   }
 
+  let governance: Awaited<ReturnType<typeof readProxyGovernance>> = null
+  if (opts.includeNarrative) {
+    try {
+      const proxy = submissions?.recentForms?.find(f => f.form === "DEF 14A")
+      if (proxy) {
+        governance = await readProxyGovernance(
+          resolved.cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate
+        )
+      }
+    } catch { /* governance is an enhancement; never block the score */ }
+  }
+
   const result = scoreStock({
     fundamentals, price, priceMetrics, piotroski, altman, beneish, sectorRelative,
     goingConcernHits: goingConcern.hits,
-    externalRiskPenalty: liveEvents.riskPenalty + (news?.riskPenalty ?? 0),
+    externalRiskPenalty:
+      liveEvents.riskPenalty + (news?.riskPenalty ?? 0) +
+      balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0),
     externalRiskFlags: [
       ...liveEvents.flags,
+      ...balanceSheet.flags,
+      ...(governance?.flags ?? []),
       ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
     ],
     hasRestatement: liveEvents.hasRestatement,
@@ -221,7 +242,28 @@ export async function analyzeAndUpsertTicker(
     deferredRevenueGrowthYoyPct: forward.deferredRevenueGrowthYoyPct,
     revenueAccelerationPct: forward.revenueAccelerationPct,
     forwardScore: forward.forwardScore,
-    forwardReasons: [...forward.forwardReasons, ...consistency.reasons],
+    forwardReasons: [...forward.forwardReasons, ...consistency.reasons, ...capitalAllocation.reasons],
+
+    debtDueNext12MoUsd: balanceSheet.debtDueNext12MoUsd,
+    debtWallToFcfYears: balanceSheet.debtWallToFcfYears,
+    sbcToRevenuePct: balanceSheet.sbcToRevenuePct,
+    goodwillToAssetsPct: balanceSheet.goodwillToAssetsPct,
+    hadGoodwillImpairment: balanceSheet.hadGoodwillImpairment,
+    effectiveTaxRatePct: balanceSheet.effectiveTaxRatePct,
+    balanceSheetFlags: [...balanceSheet.flags, ...balanceSheet.notes],
+
+    capitalAllocationScore: capitalAllocation.score,
+    avgBuybackPricePercentile: capitalAllocation.avgBuybackPricePercentile,
+    capitalAllocationReasons: capitalAllocation.reasons,
+
+    ...(governance ? {
+      governanceScore: governance.governanceScore,
+      payAlignment: governance.payAlignment,
+      dualClass: governance.dualClass,
+      governanceSummary: governance.summary,
+      governanceFlags: governance.flags,
+      governanceSourceUrl: governance.sourceUrl,
+    } : {}),
 
     consistencyScore: consistency.score,
     consistencyDetail: consistency.detail,

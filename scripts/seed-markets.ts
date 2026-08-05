@@ -40,6 +40,17 @@ const STOCK_UNIVERSE = [
   "HD", "LOW", "NKE", "SBUX", "TJX", "TGT", "DIS",
   // Software and internet growth
   "NOW", "INTU", "PANW", "SNOW", "UBER", "ABNB", "SHOP", "NFLX",
+  // Mid-caps and second-tier names — the screens need breadth beyond mega-caps
+  // to have anything to discriminate between.
+  "ADSK", "WDAY", "TEAM", "DDOG", "NET", "ZS", "CRWD", "MDB", "HUBS", "TTD",
+  "FTNT", "ANET", "KLAC", "LRCX", "ADI", "NXPI", "ON", "MCHP", "SWKS", "TER",
+  "REGN", "VRTX", "BIIB", "GILD", "ZTS", "IDXX", "DXCM", "ISRG", "EW", "SYK",
+  "SCHW", "PNC", "USB", "TFC", "COF", "DFS", "SPGI", "MCO", "ICE", "CME",
+  "MDLZ", "HSY", "K", "CAG", "CPB", "CHD", "CLX", "MKC", "STZ", "TAP",
+  "EMR", "PH", "ITW", "ROK", "CMI", "PCAR", "FAST", "GWW", "URI", "CSX",
+  "PSX", "VLO", "MPC", "OXY", "HAL", "BKR", "EOG", "DVN", "FCX", "APD",
+  "AEP", "EXC", "XEL", "ED", "WEC", "PEG", "SRE", "PPL", "CMS", "AEE",
+  "ORLY", "AZO", "ROST", "ULTA", "BBY", "DKS", "YUM", "CMG", "DRI", "MAR",
   // Beaten-down / turnaround candidates — the screens need these to have range
   "PARA", "WBA", "F", "GM", "PYPL", "NKE", "EL", "DG", "CVS", "MMM",
 ]
