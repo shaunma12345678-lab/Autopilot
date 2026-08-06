@@ -12,6 +12,7 @@ import { getDevActivity } from "@/lib/github-activity"
 import { resolveProtocolSlug, getProtocolRevenue30d, getNextUnlock } from "@/lib/defillama-client"
 import { resolveChain, fetchTokenSecurity, notApplicableSecurity } from "@/lib/token-security"
 import { fetchOrderbookDepth } from "@/lib/orderbook-depth"
+import { getConsensusQuote, listingQualityScore } from "@/lib/exchange-aggregator"
 import { computeMetricsFromCloses } from "@/lib/price-history"
 import { scoreCrypto } from "@/lib/crypto-scoring"
 import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
@@ -27,22 +28,61 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   const query = queryRaw.trim()
   if (!query) return { ok: false, error: "Symbol or coin name is required" }
 
-  const found = await searchCoin(query)
-  if (!found) return { ok: false, error: `Could not resolve "${query}" — either it is not listed on CoinGecko, or the API is currently rate-limiting. Retrying in a minute usually resolves the latter.` }
+  // INDEPENDENCE: our own exchange data is tried first and the aggregator is
+  // optional. Previously a CoinGecko rate limit hard-failed the whole analysis
+  // even when we had live regulated-venue prices in hand — the system couldn't
+  // run without a third party it doesn't actually need for scoring.
+  //
+  // The aggregator now supplies only what exchanges don't publish: circulating
+  // supply, market cap rank and token contract addresses. If it's unavailable,
+  // the asset still scores on our own price, spread, divergence and depth, at
+  // correspondingly lower data completeness.
+  const found = await searchCoin(query).catch(() => null)
 
-  const market = await getCoinMarketData(found.coingeckoId)
-  if (!market) return { ok: false, error: `No market data available for ${found.symbol}` }
+  // Resolve a tradeable symbol even when the aggregator can't be reached.
+  const fallbackSymbol = query.toUpperCase().replace(/[^A-Z0-9]/g, "")
+  const symbolForExchange = found?.symbol ?? fallbackSymbol
+
+  const [marketRaw, exchangeEarly] = await Promise.all([
+    found ? getCoinMarketData(found.coingeckoId).catch(() => null) : Promise.resolve(null),
+    getConsensusQuote(symbolForExchange).catch(() => null),
+  ])
+
+  if (!marketRaw && !exchangeEarly) {
+    return { ok: false, error: `Could not resolve "${query}" on any regulated exchange, and aggregator metadata is unavailable. Either it isn't listed on a venue we track, or both sources are temporarily rate-limiting.` }
+  }
+
+  // Synthesize a market record from our own data when the aggregator is down.
+  const market: NonNullable<Awaited<ReturnType<typeof getCoinMarketData>>> = marketRaw ?? {
+    priceUsd: exchangeEarly!.consensusPrice,
+    volume24hUsd: exchangeEarly!.volume24hUsd,
+    marketCapUsd: null,
+    marketCapRank: null,
+    priceChange24hPct: null,
+    priceChange7dPct: null,
+    circulatingSupply: null,
+    totalSupply: null,
+    maxSupply: null,
+    fdvUsd: null,
+    githubRepoUrl: null,
+    platforms: null,
+  }
+
+  const resolvedId = found?.coingeckoId ?? symbolForExchange.toLowerCase()
+  const resolvedSymbol = found?.symbol ?? symbolForExchange
+  const resolvedName = found?.name ?? symbolForExchange
 
   const chain = resolveChain(market.platforms)
 
-  const slug = await resolveProtocolSlug(found.name).catch(() => null)
-  const [revenue30d, nextUnlock, devActivity, security, depth, priceHistory, btcHistory] = await Promise.all([
+  const slug = await resolveProtocolSlug(resolvedName).catch(() => null)
+  const [revenue30d, nextUnlock, devActivity, security, depth, exchange, priceHistory, btcHistory] = await Promise.all([
     slug ? getProtocolRevenue30d(slug).catch(() => null) : Promise.resolve(null),
     slug ? getNextUnlock(slug).catch(() => null) : Promise.resolve(null),
     getDevActivity(market.githubRepoUrl).catch(() => null),
     chain ? fetchTokenSecurity(chain.chainId, chain.address).catch(() => null) : Promise.resolve(notApplicableSecurity()),
-    fetchOrderbookDepth(found.symbol).catch(() => null),
-    getCoinPriceHistory(found.coingeckoId).catch(() => [] as number[]),
+    fetchOrderbookDepth(resolvedSymbol).catch(() => null),
+    Promise.resolve(exchangeEarly),
+    getCoinPriceHistory(resolvedId).catch(() => [] as number[]),
     getBtcHistory().catch(() => [] as number[]),
   ])
 
@@ -50,7 +90,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
 
   const deterioration = await detectDeterioration({
     subjectType: "crypto",
-    symbol: found.symbol,
+    symbol: resolvedSymbol,
     qualityScore: null,
     riskScore: null,
     forwardScore: null,
@@ -69,6 +109,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     volatility30dPct: historyMetrics.volatility30dPct,
     maxDrawdown1yPct: historyMetrics.maxDrawdown1yPct,
     btcCorrelation: historyMetrics.benchmarkCorrelation,
+    exchange,
     deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
   })
 
@@ -83,17 +124,28 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
       "isHoneypot", "isMintable", "ownershipRenounced", "lpLocked", "isProxy",
       "buyTaxPct", "sellTaxPct", "holderCount", "topHolderPct", "top10HolderPct", "creatorPct",
     ], "goplus"),
-    ...stampFields(["orderbookDepth2PctUsd"], "exchange-orderbook"),
+    ...stampFields(["orderbookDepth2PctUsd", "consensusPriceUsd", "venueCount",
+      "venueDivergencePct", "bidAskSpreadPct", "regulatedVolume24hUsd"], "exchange-orderbook"),
     ...stampFields(["volatility30dPct", "maxDrawdown1yPct", "btcCorrelation", "fdvToMcapRatio", "securityScore"], "derived", { isEstimate: true }),
   }
 
   const data = {
-    coingeckoId: found.coingeckoId,
-    symbol: found.symbol,
-    name: found.name,
+    coingeckoId: resolvedId,
+    symbol: resolvedSymbol,
+    name: resolvedName,
 
     marketCapRank: market.marketCapRank,
-    priceUsd: market.priceUsd,
+    // Our own consensus price from regulated venues takes precedence; the
+    // aggregator figure is the fallback when an asset isn't listed there.
+    priceUsd: exchange?.consensusPrice ?? market.priceUsd,
+    consensusPriceUsd: exchange?.consensusPrice ?? null,
+    venueCount: exchange?.venueCount ?? 0,
+    venueDivergencePct: exchange?.divergencePct ?? null,
+    bidAskSpreadPct: exchange?.spreadPct ?? null,
+    regulatedVolume24hUsd: exchange?.volume24hUsd ?? null,
+    liquidityGrade: exchange?.liquidityGrade ?? null,
+    listingQualityScore: listingQualityScore(exchange?.venueCount ?? 0),
+    exchangeNotes: exchange?.notes ?? [],
     volume24hUsd: market.volume24hUsd,
     marketCapUsd: market.marketCapUsd,
     priceChange24hPct: market.priceChange24hPct,
@@ -146,7 +198,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const existing = await (prisma.cryptoAsset as any).findFirst({ where: { coingeckoId: found.coingeckoId } })
+  const existing = await (prisma.cryptoAsset as any).findFirst({ where: { coingeckoId: resolvedId } })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const saved = existing
@@ -156,7 +208,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   await captureSnapshot({
     subjectType: "crypto",
     subjectId: saved.id,
-    symbol: found.symbol,
+    symbol: resolvedSymbol,
     qualityScore: result.qualityScore,
     riskScore: result.riskScore,
     forwardScore: null,

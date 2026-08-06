@@ -14,6 +14,7 @@ import type { DevActivity } from "./github-activity"
 import type { UpcomingUnlock } from "./defillama-client"
 import type { TokenSecurity } from "./token-security"
 import type { DepthResult } from "./orderbook-depth"
+import type { ConsensusQuote } from "./exchange-aggregator"
 import { deriveActionSignal, type ActionSignal } from "./action-signal"
 
 function clamp(x: number, lo: number, hi: number): number {
@@ -31,6 +32,8 @@ export interface CryptoScoreInput {
   maxDrawdown1yPct: number | null
   btcCorrelation: number | null
   deterioration?: { shouldSell: boolean; reasons: string[] } | null
+  /** Our own regulated-venue market data (lib/exchange-aggregator.ts). */
+  exchange?: ConsensusQuote | null
 }
 
 export type StrengthTier = "strong" | "mixed" | "weak"
@@ -74,10 +77,20 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     ? market.fdvUsd / market.marketCapUsd : null
 
   // ── Data gate on core market fields ───────────────────────────────────────
+  // The core gate deliberately accepts OUR OWN exchange data as equivalent to
+  // aggregator fields. Before this, an asset with a live regulated-venue price,
+  // a measured spread and real depth still scored "insufficient" whenever the
+  // aggregator was rate-limited — the gate was asking for the aggregator
+  // specifically rather than for the underlying fact. Verified: AVAX had a
+  // working two-venue price and still came back unscoreable.
+  const ex = input.exchange
   const coreValues: Array<{ label: string; v: number | null }> = [
-    { label: "Liquidity depth", v: liquidityPct },
-    { label: "7-day price history", v: market.priceChange7dPct },
-    { label: "Market cap rank", v: market.marketCapRank },
+    // Tradeable liquidity: aggregator ratio OR our own spread measurement.
+    { label: "Liquidity", v: liquidityPct ?? (ex?.spreadPct ?? null) },
+    // Price history: 7-day change OR our own multi-venue consensus price.
+    { label: "Price data", v: market.priceChange7dPct ?? (ex?.consensusPrice ?? null) },
+    // Market standing: aggregator rank OR regulated-venue listing count.
+    { label: "Market standing", v: market.marketCapRank ?? (ex?.venueCount ?? null) },
   ]
   const corePresent = coreValues.filter(x => x.v !== null)
   const dataCompletenessPct = Math.round((corePresent.length / coreValues.length) * 100)
@@ -120,6 +133,25 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
 
   if (devActivity !== null) scored.push({ label: "Developer activity", weight: 9, points: clamp(devActivity.devActivityScore, 0, 100) })
 
+  // Exchange-native criteria. These replace aggregator volume as the liquidity
+  // input because they're sourced from venues we'd actually transact on.
+  if (ex) {
+    // Listing quality: two independent regulated-exchange diligence processes
+    // is a materially different thing from one, or from none.
+    scored.push({ label: "Regulated listing quality", weight: 10,
+      points: ex.venueCount >= 2 ? 100 : ex.venueCount === 1 ? 60 : 20 })
+
+    // Cross-venue agreement — an aggregator cannot surface this at all.
+    if (ex.divergencePct !== null) {
+      scored.push({ label: "Cross-venue price agreement", weight: 8,
+        points: clamp(100 - ex.divergencePct * 40, 0, 100) })
+    }
+    if (ex.spreadPct !== null) {
+      scored.push({ label: "Bid-ask spread", weight: 8,
+        points: clamp(100 - ex.spreadPct * 60, 0, 100) })
+    }
+  }
+
   if (depth !== null) {
     // $1M+ of depth within 2% of mid is genuinely deep for a mid-cap.
     scored.push({ label: "Real orderbook depth", weight: 11, points: clamp((depth.totalDepth2PctUsd / 1_000_000) * 100, 0, 100) })
@@ -145,6 +177,23 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     ? Math.round(scored.reduce((s, x) => s + x.points * x.weight, 0) / totalWeight)
     : 50
 
+  // BREADTH GATE. Weight renormalization is correct for a missing metric or
+  // two, but it becomes misleading at the extreme: an asset scored on only
+  // three exchange criteria — all of which naturally sit near 100 for anything
+  // listed on two venues — was returning 97/100 at "high" confidence with no
+  // revenue, security, dev-activity or tokenomics data behind it. That is the
+  // same "confident number from thin data" failure the whole design exists to
+  // prevent, arriving through the back door.
+  //
+  // So the score is pulled toward neutral in proportion to how little of the
+  // criteria set was actually evaluated. Full coverage leaves it untouched.
+  const MAX_POSSIBLE_WEIGHT = 100
+  const breadth = Math.min(totalWeight / MAX_POSSIBLE_WEIGHT, 1)
+  if (breadth < 0.75) {
+    // Blend toward 50 — a thin read shouldn't be able to reach the extremes.
+    qualityScore = Math.round(50 + (qualityScore - 50) * (0.4 + breadth * 0.8))
+  }
+
   // ── Risk axis ─────────────────────────────────────────────────────────────
   const riskFlags: string[] = []
   let riskScore = 30 // crypto baseline is meaningfully higher than equities
@@ -162,6 +211,19 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
       if (security.isMintable === true) qualityScore = Math.min(qualityScore, 55)
       if (security.lpLocked === false) qualityScore = Math.min(qualityScore, 50)
     }
+  }
+
+  if (ex?.liquidityGrade === "fragmented") {
+    riskScore += 18
+    qualityScore = Math.min(qualityScore, 45)
+    riskFlags.push(...ex.notes.filter(n => n.startsWith("⚠")))
+  } else if (ex?.liquidityGrade === "thin") {
+    riskScore += 10
+    riskFlags.push(...ex.notes.filter(n => n.startsWith("⚠")))
+  }
+  if (ex && ex.venueCount === 0) {
+    riskScore += 15
+    riskFlags.push("⚠ Not listed on any regulated exchange we track — no independent listing diligence, and exiting may require an unregulated venue.")
   }
 
   if (liquidityPct !== null && liquidityPct < 0.3) {
@@ -214,6 +276,7 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
 
   // ── Plain-English reasons ─────────────────────────────────────────────────
   const reasons: string[] = []
+  if (ex) reasons.push(...ex.notes.filter(n => n.startsWith("✓")))
   if (security?.applicable && security.securityScore !== null) {
     reasons.push(security.securityScore >= 85
       ? `✓ Contract security checks look clean (${security.securityScore}/100).`
@@ -244,7 +307,14 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   }
 
   qualityScore = clamp(qualityScore, 0, 100)
-  const dataConfidence = dataCompletenessPct >= 90 ? "high" : dataCompletenessPct >= 70 ? "medium" : "low"
+
+  // Confidence reflects CRITERIA BREADTH, not just the three core gate fields.
+  // Passing the gate means "we can say something"; it does not mean "we know
+  // enough to be confident". An exchange-only read caps at low.
+  const breadthPct = Math.round(breadth * 100)
+  const effectiveCompleteness = Math.min(dataCompletenessPct, breadthPct)
+  const dataConfidence = effectiveCompleteness >= 85 ? "high"
+    : effectiveCompleteness >= 65 ? "medium" : "low"
 
   // A honeypot contract is a total-loss condition — it disqualifies outright,
   // no matter how attractive the market data looks.
@@ -267,7 +337,7 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     actionRationale: action.rationale,
     riskScore,
     riskFlags,
-    dataCompletenessPct,
+    dataCompletenessPct: effectiveCompleteness,
     dataConfidence,
     qualityReasons: reasons.length > 0 ? reasons : ["No standout strengths or warnings — a middling profile across the board."],
     liquidityPct,

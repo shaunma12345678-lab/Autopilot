@@ -826,6 +826,19 @@ model CryptoAsset {
   securityScore          Int?          // 0-100, higher = safer
   securityFlags          Json?
 
+  // Our own exchange-native market data (lib/exchange-aggregator.ts).
+  // Sourced directly from regulated venues rather than an aggregator, so the
+  // volume figure excludes wash-traded exchanges and the divergence field
+  // exists at all — an aggregator hands you one blended number.
+  consensusPriceUsd      Float?
+  venueCount             Int?
+  venueDivergencePct     Float?
+  bidAskSpreadPct        Float?
+  regulatedVolume24hUsd  Float?
+  liquidityGrade         String?   // deep | adequate | thin | fragmented
+  listingQualityScore    Int?
+  exchangeNotes          Json?
+
   // Market microstructure (volume is wash-tradeable; depth is much harder to fake)
   orderbookDepth2PctUsd  Float?
 
