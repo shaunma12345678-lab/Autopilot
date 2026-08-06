@@ -25,6 +25,7 @@ import { diffRiskFactors } from "@/lib/risk-factor-diff"
 import { computeValuation, classifyValue } from "@/lib/valuation"
 import { buildBearCase } from "@/lib/bear-case"
 import { checkDataIntegrity } from "@/lib/filing-integrity"
+import { getMarketContext } from "@/lib/market-percentile"
 import { fetchDeepHistory } from "@/lib/price-history"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
@@ -147,6 +148,16 @@ export async function analyzeAndUpsertTicker(
   const piotroski = computePiotroski(series)
   const altman = computeAltmanZ(series, marketCap, sicCode)
   const beneish = computeBeneishM(series)
+
+  // Market-wide percentiles from SEC frames — the real distribution across
+  // every filer, not our own accumulated sample of a few hundred.
+  const marketCtx = await getMarketContext({
+    revenueTtm: fundamentals.revenueTtm,
+    netIncome: series.netIncome?.[0]?.value ?? null,
+    totalAssets: series.totalAssets?.[0]?.value ?? null,
+    operatingCashFlow: series.cfo?.[0]?.value ?? null,
+    rndExpense: series.researchAndDevelopment?.[0]?.value ?? null,
+  }).catch(() => ({ percentiles: [], reasons: [] }))
 
   const sectorBenchmark = await getSectorBenchmark(sicCode)
   const sectorRelative = scoreAgainstSector({
@@ -491,7 +502,7 @@ export async function analyzeAndUpsertTicker(
     } : {}),
 
     qualityScore: result.qualityScore,
-    qualityReasons: result.qualityReasons,
+    qualityReasons: [...result.qualityReasons, ...marketCtx.reasons],
     riskScore: result.riskScore,
     riskFlags: result.riskFlags,
     strengthTier: result.strengthTier,

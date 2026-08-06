@@ -21,7 +21,7 @@ function userAgent(): string {
 // Simple sequential throttle — SEC's hard limit is 10 req/sec; we floor at
 // 120ms between requests to stay safely under it without a queue library.
 let lastRequestAt = 0
-async function throttledFetch(url: string): Promise<Response> {
+export async function throttledFetch(url: string): Promise<Response> {
   const now = Date.now()
   const wait = Math.max(0, lastRequestAt + 120 - now)
   if (wait > 0) await new Promise(r => setTimeout(r, wait))
