@@ -689,6 +689,10 @@ model Ticker {
   liveEventFlags           Json?
   hasRestatement           Boolean?
   hasAuditorChange         Boolean?
+  // Going-concern hits were computed and fed into scoring but never persisted,
+  // so no screen could gate on the most serious solvency warning a company can
+  // issue. Stored now.
+  goingConcernHits         Int?
   execChangeCount          Int?
 
   // Insider activity from Form 4 (see lib/form4-insider.ts)

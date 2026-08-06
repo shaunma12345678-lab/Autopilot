@@ -366,6 +366,7 @@ export async function analyzeAndUpsertTicker(
     accountingQualityScore: accounting.qualityScore,
     accountingFlags: [...accounting.flags, ...accounting.notes],
 
+    goingConcernHits: goingConcern.hits,
     valuationScore: valuation.valuationScore,
     earningsYieldPct: valuation.earningsYieldPct,
     fcfYieldPct: valuation.fcfYieldPct,
