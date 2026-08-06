@@ -624,6 +624,21 @@ model Ticker {
   narrativeSourceUrl       String?
   narrativeFilingDate      String?
 
+  // Narrative-vs-numbers cross-validation (lib/contradiction-check.ts)
+  credibilityScore         Int?
+  contradictions           Json?
+  contradictionFlags       Json?
+
+  // Accounting quality — is reported profit backed by cash? (lib/accounting-quality.ts)
+  cashConversionRatio      Float?
+  avgCashConversion        Float?
+  dsoDays                  Float?
+  dsoTrendDays             Float?
+  inventoryTurns           Float?
+  inventoryTurnsTrend      Float?
+  accountingQualityScore   Int?
+  accountingFlags          Json?
+
   // Balance-sheet landmines (see lib/balance-sheet-risk.ts)
   debtDueNext12MoUsd       Float?
   debtWallToFcfYears       Float?

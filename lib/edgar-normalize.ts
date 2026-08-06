@@ -145,6 +145,7 @@ export interface FundamentalSeries {
   operatingLeaseLiability: AnnualObservation[]
   effectiveTaxRate: AnnualObservation[]
   treasuryStockPurchased: AnnualObservation[]
+  inventory: AnnualObservation[]
 }
 
 export function extractSeries(facts: CompanyFacts): FundamentalSeries {
@@ -181,6 +182,7 @@ export function extractSeries(facts: CompanyFacts): FundamentalSeries {
     operatingLeaseLiability: annualSeries(facts, gaap("OperatingLeaseLiability", "OperatingLeaseLiabilityNoncurrent"), true),
     effectiveTaxRate: annualSeries(facts, gaap("EffectiveIncomeTaxRateContinuingOperations")),
     treasuryStockPurchased: annualSeries(facts, gaap("PaymentsForRepurchaseOfCommonStock", "TreasuryStockValueAcquiredCostMethod")),
+    inventory: annualSeries(facts, gaap("InventoryNet", "InventoryFinishedGoodsNetOfReserves"), true),
     remainingPerformanceObligation: annualSeries(facts, gaap("RevenueRemainingPerformanceObligation"), true),
     researchAndDevelopment: annualSeries(facts, gaap("ResearchAndDevelopmentExpense", "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost")),
     deferredRevenue: annualSeries(facts, gaap("ContractWithCustomerLiability", "ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"), true),

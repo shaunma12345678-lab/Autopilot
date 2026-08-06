@@ -24,6 +24,8 @@ import { scanCompanyNews } from "@/lib/company-news"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
 import { computeBalanceSheetRisk } from "@/lib/balance-sheet-risk"
+import { computeAccountingQuality } from "@/lib/accounting-quality"
+import { checkContradictions } from "@/lib/contradiction-check"
 import { computeCapitalAllocation } from "@/lib/capital-allocation"
 import { readProxyGovernance } from "@/lib/governance"
 
@@ -113,6 +115,7 @@ export async function analyzeAndUpsertTicker(
   const forward = computeForwardSignals(series)
   const consistency = computeConsistency(series)
   const balanceSheet = computeBalanceSheetRisk(series, fundamentals.freeCashFlowTtm)
+  const accounting = computeAccountingQuality(series)
   const capitalAllocation = computeCapitalAllocation(series, history.bars)
 
   // Form 4 parsing costs one small fetch per filing, so it's capped and
@@ -148,10 +151,11 @@ export async function analyzeAndUpsertTicker(
     goingConcernHits: goingConcern.hits,
     externalRiskPenalty:
       liveEvents.riskPenalty + (news?.riskPenalty ?? 0) +
-      balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0),
+      balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0) + accounting.riskPenalty,
     externalRiskFlags: [
       ...liveEvents.flags,
       ...balanceSheet.flags,
+      ...accounting.flags,
       ...(governance?.flags ?? []),
       ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
     ],
@@ -184,6 +188,14 @@ export async function analyzeAndUpsertTicker(
       }
     } catch { /* narrative is an enhancement; never block the score on it */ }
   }
+
+  // Cross-validate management's narrative against the audited numbers. This is
+  // the check that catches promotional language the AI would otherwise accept.
+  const contradiction = checkContradictions({
+    narrative, fundamentals, forward, accounting, balanceSheet,
+    capitalAllocation,
+  })
+
 
   // Per-field source attribution — the integrity layer's core promise: a user
   // can always see whether a number was filed with the SEC, quoted from a
@@ -263,6 +275,19 @@ export async function analyzeAndUpsertTicker(
     revenueAccelerationPct: forward.revenueAccelerationPct,
     forwardScore: forward.forwardScore,
     forwardReasons: [...forward.forwardReasons, ...consistency.reasons, ...capitalAllocation.reasons],
+
+    cashConversionRatio: accounting.cashConversionRatio,
+    avgCashConversion: accounting.avgCashConversion,
+    dsoDays: accounting.dsoDays,
+    dsoTrendDays: accounting.dsoTrendDays,
+    inventoryTurns: accounting.inventoryTurns,
+    inventoryTurnsTrend: accounting.inventoryTurnsTrend,
+    accountingQualityScore: accounting.qualityScore,
+    accountingFlags: [...accounting.flags, ...accounting.notes],
+
+    credibilityScore: contradiction.credibilityScore,
+    contradictions: contradiction.contradictions,
+    contradictionFlags: contradiction.flags,
 
     debtDueNext12MoUsd: balanceSheet.debtDueNext12MoUsd,
     debtWallToFcfYears: balanceSheet.debtWallToFcfYears,

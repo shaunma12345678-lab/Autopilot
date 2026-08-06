@@ -47,6 +47,10 @@
     {
       "path": "/api/cron/crypto-universe",
       "schedule": "0 */12 * * *"
+    },
+    {
+      "path": "/api/markets/health",
+      "schedule": "0 */4 * * *"
     }
   ]
 }

@@ -9,6 +9,7 @@
 // on the list.
 import { useState, useEffect, useCallback } from "react"
 import { actionSignalStyle } from "@/lib/action-signal"
+import AssetDetail from "./AssetDetail"
 
 interface Row {
   id: string
@@ -159,56 +160,8 @@ export default function TopRanked({ kind, password }: { kind: "stock" | "crypto"
                 </div>
 
                 {isOpen && (
-                  <div className="border-t border-gray-700/40 px-4 py-3 space-y-3" onClick={e => e.stopPropagation()}>
-                    {r.actionRationale && (
-                      <div className={`rounded-lg border px-3 py-2 ${actionSignalStyle(r.actionSignal)}`}>
-                        <p className="text-[11px]">{r.actionRationale}</p>
-                      </div>
-                    )}
-
-                    <div className="space-y-1.5">
-                      <Bar label="Fundamental strength" value={r.qualityScore} />
-                      <Bar label="Forward outlook" value={r.forwardScore} />
-                      <Bar label="Multi-year consistency" value={r.consistencyScore} />
-                      <Bar label="Governance" value={r.governanceScore} />
-                      <Bar label="Capital allocation" value={r.capitalAllocationScore} />
-                      <Bar label="Contract security" value={r.securityScore} good={80} />
-                    </div>
-
-                    {r.situationSummary && (
-                      <div>
-                        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Current situation</p>
-                        <p className="text-[11px] text-gray-300">{r.situationSummary}</p>
-                      </div>
-                    )}
-
-                    {r.narrativeSummary && (
-                      <div>
-                        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">What the business does & what management says is next</p>
-                        <p className="text-[11px] text-gray-300">{r.narrativeSummary}</p>
-                      </div>
-                    )}
-
-                    {r.governanceSummary && (
-                      <div>
-                        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                          How it&apos;s run{r.payAlignment ? ` · pay alignment: ${r.payAlignment}` : ""}
-                        </p>
-                        <p className="text-[11px] text-gray-300">{r.governanceSummary}</p>
-                      </div>
-                    )}
-
-                    <Section title="Why this score" items={r.qualityReasons} />
-                    <Section title="Forward & consistency" items={r.forwardReasons} />
-                    <Section title="Capital allocation" items={r.capitalAllocationReasons} />
-                    {r.insiderSummary && <Section title="Insider activity" items={[r.insiderSummary]} />}
-                    <Section title="Balance sheet" items={r.balanceSheetFlags} tone="text-amber-300/80" />
-                    <Section title="Risk flags" items={r.riskFlags} tone="text-red-300/80" />
-                    <Section title="Contract security" items={r.securityFlags} tone="text-red-300/80" />
-
-                    <p className="text-[10px] text-gray-600 pt-1 border-t border-gray-700/40">
-                      Informational analysis of public filings and market data. Not investment advice.
-                    </p>
+                  <div className="border-t border-gray-700/40 px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <AssetDetail kind={kind} symbol={r.symbol} password={password} />
                   </div>
                 )}
               </div>
