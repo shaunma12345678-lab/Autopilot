@@ -21,6 +21,7 @@
 // separates a real legal problem from solicitation, and told to say when it
 // cannot tell.
 import { runAgent } from "./claude"
+import { classifyNews } from "./news-classifier"
 
 export interface NewsItem {
   title: string
@@ -92,30 +93,6 @@ export async function fetchNewsItems(
   }
 }
 
-const NEWS_SYSTEM = `You read recent news headlines about a public company and judge what actually matters to an investor.
-
-WHAT SEPARATES SIGNAL FROM NOISE — apply this strictly:
-
-NOT material, and must never be reported as a concern:
-- "Investigation initiated" / "investigates claims on behalf of shareholders" from PLAINTIFF LAW FIRMS (Kahn Swick & Foti, Pomerantz, Rosen, Bronstein, Levi & Korsinsky, Schall, Glancy, Bragar Eagel and similar). These firms publish these about nearly any stock that has declined and syndicate them widely. They indicate a price drop, not wrongdoing.
-- Analyst price-target changes, rating changes, "beats/misses estimates" posts.
-- Automated "stock moves X%", "what the charts say", "is it a buy?" content.
-- Listicles, ETF-inclusion notices, headcount/data-vendor posts.
-
-MATERIAL, and must be reported:
-- Government or regulator action: SEC enforcement, DOJ, FTC, FDA decisions, subpoenas.
-- Mergers, acquisitions, divestitures, and their regulatory milestones.
-- Executive departures, especially CFO or auditor.
-- Guidance changes, restatements, product recalls, plant closures, major contract wins or losses.
-- Layoffs, restructuring, credit downgrades, covenant issues, strikes.
-
-Rules:
-- Report only what the headlines state. Never infer beyond them, never add outside knowledge.
-- If the headlines are all noise, say so plainly and return empty arrays. That is a valid and common outcome.
-- Distinguish a DEVELOPMENT (a fact that happened) from a CONCERN (a fact that threatens the business).
-
-Return ONLY valid JSON, no markdown fences.`
-
 export async function readCompanyNews(
   companyName: string,
   symbol: string
@@ -123,50 +100,53 @@ export async function readCompanyNews(
   const items = await fetchNewsItems(companyName, symbol)
   if (items.length === 0) return null
 
-  const empty: NewsRead = {
-    items: items.slice(0, 12), itemCount: items.length,
-    materialDevelopments: [], materialConcerns: [],
-    tone: "unclear", summary: "", riskPenalty: 0,
+  // DETERMINISTIC FIRST, ALWAYS. Classification runs in code we own: it cannot
+  // rate-limit, cannot exhaust a quota, and returns the same answer every time.
+  // The previous design put an LLM in this position and, when the provider
+  // silently died, every company came back with no news while the feature
+  // reported success.
+  const classified = classifyNews(items)
+
+  const base: NewsRead = {
+    items: items.slice(0, 12),
+    itemCount: items.length,
+    materialDevelopments: classified.material
+      .filter(m => m.category === "corporate_action" || m.category === "guidance" || m.category === "leadership")
+      .map(m => `${m.title} — ${m.why}`),
+    materialConcerns: classified.material
+      .filter(m => ["regulatory", "operational", "financing", "litigation"].includes(m.category))
+      .map(m => `${m.title} — ${m.why}`),
+    tone: classified.material.length === 0
+      ? "unclear"
+      : classified.riskPenalty > 0 ? "negative" : "mixed",
+    summary: classified.summary,
+    riskPenalty: classified.riskPenalty,
   }
+
+  // The model is used ONLY to write a readable paragraph over facts the rules
+  // already selected. It never decides what is material, so if it is
+  // unavailable the analysis is unchanged and only the prose is missing.
+  if (classified.material.length === 0) return base
 
   try {
     const raw = await runAgent(
-      NEWS_SYSTEM,
+      `You write a short factual summary of company developments for an investor.
+Report ONLY what the supplied items state. Never infer, never speculate, never add outside knowledge, never give a recommendation.
+Return ONLY valid JSON, no markdown fences.`,
       `Company: ${companyName} (${symbol})
 
-Recent headlines:
-${items.map((i, n) => `${n + 1}. [${i.source}] ${i.title}`).join("\n")}
+Material developments already identified:
+${classified.material.map(m => `- [${m.category}] ${m.title} (${m.source})`).join("\n")}
 
-Return JSON:
-{
-  "materialDevelopments": ["specific factual developments, max 5"],
-  "materialConcerns": ["specific things that threaten the business, max 5"],
-  "tone": "positive" | "mixed" | "negative" | "unclear",
-  "summary": "two sentences on what is actually going on at this company"
-}`,
-      { maxTokens: 900, jsonMode: true }
+Return JSON: { "summary": "two sentences on what is actually going on at this company" }`,
+      { maxTokens: 400, jsonMode: true }
     )
     const p = typeof raw === "string" ? JSON.parse(raw.replace(/```json|```/g, "").trim()) : raw
-
-    const strs = (v: unknown): string[] =>
-      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 5) : []
-
-    const materialConcerns = strs(p?.materialConcerns)
-    const tone = ["positive", "mixed", "negative", "unclear"].includes(p?.tone) ? p.tone : "unclear"
-
-    return {
-      items: items.slice(0, 12),
-      itemCount: items.length,
-      materialDevelopments: strs(p?.materialDevelopments),
-      materialConcerns,
-      tone,
-      summary: typeof p?.summary === "string" ? p.summary : "",
-      // News feeds the risk axis only when it surfaces something concrete, and
-      // is capped low. A press cycle is not a business fundamental, and
-      // sentiment decays far faster than anything in a filing.
-      riskPenalty: Math.min(materialConcerns.length * 5, 15),
+    if (typeof p?.summary === "string" && p.summary.trim()) {
+      return { ...base, summary: p.summary }
     }
   } catch {
-    return empty
+    // Prose unavailable. The deterministic summary already says what happened.
   }
+  return base
 }
