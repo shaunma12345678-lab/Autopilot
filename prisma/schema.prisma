@@ -624,6 +624,17 @@ model Ticker {
   narrativeSourceUrl       String?
   narrativeFilingDate      String?
 
+  // Valuation axis (lib/valuation.ts) — cheapness versus the company's OWN
+  // history. Kept separate from qualityScore because the backtest showed
+  // quality does not rank forward returns and valuation does; collapsing them
+  // would hide the only axis with measured signal.
+  valuationScore           Int?
+  earningsYieldPct         Float?
+  fcfYieldPct              Float?
+  valuationPercentile      Float?
+  valueTier                String?
+  valuationReasons         Json?
+
   // Year-over-year risk-factor diff (lib/risk-factor-diff.ts) — what the
   // company NEWLY admits to. Companies add risk factors when the exposure
   // becomes real enough that omitting it creates liability.

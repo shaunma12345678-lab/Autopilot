@@ -22,6 +22,7 @@ import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
 import { summarizeLiveEvents } from "@/lib/live-events"
 import { scanCompanyNews } from "@/lib/company-news"
 import { diffRiskFactors } from "@/lib/risk-factor-diff"
+import { computeValuation, classifyValue } from "@/lib/valuation"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
 import { computeBalanceSheetRisk } from "@/lib/balance-sheet-risk"
@@ -96,6 +97,26 @@ export async function analyzeAndUpsertTicker(
   const marketCap = price && fundamentals.sharesOutstanding
     ? price.price * fundamentals.sharesOutstanding
     : null
+
+  // Historical market caps at each fiscal period end, for the own-history
+  // valuation percentile. Shares are matched to the period they were reported
+  // for and priced at that period's close.
+  const sharesByEnd = new Map((series.sharesOutstanding ?? []).map(o => [o.end, o.value]))
+  const closeOnDate = (iso: string): number | null => {
+    let found: number | null = null
+    for (const b of history.bars) {
+      if (b.date <= iso) found = b.close
+      else break
+    }
+    return found
+  }
+  const anchorSeries = series.cfo?.length ? series.cfo : series.netIncome
+  const historicalMarketCaps = (anchorSeries ?? []).map(o => {
+    const sh = sharesByEnd.get(o.end)
+    const px = closeOnDate(o.end)
+    return sh && px ? sh * px : null
+  })
+  const valuation = computeValuation(series, marketCap, historicalMarketCaps)
 
   const sicCode = effectiveSubmissions?.sic ?? null
   const piotroski = computePiotroski(series)
@@ -333,6 +354,13 @@ export async function analyzeAndUpsertTicker(
     inventoryTurnsTrend: accounting.inventoryTurnsTrend,
     accountingQualityScore: accounting.qualityScore,
     accountingFlags: [...accounting.flags, ...accounting.notes],
+
+    valuationScore: valuation.valuationScore,
+    earningsYieldPct: valuation.earningsYieldPct,
+    fcfYieldPct: valuation.fcfYieldPct,
+    valuationPercentile: valuation.ownHistoryPercentile,
+    valueTier: classifyValue(valuation.valuationScore, result.qualityScore, result.riskScore).tier,
+    valuationReasons: valuation.reasons.length > 0 ? valuation.reasons : null,
 
     newRiskCount: riskDiff?.newRiskCount ?? null,
     materialNewRisks: riskDiff?.materialNewRisks ?? null,

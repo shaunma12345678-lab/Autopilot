@@ -223,6 +223,28 @@ export default function AssetDetail({
         </Block>
       )}
 
+      {isStock && a.valuationScore !== null && a.valuationScore !== undefined && (
+        <Block title="Price paid vs. its own history">
+          <p className="text-[11px] text-gray-300">
+            {a.valuationPercentile !== null && a.valuationPercentile !== undefined
+              ? `Cheaper than ${a.valuationPercentile.toFixed(0)}% of its own trading history.`
+              : "Not enough history for an own-history comparison."}
+            {a.fcfYieldPct !== null && a.fcfYieldPct !== undefined
+              ? ` Free-cash-flow yield ${a.fcfYieldPct.toFixed(1)}%.`
+              : a.earningsYieldPct !== null && a.earningsYieldPct !== undefined
+                ? ` Earnings yield ${a.earningsYieldPct.toFixed(1)}%.`
+                : ""}
+          </p>
+          <List items={a.valuationReasons} />
+          <p className="text-[10px] text-gray-600 mt-1.5">
+            Scored separately from business quality on purpose. Backtesting this
+            system found the quality score does not rank forward returns while
+            this one does — a great business and a good price are different
+            questions, and averaging them hides the difference.
+          </p>
+        </Block>
+      )}
+
       {isStock && a.riskFactorSummary && (
         <Block title="What they newly admit to (vs. last year's 10-K)">
           <p className="text-[11px] text-gray-300">{a.riskFactorSummary}</p>
