@@ -66,6 +66,10 @@ async function throttledFetch(url: string): Promise<Response> {
 //     just burns cron budget that should go to real companies.
 function isAnalyzableSecurity(symbol: string, companyName: string): boolean {
   if (symbol.length === 5 && /[WUR]$/.test(symbol)) return false
+  // Dash-suffixed share classes are the same problem in different notation and
+  // were slipping through: BBBY-WT (warrant), XRN-PB / GPUS-PD (preferred),
+  // ADIG-WI (when-issued). None of them is a business with financials.
+  if (/-(WT|WS|WI|RT|U|P[A-Z]?)$/i.test(symbol)) return false
   if (/\b(acquisition|blank check)\b/i.test(companyName)) return false
   if (/\btrust\b/i.test(companyName) && /\bunit\b/i.test(companyName)) return false
   return true
@@ -130,8 +134,13 @@ const DISCOVERY_SPECS: DiscoverySpec[] = [
     eventType: "bankruptcy",
     forms: "8-K",
     priority: 95,
-    q: '"chapter 11"',
-    rationale: "Disclosed a Chapter 11 proceeding. 251 filings in three months.",
+    // The Item 1.03 title, not the phrase "chapter 11". The looser phrase
+    // returns 251 hits but matches any filing that MENTIONS bankruptcy —
+    // a counterparty's, a customer's, or boilerplate risk language — which is
+    // not the same event at all. The item title matches companies filing the
+    // disclosure about themselves.
+    q: '"bankruptcy or receivership"',
+    rationale: "Filed the disclosure item reserved for its own bankruptcy or receivership. 106 filings in three months.",
   },
   {
     eventType: "going_concern",
