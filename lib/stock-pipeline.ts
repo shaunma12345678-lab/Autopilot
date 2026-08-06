@@ -24,6 +24,7 @@ import { readCompanyNews } from "@/lib/news-feed"
 import { diffRiskFactors } from "@/lib/risk-factor-diff"
 import { computeValuation, classifyValue } from "@/lib/valuation"
 import { buildBearCase } from "@/lib/bear-case"
+import { checkDataIntegrity } from "@/lib/filing-integrity"
 import { fetchDeepHistory } from "@/lib/price-history"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
@@ -93,6 +94,18 @@ export async function analyzeAndUpsertTicker(
     : null
 
   const series = extractSeries(effectiveFacts)
+
+  // Deterministic integrity checks BEFORE anything interprets these numbers.
+  // Every score below is arithmetic on this XBRL; if the filing does not
+  // internally reconcile, careful interpretation later cannot recover from it.
+  const integrity = checkDataIntegrity(series)
+  if (integrity.corrupt) {
+    return {
+      ok: false,
+      error: `${symbol}: filing data failed integrity checks — ${integrity.checks.filter(c => !c.passed).map(c => c.detail).join(" ")}`,
+    }
+  }
+
   const fundamentals = normalizeFundamentals(effectiveFacts, series)
   const priceMetrics = history.bars.length > 0 ? computePriceMetrics(history.bars, benchmark) : null
 
@@ -237,6 +250,7 @@ export async function analyzeAndUpsertTicker(
       ...accounting.flags,
       ...(governance?.flags ?? []),
       ...(riskDiff?.materialNewRisks ?? []).map(r => `⚠ Newly disclosed this year: ${r}`),
+      ...integrity.flags,
       ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
     ],
     hasRestatement: liveEvents.hasRestatement,

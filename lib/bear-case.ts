@@ -37,6 +37,7 @@ HARD RULES — violating these makes your output worthless:
 - Cite the specific number or disclosure behind every objection.
 - If the data genuinely does not support a strong bear case, say so and set bearConviction to "weak". A forced bear case on a sound company is noise, and pretending otherwise destroys the signal of every real warning.
 - Never reference outside knowledge, price targets, or market sentiment. You have the filings and the numbers, nothing else.
+- Read every metric in the direction the input states. Do not assume a high number is bad or a low number is good; the input tells you which way each one points, and inverting it produces a confidently wrong objection.
 
 WHAT COUNTS AS A KILL SHOT: a single fact that alone makes the investment unattractive regardless of everything else — insolvency risk, an accounting integrity problem, a debt wall that cannot be covered, structurally collapsing margins, or a disclosed regulatory action that threatens the core business. Most companies do not have one. Return null when there is none.
 
@@ -81,7 +82,9 @@ COMPOSITE SCORES:
 - Altman zone: ${input.altmanZone ?? "n/a"}
 - Beneish manipulation flag: ${input.beneishFlag ? "TRIGGERED" : "not triggered"}
 - Internal quality: ${input.qualityScore ?? "n/a"}/100, risk: ${input.riskScore ?? "n/a"}/100
-- Valuation percentile vs own history: ${input.valuationPercentile === null ? "n/a" : input.valuationPercentile.toFixed(0)}
+- Valuation vs its OWN history: ${input.valuationPercentile === null
+    ? "n/a"
+    : `${input.valuationPercentile.toFixed(0)}th percentile — it has traded CHEAPER than this ${(100 - input.valuationPercentile).toFixed(0)}% of the time, so a HIGH number means CHEAP and a LOW number means EXPENSIVE`}
 - FCF yield: ${n(input.fcfYieldPct, "%")}
 
 RISK FLAGS RAISED BY THE FILINGS:
