@@ -255,6 +255,18 @@ export async function runDiscovery(opts: { lookbackDays?: number; perFormLimit?:
         // Nor are warrants, units, rights, or blank-check shells.
         if (!isAnalyzableSecurity(symbol, companyName)) { run.skipped++; continue }
 
+        // EXHIBITS ARE NOT DISCLOSURES. Bond indentures and credit agreements
+        // routinely enumerate every 8-K item title inside a reporting covenant
+        // — "under Items: 1.01 (Entry into a Material Definitive Agreement);
+        // 1.03 (Bankruptcy or Receivership); ... 4.02 (Non-Reliance on
+        // Previously Issued Financial Statements)". Such an exhibit matches
+        // EVERY distress query at once. Verified live: Magnolia Oil & Gas was
+        // filed as both a restatement and a bankruptcy off one indenture
+        // exhibit, being neither. lib/edgar-client.ts already applies this
+        // filter for going-concern search; discovery was missing it.
+        const fileType = (src.file_type ?? "").toUpperCase()
+        if (fileType.startsWith("EX")) { run.skipped++; continue }
+
         const eventDate = src.file_date ?? enddt
 
         try {
