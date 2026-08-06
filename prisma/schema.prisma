@@ -693,6 +693,15 @@ model Ticker {
   // so no screen could gate on the most serious solvency warning a company can
   // issue. Stored now.
   goingConcernHits         Int?
+
+  // Adversarial pass (lib/bear-case.ts) — a second read whose only job is to
+  // attack the investment. Kept separate from qualityReasons so the case
+  // against is never blended into the case for.
+  bearSummary              String?
+  bearThesisRisks          Json?
+  bearKillShot             String?
+  bearConviction           String?
+  bearWhatMustGoRight      Json?
   execChangeCount          Int?
 
   // Insider activity from Form 4 (see lib/form4-insider.ts)

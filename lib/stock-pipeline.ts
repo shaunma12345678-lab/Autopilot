@@ -20,9 +20,10 @@ import { computeForwardSignals } from "@/lib/forward-signals"
 import { computePositionContext, describeSituation } from "@/lib/position-context"
 import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
 import { summarizeLiveEvents } from "@/lib/live-events"
-import { scanCompanyNews } from "@/lib/company-news"
+import { readCompanyNews } from "@/lib/news-feed"
 import { diffRiskFactors } from "@/lib/risk-factor-diff"
 import { computeValuation, classifyValue } from "@/lib/valuation"
+import { buildBearCase } from "@/lib/bear-case"
 import { fetchDeepHistory } from "@/lib/price-history"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
@@ -173,7 +174,7 @@ export async function analyzeAndUpsertTicker(
   // its own: any one failing leaves the others and the score intact.
   let governance: Awaited<ReturnType<typeof readProxyGovernance>> = null
   let narrative: Awaited<ReturnType<typeof readFilingNarrative>> = null
-  let news: Awaited<ReturnType<typeof scanCompanyNews>> = null
+  let news: Awaited<ReturnType<typeof readCompanyNews>> = null
   let riskDiff: Awaited<ReturnType<typeof diffRiskFactors>> | null = null
 
   if (opts.includeNarrative || opts.includeNews) {
@@ -192,7 +193,7 @@ export async function analyzeAndUpsertTicker(
         : Promise.resolve(null),
 
       opts.includeNews
-        ? scanCompanyNews(symbol, effectiveSubmissions?.name ?? resolved.name).catch(() => null)
+        ? readCompanyNews(effectiveSubmissions?.name ?? resolved.name, symbol).catch(() => null)
         : Promise.resolve(null),
 
       // Year-over-year risk-factor diff — runs alongside the others since it's
@@ -277,6 +278,29 @@ export async function analyzeAndUpsertTicker(
     dataConfidence: result.dataConfidence,
   })
 
+
+  // Adversarial pass. Runs only on the deep path — it costs an LLM call, and a
+  // bear case built on thin data would be speculation rather than analysis.
+  // Given the numbers, not just the narrative, so every objection has to point
+  // at a figure or a disclosure.
+  const bear = opts.includeNarrative && result.qualityScore !== null && result.dataConfidence !== "insufficient"
+    ? await buildBearCase({
+        symbol,
+        name: effectiveSubmissions?.name ?? resolved.name,
+        fundamentals,
+        qualityScore: result.qualityScore,
+        riskScore: result.riskScore,
+        riskFlags: result.riskFlags,
+        piotroskiScore: piotroski.normalized,
+        altmanZone: altman.zone,
+        beneishFlag: beneish.flagged,
+        valuationPercentile: valuation.ownHistoryPercentile,
+        fcfYieldPct: valuation.fcfYieldPct,
+        newsConcerns: news?.materialConcerns ?? [],
+        newRisks: riskDiff?.materialNewRisks ?? [],
+        contradictions: contradiction.flags,
+      }).catch(() => null)
+    : null
 
   // Per-field source attribution — the integrity layer's core promise: a user
   // can always see whether a number was filed with the SEC, quoted from a
@@ -367,6 +391,11 @@ export async function analyzeAndUpsertTicker(
     accountingFlags: [...accounting.flags, ...accounting.notes],
 
     goingConcernHits: goingConcern.hits,
+    bearSummary: bear?.summary ?? null,
+    bearThesisRisks: bear?.thesisRisks ?? null,
+    bearKillShot: bear?.killShot ?? null,
+    bearConviction: bear?.bearConviction ?? null,
+    bearWhatMustGoRight: bear?.whatWouldHaveToGoRight ?? null,
     valuationScore: valuation.valuationScore,
     earningsYieldPct: valuation.earningsYieldPct,
     fcfYieldPct: valuation.fcfYieldPct,
@@ -426,8 +455,8 @@ export async function analyzeAndUpsertTicker(
     ...(news ? {
       newsSummary: news.summary,
       newsTone: news.tone,
-      newsHeadlines: news.headlines,
-      newsMaterialConcerns: news.materialConcerns,
+      newsHeadlines: news.items.map(i => `${i.title} — ${i.source}`),
+      newsMaterialConcerns: [...news.materialConcerns, ...news.materialDevelopments],
     } : {}),
 
     pricePercentile1y: positionCtx.pricePercentile1y,
