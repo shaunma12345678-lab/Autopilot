@@ -51,6 +51,10 @@
     {
       "path": "/api/markets/health",
       "schedule": "0 */4 * * *"
+    },
+    {
+      "path": "/api/cron/deep-research",
+      "schedule": "15,45 * * * *"
     }
   ]
 }
