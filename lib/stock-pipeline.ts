@@ -130,22 +130,41 @@ export async function analyzeAndUpsertTicker(
   // backward-looking ratio can see.
   const liveEvents = summarizeLiveEvents(effectiveSubmissions?.recentForms ?? [])
 
-  // News costs a web search + AI call, so it's opt-in like the narrative read.
-  let news: Awaited<ReturnType<typeof scanCompanyNews>> = null
-  if (opts.includeNews) {
-    news = await scanCompanyNews(symbol, submissions?.name ?? resolved.name).catch(() => null)
-  }
-
+  // DEEP RESEARCH — governance (DEF 14A), business narrative (10-K) and recent
+  // news each cost a document fetch plus an AI call. Run sequentially they took
+  // a measured 230 SECONDS for a single company, which meant the deep-research
+  // cron completed exactly one company per firing before hitting its budget.
+  //
+  // The three are independent of one another, so they run concurrently and the
+  // wall time collapses to roughly the slowest single call. Each is guarded on
+  // its own: any one failing leaves the others and the score intact.
   let governance: Awaited<ReturnType<typeof readProxyGovernance>> = null
-  if (opts.includeNarrative) {
-    try {
-      const proxy = effectiveSubmissions?.recentForms?.find(f => f.form === "DEF 14A")
-      if (proxy) {
-        governance = await readProxyGovernance(
-          cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate
-        )
-      }
-    } catch { /* governance is an enhancement; never block the score */ }
+  let narrative: Awaited<ReturnType<typeof readFilingNarrative>> = null
+  let news: Awaited<ReturnType<typeof scanCompanyNews>> = null
+
+  if (opts.includeNarrative || opts.includeNews) {
+    const proxy = effectiveSubmissions?.recentForms?.find(f => f.form === "DEF 14A")
+    const latest10K = effectiveSubmissions?.recentForms?.find(f => f.form === "10-K")
+
+    const [gov, narr, nws] = await Promise.all([
+      opts.includeNarrative && proxy
+        ? readProxyGovernance(cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate).catch(() => null)
+        : Promise.resolve(null),
+
+      opts.includeNarrative && latest10K
+        ? fetchFilingSections(cik, latest10K.accessionNumber, latest10K.primaryDocument, latest10K.form, latest10K.filingDate)
+            .then(sections => (sections ? readFilingNarrative(sections) : null))
+            .catch(() => null)
+        : Promise.resolve(null),
+
+      opts.includeNews
+        ? scanCompanyNews(symbol, effectiveSubmissions?.name ?? resolved.name).catch(() => null)
+        : Promise.resolve(null),
+    ])
+
+    governance = gov
+    narrative = narr
+    news = nws
   }
 
   // Deterioration is measured against this asset's own history, so it needs a
@@ -191,22 +210,6 @@ export async function analyzeAndUpsertTicker(
     riskScore: result.riskScore,
     forwardScore: forward.forwardScore,
   })
-
-  // Reading the filing narrative costs an 8MB document fetch plus an AI call,
-  // so it's opt-in: on-demand lookups get it, bulk cron re-scoring doesn't.
-  let narrative: Awaited<ReturnType<typeof readFilingNarrative>> = null
-  if (opts.includeNarrative) {
-    try {
-      const latest10K = effectiveSubmissions?.recentForms?.find(f => f.form === "10-K")
-      if (latest10K) {
-        const sections = await fetchFilingSections(
-          cik, latest10K.accessionNumber, latest10K.primaryDocument,
-          latest10K.form, latest10K.filingDate
-        )
-        if (sections) narrative = await readFilingNarrative(sections)
-      }
-    } catch { /* narrative is an enhancement; never block the score on it */ }
-  }
 
   // Cross-validate management's narrative against the audited numbers. This is
   // the check that catches promotional language the AI would otherwise accept.
