@@ -53,6 +53,12 @@ const EVENT_META: Record<string, { label: string; icon: string; blurb: string; t
     blurb: "Disclosed a material definitive agreement — a significant contract, partnership, or financing.",
     tone: "border-indigo-500/40 bg-indigo-500/8 text-indigo-300",
   },
+  annual_report: {
+    label: "New 10-K",
+    icon: "📘",
+    blurb: "Just filed its annual report. Analyzed on arrival so any newly added risk-factor language is compared against last year's filing while it is still news — companies add risk factors when the exposure becomes real enough that omitting it creates liability.",
+    tone: "border-sky-500/40 bg-sky-500/8 text-sky-300",
+  },
   restatement: {
     label: "Restatement",
     icon: "🛑",
@@ -91,6 +97,7 @@ const FILTERS = [
   { id: "insider_cluster_buy", label: "💰 Insider Buys" },
   { id: "ipo_pipeline", label: "🆕 IPO Pipeline" },
   { id: "material_agreement", label: "📝 Material Agreements" },
+  { id: "annual_report", label: "📘 New 10-K" },
   { id: "restatement", label: "🛑 Restatements" },
   { id: "going_concern", label: "⚠️ Going Concern" },
   { id: "bankruptcy", label: "⚖️ Bankruptcy" },

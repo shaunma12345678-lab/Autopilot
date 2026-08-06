@@ -85,6 +85,7 @@ export type DiscoveryEventType =
   | "bankruptcy"
   | "delisting_risk"
   | "auditor_change"
+  | "annual_report"
 
 interface DiscoverySpec {
   eventType: DiscoveryEventType
@@ -122,6 +123,18 @@ const DISCOVERY_SPECS: DiscoverySpec[] = [
   // full-text search before being added, with its three-month hit count
   // recorded — a query that silently returns nothing is worse than no trigger,
   // because the feed still looks like it is working.
+  {
+    // A freshly filed 10-K is the trigger for year-over-year risk-factor
+    // diffing (lib/risk-factor-diff.ts). Without this the diff only runs on a
+    // rotation through already-tracked companies, so the single moment when a
+    // newly disclosed risk is genuinely news — the day it is filed — is the
+    // moment the system is least likely to look at it.
+    eventType: "annual_report",
+    forms: "10-K",
+    priority: 62,
+    rationale:
+      "Filed its annual report. Analyzed on arrival so newly added risk-factor language is compared against last year's filing while it is still new.",
+  },
   {
     eventType: "restatement",
     forms: "8-K",
