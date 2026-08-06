@@ -624,6 +624,13 @@ model Ticker {
   narrativeSourceUrl       String?
   narrativeFilingDate      String?
 
+  // Year-over-year risk-factor diff (lib/risk-factor-diff.ts) — what the
+  // company NEWLY admits to. Companies add risk factors when the exposure
+  // becomes real enough that omitting it creates liability.
+  newRiskCount             Int?
+  materialNewRisks         Json?
+  riskFactorSummary        String?
+
   // Conviction tiering — independent gates, not an average (lib/conviction.ts)
   convictionTier           String?   // elite | high | standard | below-bar
   convictionGates          Json?

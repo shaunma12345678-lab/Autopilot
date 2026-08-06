@@ -21,6 +21,7 @@ import { computePositionContext, describeSituation } from "@/lib/position-contex
 import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
 import { summarizeLiveEvents } from "@/lib/live-events"
 import { scanCompanyNews } from "@/lib/company-news"
+import { diffRiskFactors } from "@/lib/risk-factor-diff"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
 import { computeBalanceSheetRisk } from "@/lib/balance-sheet-risk"
@@ -141,12 +142,13 @@ export async function analyzeAndUpsertTicker(
   let governance: Awaited<ReturnType<typeof readProxyGovernance>> = null
   let narrative: Awaited<ReturnType<typeof readFilingNarrative>> = null
   let news: Awaited<ReturnType<typeof scanCompanyNews>> = null
+  let riskDiff: Awaited<ReturnType<typeof diffRiskFactors>> | null = null
 
   if (opts.includeNarrative || opts.includeNews) {
     const proxy = effectiveSubmissions?.recentForms?.find(f => f.form === "DEF 14A")
     const latest10K = effectiveSubmissions?.recentForms?.find(f => f.form === "10-K")
 
-    const [gov, narr, nws] = await Promise.all([
+    const [gov, narr, nws, rdiff] = await Promise.all([
       opts.includeNarrative && proxy
         ? readProxyGovernance(cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate).catch(() => null)
         : Promise.resolve(null),
@@ -160,11 +162,18 @@ export async function analyzeAndUpsertTicker(
       opts.includeNews
         ? scanCompanyNews(symbol, effectiveSubmissions?.name ?? resolved.name).catch(() => null)
         : Promise.resolve(null),
+
+      // Year-over-year risk-factor diff — runs alongside the others since it's
+      // another independent filing fetch.
+      opts.includeNarrative
+        ? diffRiskFactors(cik, effectiveSubmissions?.recentForms ?? []).catch(() => null)
+        : Promise.resolve(null),
     ])
 
     governance = gov
     narrative = narr
     news = nws
+    riskDiff = rdiff
   }
 
   // Deterioration is measured against this asset's own history, so it needs a
@@ -187,12 +196,14 @@ export async function analyzeAndUpsertTicker(
     goingConcernHits: goingConcern.hits,
     externalRiskPenalty:
       liveEvents.riskPenalty + (news?.riskPenalty ?? 0) +
-      balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0) + accounting.riskPenalty,
+      balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0) + accounting.riskPenalty +
+      (riskDiff?.riskPenalty ?? 0),
     externalRiskFlags: [
       ...liveEvents.flags,
       ...balanceSheet.flags,
       ...accounting.flags,
       ...(governance?.flags ?? []),
+      ...(riskDiff?.materialNewRisks ?? []).map(r => `⚠ Newly disclosed this year: ${r}`),
       ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
     ],
     hasRestatement: liveEvents.hasRestatement,
@@ -322,6 +333,10 @@ export async function analyzeAndUpsertTicker(
     inventoryTurnsTrend: accounting.inventoryTurnsTrend,
     accountingQualityScore: accounting.qualityScore,
     accountingFlags: [...accounting.flags, ...accounting.notes],
+
+    newRiskCount: riskDiff?.newRiskCount ?? null,
+    materialNewRisks: riskDiff?.materialNewRisks ?? null,
+    riskFactorSummary: riskDiff?.summary ?? null,
 
     convictionTier: conviction.tier,
     convictionGates: conviction.gates,

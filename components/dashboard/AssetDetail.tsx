@@ -223,6 +223,20 @@ export default function AssetDetail({
         </Block>
       )}
 
+      {isStock && a.riskFactorSummary && (
+        <Block title="What they newly admit to (vs. last year's 10-K)">
+          <p className="text-[11px] text-gray-300">{a.riskFactorSummary}</p>
+          {Array.isArray(a.materialNewRisks) && a.materialNewRisks.length > 0 && (
+            <List items={a.materialNewRisks} tone="text-amber-300/80" />
+          )}
+          <p className="text-[10px] text-gray-600 mt-1.5">
+            Item 1A is mostly boilerplate that carries forward unchanged, which is what makes the
+            changes informative — a company adds a risk factor when its lawyers judge the exposure
+            real enough that omitting it creates liability.
+          </p>
+        </Block>
+      )}
+
       {isStock && a.insiderSummary && (
         <Block title="Insider activity"><p className="text-[11px] text-gray-300">{a.insiderSummary}</p></Block>
       )}
