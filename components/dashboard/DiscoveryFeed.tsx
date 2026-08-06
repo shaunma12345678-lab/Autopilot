@@ -53,6 +53,36 @@ const EVENT_META: Record<string, { label: string; icon: string; blurb: string; t
     blurb: "Disclosed a material definitive agreement — a significant contract, partnership, or financing.",
     tone: "border-indigo-500/40 bg-indigo-500/8 text-indigo-300",
   },
+  restatement: {
+    label: "Restatement",
+    icon: "🛑",
+    blurb: "Told investors its own previously published financial statements can no longer be relied upon — the strongest single red flag a filing can carry, because it invalidates the historical numbers every ratio was computed from.",
+    tone: "border-red-500/50 bg-red-500/12 text-red-300",
+  },
+  bankruptcy: {
+    label: "Bankruptcy",
+    icon: "⚖️",
+    blurb: "Disclosed a Chapter 11 proceeding.",
+    tone: "border-red-500/50 bg-red-500/12 text-red-300",
+  },
+  going_concern: {
+    label: "Going Concern",
+    icon: "⚠️",
+    blurb: "Raised substantial doubt about its ability to continue operating. Auditors do not use this language lightly — it is a formal determination under ASC 205-40, not a turn of phrase.",
+    tone: "border-orange-500/45 bg-orange-500/10 text-orange-300",
+  },
+  auditor_change: {
+    label: "Auditor Change",
+    icon: "🔍",
+    blurb: "Dismissed its auditor. Rare enough to be meaningful, and it frequently precedes a restatement.",
+    tone: "border-amber-500/40 bg-amber-500/8 text-amber-300",
+  },
+  delisting_risk: {
+    label: "Delisting Risk",
+    icon: "📉",
+    blurb: "Received a delisting determination from its exchange.",
+    tone: "border-orange-500/40 bg-orange-500/8 text-orange-300",
+  },
 }
 
 const FILTERS = [
@@ -61,6 +91,11 @@ const FILTERS = [
   { id: "insider_cluster_buy", label: "💰 Insider Buys" },
   { id: "ipo_pipeline", label: "🆕 IPO Pipeline" },
   { id: "material_agreement", label: "📝 Material Agreements" },
+  { id: "restatement", label: "🛑 Restatements" },
+  { id: "going_concern", label: "⚠️ Going Concern" },
+  { id: "bankruptcy", label: "⚖️ Bankruptcy" },
+  { id: "auditor_change", label: "🔍 Auditor Changes" },
+  { id: "delisting_risk", label: "📉 Delisting Risk" },
 ]
 
 export default function DiscoveryFeed({ password }: { password?: string } = {}) {

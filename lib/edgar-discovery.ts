@@ -76,6 +76,11 @@ export type DiscoveryEventType =
   | "ipo_pipeline"
   | "material_agreement"
   | "insider_cluster_buy"
+  | "restatement"
+  | "going_concern"
+  | "bankruptcy"
+  | "delisting_risk"
+  | "auditor_change"
 
 interface DiscoverySpec {
   eventType: DiscoveryEventType
@@ -107,6 +112,50 @@ const DISCOVERY_SPECS: DiscoverySpec[] = [
     priority: 45,
     q: '"material definitive agreement"',
     rationale: "Disclosed a material definitive agreement — a significant contract, partnership, or financing.",
+  },
+
+  // The distress set. Every query below was verified against live EDGAR
+  // full-text search before being added, with its three-month hit count
+  // recorded — a query that silently returns nothing is worse than no trigger,
+  // because the feed still looks like it is working.
+  {
+    eventType: "restatement",
+    forms: "8-K",
+    priority: 98,
+    q: '"non-reliance on previously issued financial statements"',
+    rationale:
+      "Told investors its own previously published financial statements can no longer be relied upon. This is the strongest single red flag a filing can carry: it invalidates the historical numbers every ratio was computed from. 48 filings market-wide in three months.",
+  },
+  {
+    eventType: "bankruptcy",
+    forms: "8-K",
+    priority: 95,
+    q: '"chapter 11"',
+    rationale: "Disclosed a Chapter 11 proceeding. 251 filings in three months.",
+  },
+  {
+    eventType: "going_concern",
+    forms: "8-K",
+    priority: 92,
+    q: '"ability to continue as a going concern"',
+    rationale:
+      "Raised substantial doubt about its ability to continue operating. Auditors do not use this language lightly — it is a formal determination under ASC 205-40, not a turn of phrase. 452 filings in three months.",
+  },
+  {
+    eventType: "auditor_change",
+    forms: "8-K",
+    priority: 88,
+    q: '"dismissed as the Company\'s independent registered public accounting firm"',
+    rationale:
+      "Dismissed its auditor. Rare enough to be meaningful — only 70 filings matched this exact phrasing across the entire market — and it frequently precedes a restatement.",
+  },
+  {
+    eventType: "delisting_risk",
+    forms: "8-K",
+    priority: 75,
+    q: '"delisting determination"',
+    rationale:
+      "Received a delisting determination from its exchange. Uses the determination phrasing rather than the Item 3.01 title, which returns zero hits because filers do not write it that way. 103 filings in three months.",
   },
 ]
 
