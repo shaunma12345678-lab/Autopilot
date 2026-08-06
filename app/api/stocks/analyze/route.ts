@@ -8,7 +8,12 @@
 // companyfacts (multi-MB for large caps, behind a 120ms/req SEC throttle),
 // full-text search, a quote, a full daily price history, the SPY benchmark,
 // and a sector-peer query. 60s is comfortably within every Vercel plan tier.
-export const maxDuration = 120
+// 300s (the Pro ceiling), not 120. This route runs the full deep analysis —
+// governance, narrative, news and year-over-year risk-factor diffing — and the
+// diff alone fetches two complete 10-K documents. At 120s it returned
+// FUNCTION_INVOCATION_TIMEOUT and wrote nothing at all, which is the worst
+// outcome: the user waits two minutes and the record is left unpopulated.
+export const maxDuration = 300
 
 import { NextRequest } from "next/server"
 import { isMarketsAuthorized } from "@/lib/markets-auth"
