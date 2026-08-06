@@ -19,6 +19,7 @@
 import { getCompanyTickers, getCompanyFacts, countGaapConcepts } from "./edgar-client"
 import { fetchHistory } from "./price-history"
 import { prisma } from "./prisma"
+import { runAgent } from "./claude"
 
 export interface HealthCheck {
   source: string
@@ -49,6 +50,36 @@ async function check(
 
 export async function runHealthChecks(): Promise<HealthReport> {
   const checks = await Promise.all([
+    // AI PROVIDER — every comprehension feature depends on this, and every one
+    // of them catches its own errors and returns an empty fallback, so a dead
+    // provider looks exactly like "this company had no news".
+    //
+    // The failure this exists to catch: ANTHROPIC_API_KEY was PRESENT in the
+    // environment but empty. An empty string is falsy, so provider selection
+    // silently fell through to a free-tier model, which then exhausted its
+    // daily token cap and 429'd every call. News, the bear case, narrative
+    // reading and risk materiality were all returning empty for days while
+    // reporting success.
+    check("ai-provider", true, async () => {
+      const anthropic = process.env.ANTHROPIC_API_KEY ?? ""
+      const groq = process.env.GROQ_API_KEY ?? ""
+      if (!anthropic && !groq) {
+        return { ok: false, detail: "no AI provider key configured — every comprehension feature is dead" }
+      }
+      if (!anthropic && groq) {
+        return {
+          ok: false,
+          detail: "ANTHROPIC_API_KEY is missing or empty, so analysis is falling back to the free-tier model — set a real key",
+        }
+      }
+      // Assert the key actually WORKS, not merely that it is non-empty.
+      const r = await runAgent("Reply with the single word: ok", "ok", { maxTokens: 16 })
+      const text = typeof r === "string" ? r : JSON.stringify(r)
+      return text.length > 0
+        ? { ok: true, detail: `AI provider responding (${text.slice(0, 20).trim()})` }
+        : { ok: false, detail: "AI provider returned an empty response" }
+    }),
+
     // SEC ticker map — every stock lookup starts here.
     check("sec-ticker-map", true, async () => {
       const t = await getCompanyTickers()
