@@ -11,6 +11,10 @@ import { fetchDeepHistory } from "../lib/price-history"
 import { scoreAsOf, aggregate, type BacktestObservation } from "../lib/backtest"
 
 const HORIZON_DAYS = 90
+// Yahoo throttles aggressively on burst. Pacing between symbols keeps a long
+// run alive; without it a 429 cascade silently empties the whole sample.
+const SYMBOL_DELAY_MS = 3000
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // Quarterly as-of dates. Each is a day on which we pretend to stand, knowing
 // only what had been filed by then.
@@ -48,8 +52,17 @@ async function main() {
   console.log(`Backtest: ${UNIVERSE.length} symbols x ${dates.length} as-of dates, ${HORIZON_DAYS}-day horizon`)
   console.log(`As-of range: ${dates[0]} -> ${dates[dates.length - 1]}\n`)
 
-  const benchmark = await fetchDeepHistory("SPY")
-  if (benchmark.length < 500) throw new Error(`Benchmark history too short (${benchmark.length} bars)`)
+  // The benchmark is load-bearing — every excess return depends on it — so it
+  // retries patiently rather than aborting the run on a transient throttle.
+  let benchmark: Awaited<ReturnType<typeof fetchDeepHistory>> = []
+  for (let attempt = 1; attempt <= 10 && benchmark.length < 500; attempt++) {
+    benchmark = await fetchDeepHistory("SPY")
+    if (benchmark.length < 500) {
+      console.log(`  SPY attempt ${attempt}: ${benchmark.length} bars, waiting 60s...`)
+      await sleep(60000)
+    }
+  }
+  if (benchmark.length < 500) throw new Error(`Benchmark history unavailable after retries`)
   console.log(`SPY: ${benchmark.length} bars ${benchmark[0].date} -> ${benchmark[benchmark.length - 1].date}\n`)
 
   const observations: BacktestObservation[] = []
@@ -57,6 +70,7 @@ async function main() {
 
   for (const symbol of UNIVERSE) {
     done++
+    if (done > 1) await sleep(SYMBOL_DELAY_MS)
     try {
       const resolved = await resolveCik(symbol)
       if (!resolved) { console.log(`  ${symbol}: no CIK`); continue }

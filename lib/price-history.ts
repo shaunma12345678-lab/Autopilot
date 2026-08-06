@@ -218,9 +218,54 @@ async function fetchNasdaqHistory(symbol: string): Promise<HistoryResult | null>
 // model against. Yahoo serves ~10 years for the same request. This bypasses
 // the chain deliberately: it is used only by the offline backtest, never on a
 // user-facing request path, so the chain's redundancy isn't needed here.
-export async function fetchDeepHistory(symbol: string, range = "10y"): Promise<DailyBar[]> {
-  const r = await fetchYahooHistory(symbol, range)
+export async function fetchDeepHistory(symbol: string, years = 10): Promise<DailyBar[]> {
+  // Nasdaq leads here, unlike the live chain. It serves the full ten years in
+  // one request and does not throttle on burst, whereas Yahoo starts returning
+  // 429 within a handful of requests — which for a backtest means the sample
+  // silently empties rather than failing loudly. Yahoo remains the fallback.
+  const nasdaq = await fetchNasdaqDeepHistory(symbol, years)
+  if (nasdaq.length >= 500) return nasdaq
+
+  const r = await fetchYahooHistory(symbol, `${years}y`)
   return r?.bars ?? []
+}
+
+async function fetchNasdaqDeepHistory(symbol: string, years: number): Promise<DailyBar[]> {
+  try {
+    const today = new Date()
+    const from = new Date(today.getTime() - years * 365.25 * 86400000).toISOString().slice(0, 10)
+    const to = today.toISOString().slice(0, 10)
+
+    let rows: unknown = null
+    // Same asset-class quirk as the live path: ETFs are not "stocks" to Nasdaq,
+    // and the benchmark is an ETF.
+    for (const assetclass of ["stocks", "etf"]) {
+      const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol.toUpperCase())}/historical` +
+        `?assetclass=${assetclass}&fromdate=${from}&todate=${to}&limit=9999`
+      const res = await fetch(url, {
+        headers: { "User-Agent": BROWSER_UA, Accept: "application/json" },
+        signal: AbortSignal.timeout(30000),
+      })
+      if (!res.ok) continue
+      const data = await res.json()
+      const candidate = data?.data?.tradesTable?.rows
+      if (Array.isArray(candidate) && candidate.length > 0) { rows = candidate; break }
+    }
+    if (!Array.isArray(rows)) return []
+
+    const bars: DailyBar[] = []
+    for (const row of rows as Array<{ date?: string; close?: string }>) {
+      if (!row.date || !row.close) continue
+      const close = Number(String(row.close).replace(/[$,]/g, ""))
+      const [m, d, y] = row.date.split("/")
+      if (!y || !m || !d || !isFinite(close) || close <= 0) continue
+      bars.push({ date: `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`, close })
+    }
+    bars.sort((a, b) => a.date.localeCompare(b.date))
+    return bars
+  } catch {
+    return []
+  }
 }
 
 export async function fetchHistory(symbol: string): Promise<HistoryResult> {
