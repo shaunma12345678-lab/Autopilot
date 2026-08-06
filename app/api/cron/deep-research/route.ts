@@ -24,9 +24,16 @@ import { prisma } from "@/lib/prisma"
 import { analyzeAndUpsertTicker } from "@/lib/stock-pipeline"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
-// Deep analysis runs 15-70s per company. Four keeps the run inside the limit
-// even when several filings are large.
-const BATCH_SIZE = 4
+// Deep analysis runs 15-70s per company depending on filing size, so a fixed
+// batch size is the wrong control — four large filings in a row exceeded the
+// 300s function limit and the request died with no response at all.
+//
+// A wall-clock budget is the robust version: the loop stops before the limit
+// no matter how slow individual companies turn out to be, and a partial run
+// that returns cleanly beats a full run that gets killed. Anything not reached
+// is simply picked up by the next firing.
+const BATCH_SIZE = 6
+const TIME_BUDGET_MS = 225_000   // 300s limit, with headroom for the last company
 const RESEARCH_STALE_DAYS = 30
 
 export async function GET(request: NextRequest) {
@@ -55,8 +62,11 @@ export async function GET(request: NextRequest) {
 
     const queue = [...never, ...stale].slice(0, BATCH_SIZE)
 
+    const deadline = startedAt + TIME_BUDGET_MS
     const results: Record<string, string> = {}
     for (const t of queue) {
+      // Stop cleanly rather than being killed mid-company.
+      if (Date.now() > deadline) { results[t.symbol] = "deferred to next run"; continue }
       try {
         const r = await analyzeAndUpsertTicker(t.symbol, { includeNarrative: true, includeNews: true })
         results[t.symbol] = r.ok ? "researched" : (r.error ?? "failed")
@@ -65,9 +75,11 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const researched = Object.values(results).filter(v => v === "researched").length
     return Response.json({
       ok: true,
-      researched: queue.length,
+      researched,
+      attempted: queue.length,
       neverResearchedRemaining: Math.max(never.length - queue.length, 0),
       results,
       duration: Date.now() - startedAt,
