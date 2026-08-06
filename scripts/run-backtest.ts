@@ -10,7 +10,11 @@ import { resolveCik, getSubmissions, getCompanyFacts } from "../lib/edgar-client
 import { fetchDeepHistory } from "../lib/price-history"
 import { scoreAsOf, aggregate, type BacktestObservation } from "../lib/backtest"
 
-const HORIZON_DAYS = 90
+// Horizon is a pre-specified variable, not a tuning knob. Fundamental quality
+// signals are documented to act slowly, so testing more than one holding period
+// is legitimate — but every horizon tested must be reported, never just the
+// best-looking one.
+const HORIZON_DAYS = Number(process.env.HORIZON_DAYS ?? 90)
 // Yahoo throttles aggressively on burst. Pacing between symbols keeps a long
 // run alive; without it a 429 cascade silently empties the whole sample.
 const SYMBOL_DELAY_MS = 3000

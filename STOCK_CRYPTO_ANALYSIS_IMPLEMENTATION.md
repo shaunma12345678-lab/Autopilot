@@ -188,6 +188,97 @@ variants and shipping the ten that backtest best would overfit to noise and make
 the resulting accuracy figure fiction — the single most common way backtests
 lie. If results are weak, they get reported as weak.
 
+#### Results — 90-day horizon
+
+1,293 observations across 37 companies, as-of dates 2017-02-15 → 2026-02-15.
+
+| Tier | n | mean excess | median excess | beat SPY |
+|---|---|---|---|---|
+| strong | 1041 | +0.91% | +0.05% | 50.3% |
+| mixed | 206 | +0.86% | −1.43% | 47.6% |
+| weak | 46 | +3.42% | −0.74% | 50.0% |
+
+| Signal | n | mean excess | median excess | beat SPY |
+|---|---|---|---|---|
+| buy | 762 | +0.76% | +0.10% | 50.7% |
+| hold | 341 | +1.11% | −1.14% | 47.8% |
+| pass | 190 | +1.72% | +0.30% | 50.5% |
+
+**Top-quartile minus bottom-quartile mean excess: +0.06%.**
+
+**Reading this honestly: the score does not rank 90-day forward returns.** The
+quartile spread is indistinguishable from zero, every hit rate is a coin flip,
+and the "weak" bucket has the *highest* mean excess — the opposite of the
+intended direction. Means and medians diverge throughout, meaning the means are
+driven by a few outliers; the medians, all near zero, are the trustworthy
+figure.
+
+This result was pre-registered and is reported unchanged. **No criterion was
+adjusted in response to it.** Tuning the criteria until this table looked good
+would produce a number that describes this sample and nothing else.
+
+What it does not establish: that the analysis is worthless. It establishes that
+one specific claim — that the quality tier predicts near-term relative return —
+is unsupported on this sample. Three sample properties matter. All 37 companies
+are heavily-analyzed mega-caps, which is precisely where reading primary
+documents has the least remaining edge. All 37 still exist, which biases results
+optimistically. And the horizon is short, where price is dominated by flows and
+sentiment rather than fundamentals.
+
+#### Results — 365-day horizon
+
+Horizon was the one pre-specified secondary variable, on the documented grounds
+that fundamental signals act slowly. Both horizons tested are reported; neither
+was chosen after seeing the other.
+
+1,185 observations across the same 37 companies.
+
+| Tier | n | mean excess | median excess | beat SPY |
+|---|---|---|---|---|
+| strong | 954 | +3.67% | −0.81% | 49.0% |
+| mixed | 190 | +4.21% | −4.22% | 41.1% |
+| weak | 41 | +26.20% | +16.05% | 61.0% |
+
+| Signal | n | mean excess | median excess | beat SPY |
+|---|---|---|---|---|
+| buy | 708 | +2.66% | −0.52% | 49.6% |
+| hold | 304 | +7.97% | −2.09% | 45.7% |
+| pass | 173 | +6.22% | −1.88% | 46.2% |
+
+**Top-quartile minus bottom-quartile mean excess: −0.60%.**
+
+The longer horizon does not rescue the result — it is slightly worse, and the
+spread is now *negative*. The "weak" bucket outperforms on every measure
+including the median, though n=41 is small enough that a handful of names drive
+it.
+
+#### What both backtests actually diagnose
+
+The inversion at the low end is the recognizable signature of value and mean
+reversion: beaten-down companies rebound. Read together with the flat quartile
+spread, the two runs point at one structural gap rather than at a broken
+criterion.
+
+**This system measures how good a business is. It does not measure whether that
+business is mispriced.** Those are different questions, and only the second one
+produces return. Quality is public, well-analyzed, and already reflected in the
+price — which is exactly why a quality ranking of mega-caps should be expected
+to have no forward-return edge. The backtest is consistent with the finance
+literature, not at odds with it.
+
+The scoring computes P/E, P/FCF and EV/EBITDA, but the action signal is driven
+by quality, not by quality *relative to price paid*. A quality-versus-valuation
+spread is therefore the natural next hypothesis — but it must be pre-registered
+and tested on a broader universe, including small caps and delisted companies,
+before it earns any claim in the product.
+
+**No criterion was changed in response to either backtest.** Tuning until these
+tables looked good is the failure mode the pre-registration exists to prevent.
+
+**The product must not claim predictive accuracy.** What it can claim is what it
+verifiably does: read primary disclosure at scale, surface contradictions
+between narrative and audited numbers, and flag newly-disclosed risk.
+
 ### Forward track record
 `lib/underwrite-tracker.ts` logs every assessment when made and grades it
 against real price history 90 days later. This is pre-registered by
@@ -237,9 +328,18 @@ Each of these would look impressive in a feature list and mislead in practice.
 3. **Survivorship bias.** The tested universe is companies that exist today.
    Companies that delisted or went bankrupt are absent, which biases results
    optimistically. This is a real limitation and not fully solved.
-4. **Materiality judgments use an LLM.** The *diff* is deterministic, but which
+4. **Backtest coverage gaps.** The runner calls `resolveCik` directly rather
+   than the `findOperatingCik` holdco fallback the live pipeline uses, so
+   holdco-structured filers (XOM) produce zero observations. Financials
+   (JPM, BAC) also drop out: Altman excludes SIC 6000-6799 and banks lack the
+   industrial metrics needed to clear the medium-confidence bar. Both are
+   conservative exclusions rather than bad data, but they skew the sample.
+5. **The sample is 37 mega-caps.** This is the least favorable universe for the
+   system's core premise. If reading primary documents at scale has an edge, it
+   is largest among under-covered small and mid caps, which are absent here.
+6. **Materiality judgments use an LLM.** The *diff* is deterministic, but which
    new risks count as material is a model judgment and will vary at the margin.
-5. **Coverage is US-listed filers.** Foreign private issuers filing 20-F are not
+7. **Coverage is US-listed filers.** Foreign private issuers filing 20-F are not
    normalized to the same concept set.
-6. **This is not a recommendation engine and does not predict price.** It reads
+8. **This is not a recommendation engine and does not predict price.** It reads
    disclosure at scale and reports what it finds.
