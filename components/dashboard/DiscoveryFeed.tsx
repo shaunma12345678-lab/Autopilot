@@ -14,6 +14,10 @@ interface DiscoveryRow {
   companyName: string
   eventType: string
   eventDate: string
+  freshness?: string
+  freshnessTone?: "hot" | "warm" | "cooling" | "stale"
+  decayedPriority?: number
+  halfLifeDays?: number
   formType: string
   sourceUrl: string | null
   priority: number
@@ -195,7 +199,21 @@ export default function DiscoveryFeed({ password }: { password?: string } = {}) 
                       <p className="text-xs text-gray-500 truncate">{r.companyName}</p>
                     </div>
                     <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500 flex-wrap">
-                      <span>{new Date(r.eventDate).toLocaleDateString()}</span>
+                      <span
+                        className={
+                          r.freshnessTone === "hot" ? "text-emerald-400 font-semibold"
+                          : r.freshnessTone === "warm" ? "text-yellow-400"
+                          : r.freshnessTone === "cooling" ? "text-gray-500"
+                          : "text-gray-600"
+                        }
+                        title={
+                          r.halfLifeDays
+                            ? `Ranking weight halves every ${r.halfLifeDays} days for this event type — the edge here is reading a filing before it is widely read, so a lead is worth most the day it lands.`
+                            : undefined
+                        }
+                      >
+                        {r.freshness ?? new Date(r.eventDate).toLocaleDateString()}
+                      </span>
                       <span>Form {r.formType}</span>
                       {!r.processed && <span className="text-amber-400">analysis queued</span>}
                       {r.sourceUrl && (

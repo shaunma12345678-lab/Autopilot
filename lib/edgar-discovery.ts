@@ -27,6 +27,7 @@
 //   they're indexed separately from the full-text corpus. Rather than ship a
 //   silently-empty feed, they're omitted until a working source is found.
 import { prisma } from "@/lib/prisma"
+import { decayedPriority, isStale } from "@/lib/lead-decay"
 import { getCompanyTickers } from "@/lib/edgar-client"
 
 const FULLTEXT = "https://efts.sec.gov/LATEST/search-index"
@@ -280,6 +281,8 @@ export async function runDiscovery(opts: { lookbackDays?: number; perFormLimit?:
                 ? `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${src.adsh.replace(/-/g, "")}/`
                 : null,
               priority: spec.priority,
+              decayedPriority: decayedPriority(spec.priority, eventDate, spec.eventType),
+              decayRefreshedAt: new Date().toISOString(),
               rationale: spec.rationale,
             },
           })
@@ -294,24 +297,67 @@ export async function runDiscovery(opts: { lookbackDays?: number; perFormLimit?:
     }
   }
 
+  // Keep stored decay current so ordering never drifts from elapsed time.
+  await refreshDecay().catch(() => {})
+
   return run
 }
 
-// Returns the discovered companies most worth analyzing next: highest priority
-// first, oldest first within a priority so nothing starves.
+// Recomputes decay across unprocessed events. Called at the end of each
+// discovery run so stored ordering never drifts far from real elapsed time.
+export async function refreshDecay(): Promise<{ updated: number; stale: number }> {
+  const now = new Date()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = await (prisma.discoveryEvent as any).findMany({
+    where: { processed: false },
+    take: 2000,
+  }) as Array<{ id: string; priority: number; eventDate: string; eventType: string; decayedPriority: number | null }>
+
+  let updated = 0
+  let stale = 0
+  for (const r of rows) {
+    const next = decayedPriority(r.priority, r.eventDate, r.eventType, now)
+    if (isStale(next)) stale++
+    // Skip writes that would not change the stored value — decay moves slowly
+    // and rewriting every row on every run is pointless load.
+    if (r.decayedPriority !== null && Math.abs(r.decayedPriority - next) < 0.05) continue
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (prisma.discoveryEvent as any).update({
+      where: { id: r.id },
+      data: { decayedPriority: next, decayRefreshedAt: now.toISOString() },
+    }).catch(() => {})
+    updated++
+  }
+  return { updated, stale }
+}
+
+// Returns the discovered companies most worth analyzing next.
+//
+// Ordered by DECAYED priority, which is a deliberate reversal. This previously
+// took the highest base priority and then processed the OLDEST first within it,
+// as anti-starvation. That is backwards for a feed whose whole value is
+// reaching a filing before it has been widely read: it analyzed the freshest,
+// most valuable leads LAST. Decay solves the same starvation problem correctly,
+// because an old high-priority lead outranks a new low-priority one until it
+// has genuinely aged out.
 export async function nextDiscoveriesToAnalyze(limit: number): Promise<Array<{ id: string; symbol: string; cik: string; eventType: string }>> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = await (prisma.discoveryEvent as any).findMany({
     where: { processed: false },
-    orderBy: { priority: "desc" },
+    orderBy: { decayedPriority: "desc" },
     take: limit * 3,
-  }) as Array<{ id: string; symbol: string | null; cik: string; eventType: string; eventDate: string }>
+  }) as Array<{ id: string; symbol: string | null; cik: string; eventType: string; eventDate: string; priority: number; decayedPriority: number | null }>
 
+  const now = new Date()
   return rows
     .filter(r => Boolean(r.symbol))
-    .sort((a, b) => a.eventDate.localeCompare(b.eventDate))
+    // Recompute rather than trusting the stored value, which may predate the
+    // last refresh. Rows not yet backfilled sort correctly on first read.
+    .map(r => ({ r, d: decayedPriority(r.priority, r.eventDate, r.eventType, now) }))
+    .filter(x => !isStale(x.d))
+    .sort((a, b) => b.d - a.d)
     .slice(0, limit)
-    .map(r => ({ id: r.id, symbol: r.symbol as string, cik: r.cik, eventType: r.eventType }))
+    .map(({ r }) => ({ id: r.id, symbol: r.symbol as string, cik: r.cik, eventType: r.eventType }))
 }
 
 export async function markDiscoveryProcessed(id: string): Promise<void> {

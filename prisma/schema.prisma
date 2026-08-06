@@ -791,6 +791,11 @@ model DiscoveryEvent {
   accessionNumber String?
   sourceUrl     String?
   priority      Int      @default(50)   // 0-100, drives which get analyzed first
+  // Priority after time decay (lib/lead-decay.ts). Stored rather than computed
+  // on read so the database can order and paginate on it; refreshed on every
+  // discovery run, which is far more often than the ordering meaningfully moves.
+  decayedPriority Float?
+  decayRefreshedAt DateTime?
   rationale     String?
   processed     Boolean  @default(false)
   processedAt   DateTime?
@@ -798,6 +803,7 @@ model DiscoveryEvent {
 
   @@unique([cik, eventType, eventDate])
   @@index([processed, priority])
+  @@index([processed, decayedPriority])
   @@index([eventType])
   @@index([eventDate])
 }
