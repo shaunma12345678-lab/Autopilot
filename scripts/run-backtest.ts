@@ -6,15 +6,17 @@
 // companyfacts plus ten years of daily bars per symbol, which will not finish
 // inside a 300s function limit, and it should be run intentionally rather than
 // on a schedule so results aren't quietly regenerated and re-tuned against.
-import { resolveCik, getSubmissions, getCompanyFacts } from "../lib/edgar-client"
+import { resolveCik, getSubmissions, getCompanyFacts, countGaapConcepts, findOperatingCik } from "../lib/edgar-client"
 import { fetchDeepHistory } from "../lib/price-history"
 import { scoreAsOf, aggregate, type BacktestObservation } from "../lib/backtest"
 
 // Horizon is a pre-specified variable, not a tuning knob. Fundamental quality
 // signals are documented to act slowly, so testing more than one holding period
 // is legitimate — but every horizon tested must be reported, never just the
-// best-looking one.
-const HORIZON_DAYS = Number(process.env.HORIZON_DAYS ?? 90)
+// best-looking one. Both are computed in a single pass over the same fetched
+// data so the universes stay directly comparable.
+const HORIZONS = (process.env.HORIZONS ?? "90,365").split(",").map(Number)
+const MAX_HORIZON = Math.max(...HORIZONS)
 // Yahoo throttles aggressively on burst. Pacing between symbols keeps a long
 // run alive; without it a 429 cascade silently empties the whole sample.
 const SYMBOL_DELAY_MS = 3000
@@ -27,7 +29,7 @@ function asOfDates(startYear: number, endYear: number): string[] {
   for (let y = startYear; y <= endYear; y++) {
     for (const md of ["-02-15", "-05-15", "-08-15", "-11-15"]) out.push(`${y}${md}`)
   }
-  const cutoff = new Date(Date.now() - (HORIZON_DAYS + 5) * 86400000).toISOString().slice(0, 10)
+  const cutoff = new Date(Date.now() - (MAX_HORIZON + 5) * 86400000).toISOString().slice(0, 10)
   return out.filter(d => d <= cutoff)
 }
 
@@ -53,7 +55,7 @@ const UNIVERSE = process.argv[2]
 
 async function main() {
   const dates = asOfDates(2017, new Date().getFullYear())
-  console.log(`Backtest: ${UNIVERSE.length} symbols x ${dates.length} as-of dates, ${HORIZON_DAYS}-day horizon`)
+  console.log(`Backtest: ${UNIVERSE.length} symbols x ${dates.length} as-of dates, horizons ${HORIZONS.join("/")}d`)
   console.log(`As-of range: ${dates[0]} -> ${dates[dates.length - 1]}\n`)
 
   // The benchmark is load-bearing — every excess return depends on it — so it
@@ -69,7 +71,7 @@ async function main() {
   if (benchmark.length < 500) throw new Error(`Benchmark history unavailable after retries`)
   console.log(`SPY: ${benchmark.length} bars ${benchmark[0].date} -> ${benchmark[benchmark.length - 1].date}\n`)
 
-  const observations: BacktestObservation[] = []
+  const byHorizon = new Map<number, BacktestObservation[]>(HORIZONS.map(h => [h, []]))
   let done = 0
 
   for (const symbol of UNIVERSE) {
@@ -79,45 +81,69 @@ async function main() {
       const resolved = await resolveCik(symbol)
       if (!resolved) { console.log(`  ${symbol}: no CIK`); continue }
 
-      const [facts, subs, bars] = await Promise.all([
+      const [rawFacts, rawSubs, bars] = await Promise.all([
         getCompanyFacts(resolved.cik),
         getSubmissions(resolved.cik),
         fetchDeepHistory(symbol),
       ])
-      if (!facts || bars.length < 500) { console.log(`  ${symbol}: insufficient data`); continue }
+      if (!rawFacts || bars.length < 500) { console.log(`  ${symbol}: insufficient data`); continue }
+
+      // Same holdco fallback the live pipeline applies. Without it a ticker
+      // mapping to a holding-company shell (XOM) has almost no XBRL history and
+      // silently contributes zero observations, biasing the sample by
+      // corporate structure rather than by anything meaningful.
+      let facts = rawFacts
+      let subs = rawSubs
+      if (countGaapConcepts(rawFacts) < 150) {
+        const opCik = await findOperatingCik(rawSubs?.name ?? resolved.name).catch(() => null)
+        if (opCik && opCik !== resolved.cik) {
+          const [bf, bs] = await Promise.all([getCompanyFacts(opCik), getSubmissions(opCik)])
+          if (countGaapConcepts(bf) > countGaapConcepts(rawFacts)) {
+            facts = bf!
+            subs = bs ?? rawSubs
+          }
+        }
+      }
 
       const sicCode = subs?.sic ?? null
       let kept = 0
 
       for (const asOf of dates) {
-        const exitDate = addDays(asOf, HORIZON_DAYS)
         const entry = closeOn(bars, asOf)
-        const exit = closeOn(bars, exitDate)
         const bEntry = closeOn(benchmark, asOf)
-        const bExit = closeOn(benchmark, exitDate)
-        if (!entry || !exit || !bEntry || !bExit) continue
-        // Guard against the bar series simply not reaching the exit date.
-        if (bars[bars.length - 1].date < exitDate) continue
+        if (!entry || !bEntry) continue
 
+        // Score once per as-of date, then measure every horizon off it.
         const scored = scoreAsOf(facts, bars, benchmark, asOf, sicCode)
         if (!scored || scored.qualityScore === null || !scored.strengthTier) continue
         // Same gate the live product applies — thin data never gets ranked,
         // so it must not be counted as a call here either.
         if (scored.dataConfidence === "insufficient" || scored.dataConfidence === "low") continue
 
-        const fwd = (exit / entry - 1) * 100
-        const bench = (bExit / bEntry - 1) * 100
-        observations.push({
-          symbol, asOf,
-          qualityScore: scored.qualityScore,
-          strengthTier: scored.strengthTier,
-          actionSignal: scored.actionSignal,
-          dataConfidence: scored.dataConfidence,
-          forwardReturnPct: fwd,
-          benchmarkReturnPct: bench,
-          excessReturnPct: fwd - bench,
-        })
-        kept++
+        let countedThisDate = false
+        for (const h of HORIZONS) {
+          const exitDate = addDays(asOf, h)
+          // Guard against the bar series simply not reaching the exit date.
+          if (bars[bars.length - 1].date < exitDate) continue
+          const exit = closeOn(bars, exitDate)
+          const bExit = closeOn(benchmark, exitDate)
+          if (!exit || !bExit) continue
+
+          const fwd = (exit / entry - 1) * 100
+          const bench = (bExit / bEntry - 1) * 100
+          byHorizon.get(h)!.push({
+            symbol, asOf,
+            qualityScore: scored.qualityScore,
+            strengthTier: scored.strengthTier,
+            actionSignal: scored.actionSignal,
+            dataConfidence: scored.dataConfidence,
+            forwardReturnPct: fwd,
+            benchmarkReturnPct: bench,
+            excessReturnPct: fwd - bench,
+          })
+          countedThisDate = true
+        }
+        if (countedThisDate) kept++
       }
       console.log(`  [${done}/${UNIVERSE.length}] ${symbol}: ${kept} observations`)
     } catch (err) {
@@ -125,22 +151,21 @@ async function main() {
     }
   }
 
-  const result = aggregate(observations, HORIZON_DAYS)
-  console.log(`\n${"=".repeat(64)}`)
-  console.log(`RESULTS — ${result.observations} observations across ${result.symbolsTested} companies`)
-  console.log(`${"=".repeat(64)}`)
-
   const row = (t: { tier: string; n: number; meanExcessPct: number; medianExcessPct: number; hitRatePct: number }) =>
     `  ${t.tier.padEnd(10)} n=${String(t.n).padStart(4)}  mean ${t.meanExcessPct >= 0 ? "+" : ""}${t.meanExcessPct.toFixed(2)}%  median ${t.medianExcessPct >= 0 ? "+" : ""}${t.medianExcessPct.toFixed(2)}%  beat-SPY ${t.hitRatePct.toFixed(1)}%`
 
-  console.log(`\nBy strength tier (excess return vs SPY over ${HORIZON_DAYS} days):`)
-  result.byTier.forEach(t => console.log(row(t)))
-  console.log(`\nBy action signal:`)
-  result.bySignal.forEach(t => console.log(row(t)))
-  console.log(`\nTop-quartile minus bottom-quartile mean excess: ${
-    result.quartileSpreadPct === null ? "n/a" : `${result.quartileSpreadPct >= 0 ? "+" : ""}${result.quartileSpreadPct.toFixed(2)}%`}`)
-  console.log(`\nNotes:`)
-  result.notes.forEach(n => console.log(`  - ${n}`))
+  for (const h of HORIZONS) {
+    const result = aggregate(byHorizon.get(h)!, h)
+    console.log(`\n${"=".repeat(64)}`)
+    console.log(`RESULTS @ ${h}d — ${result.observations} observations across ${result.symbolsTested} companies`)
+    console.log(`${"=".repeat(64)}`)
+    console.log(`\nBy strength tier (excess return vs SPY over ${h} days):`)
+    result.byTier.forEach(t => console.log(row(t)))
+    console.log(`\nBy action signal:`)
+    result.bySignal.forEach(t => console.log(row(t)))
+    console.log(`\nTop-quartile minus bottom-quartile mean excess: ${
+      result.quartileSpreadPct === null ? "n/a" : `${result.quartileSpreadPct >= 0 ? "+" : ""}${result.quartileSpreadPct.toFixed(2)}%`}`)
+  }
 }
 
 main().catch(e => { console.error(e); process.exit(1) })
