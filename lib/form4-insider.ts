@@ -31,11 +31,11 @@ function userAgent(): string {
 }
 
 let lastRequestAt = 0
-async function throttledFetch(url: string): Promise<Response> {
+async function throttledFetch(url: string, timeoutMs = 15000): Promise<Response> {
   const wait = Math.max(0, lastRequestAt + 130 - Date.now())
   if (wait > 0) await new Promise(r => setTimeout(r, wait))
   lastRequestAt = Date.now()
-  return fetch(url, { headers: { "User-Agent": userAgent() }, signal: AbortSignal.timeout(15000) })
+  return fetch(url, { headers: { "User-Agent": userAgent() }, signal: AbortSignal.timeout(timeoutMs) })
 }
 
 interface Form4Transaction {
@@ -108,11 +108,17 @@ export interface Form4Filing {
   primaryDocument: string
 }
 
+// Wall-clock ceiling for the whole insider pass. Large filers submit dozens of
+// Form 4s and each is a separate throttled request; without a budget this alone
+// can exceed a serverless function's entire time limit.
+const INSIDER_TIME_BUDGET_MS = 20000
+
 export async function analyzeInsiderActivity(
   cik: string,
   filings: Form4Filing[],
-  maxFilings = 25
+  maxFilings = 12
 ): Promise<InsiderActivity> {
+  const deadline = Date.now() + INSIDER_TIME_BUDGET_MS
   const cutoff = Date.now() - CLUSTER_WINDOW_DAYS * 86400000
   const recent = filings
     .filter(f => f.form === "4" && new Date(f.filingDate).getTime() >= cutoff)
@@ -131,12 +137,13 @@ export async function analyzeInsiderActivity(
   let buyValue = 0
 
   for (const filing of recent) {
+    if (Date.now() > deadline) break // partial read beats a timeout
     try {
       const accession = filing.accessionNumber.replace(/-/g, "")
       // The primaryDocument path points at the styled rendering; the raw XML
       // sits alongside it at form4.xml.
       const url = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accession}/form4.xml`
-      const res = await throttledFetch(url)
+      const res = await throttledFetch(url, 6000)
       if (!res.ok) continue
 
       const txns = parseForm4(await res.text())

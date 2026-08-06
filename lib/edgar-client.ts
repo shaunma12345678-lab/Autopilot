@@ -194,3 +194,60 @@ export async function searchGoingConcern(cik: string): Promise<{ hits: number; l
     return { hits: 0 }
   }
 }
+
+// Counts how many us-gaap concepts a companyfacts payload actually carries.
+// A newly-formed holding company has a handful; a real operating filer with
+// history has hundreds.
+export function countGaapConcepts(facts: CompanyFacts | null): number {
+  if (!facts) return 0
+  const g = (facts as { facts?: Record<string, Record<string, unknown>> }).facts?.["us-gaap"]
+  return g ? Object.keys(g).length : 0
+}
+
+// Finds the operating-entity CIK for a company name via EDGAR's company search.
+//
+// WHY THIS EXISTS: after a holding-company reorganization, SEC's ticker map
+// points the ticker at the NEW shell rather than the operating company that
+// holds the financial history. Verified: "XOM" maps to CIK 2115436
+// "ExxonMobil Holdings Corp" (94 us-gaap concepts, no usable history) while the
+// real filer is CIK 34088 "Exxon Mobil Corporation" (438 concepts). Without
+// this fallback, Exxon silently scores as "insufficient data" forever.
+export async function findOperatingCik(companyName: string): Promise<string | null> {
+  // EDGAR's company search does prefix matching against the name AS STORED,
+  // which is spaced and uppercase ("EXXON MOBIL CORP"). A holdco name written
+  // without spaces ("ExxonMobil Holdings Corp") matches nothing, so several
+  // query shapes are tried before giving up.
+  const base = companyName
+    .replace(/\b(holdings?|holdco|group|inc|corp|corporation|company|co|plc|ltd)\b\.?/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (base.length < 3) return null
+
+  // "ExxonMobil" -> "Exxon Mobil": split runs of camelCase into words.
+  const spaced = base.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/\s+/g, " ").trim()
+  const firstWord = spaced.split(" ")[0]
+
+  const variants = [...new Set([base, spaced, firstWord].filter(v => v.length >= 3))]
+
+  for (const variant of variants) {
+    try {
+      const url = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(variant)}` +
+        `&type=10-K&dateb=&owner=include&count=10&action=getcompany&output=atom`
+      const res = await throttledFetch(url)
+      if (!res.ok) continue
+
+      const xml = await res.text()
+      const ciks = [...new Set([...xml.matchAll(/CIK=(\d{6,10})/g)].map(m => m[1]))]
+      for (const candidate of ciks.slice(0, 4)) {
+        const padded = padCik(candidate)
+        const facts = await getCompanyFacts(padded)
+        // Require a filer with real history, not another shell.
+        if (countGaapConcepts(facts) >= 150) return padded
+      }
+    } catch {
+      // try the next variant
+    }
+  }
+  return null
+}
+

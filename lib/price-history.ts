@@ -330,13 +330,20 @@ export function computePriceMetrics(bars: DailyBar[], benchmarkBars: DailyBar[] 
 // cached in-module to avoid refetching SPY once per ticker.
 let benchmarkCache: { bars: DailyBar[]; fetchedAt: number } | null = null
 const BENCHMARK_TTL_MS = 6 * 60 * 60 * 1000
+// Failures MUST be cached too, on a shorter TTL. Without this, a benchmark
+// fetch that fails re-runs the entire provider chain (Yahoo retries with
+// backoff, then Nasdaq's two asset classes, then Stooq) for EVERY company
+// scored — which is what turned a 15-second analysis into a 35-minute one
+// during bulk seeding.
+const BENCHMARK_FAILURE_TTL_MS = 10 * 60 * 1000
 
 export async function getBenchmarkHistory(): Promise<DailyBar[]> {
-  if (benchmarkCache && Date.now() - benchmarkCache.fetchedAt < BENCHMARK_TTL_MS) {
-    return benchmarkCache.bars
+  if (benchmarkCache) {
+    const ttl = benchmarkCache.bars.length > 0 ? BENCHMARK_TTL_MS : BENCHMARK_FAILURE_TTL_MS
+    if (Date.now() - benchmarkCache.fetchedAt < ttl) return benchmarkCache.bars
   }
   const { bars } = await fetchHistory("SPY")
-  if (bars.length > 0) benchmarkCache = { bars, fetchedAt: Date.now() }
+  benchmarkCache = { bars, fetchedAt: Date.now() }
   return bars
 }
 

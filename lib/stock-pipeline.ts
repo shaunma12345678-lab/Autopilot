@@ -6,7 +6,7 @@
 // accumulated dataset, exactly like the real estate search does for new leads.
 // That accumulation is also what makes sector benchmarking better over time.
 import { prisma } from "@/lib/prisma"
-import { resolveCik, getSubmissions, getCompanyFacts, searchGoingConcern } from "@/lib/edgar-client"
+import { resolveCik, getSubmissions, getCompanyFacts, searchGoingConcern, countGaapConcepts, findOperatingCik } from "@/lib/edgar-client"
 import { normalizeFundamentals, extractSeries } from "@/lib/edgar-normalize"
 import { fetchHistory, getBenchmarkHistory, computePriceMetrics } from "@/lib/price-history"
 import { computePiotroski } from "@/lib/stock-scores/piotroski"
@@ -60,19 +60,39 @@ export async function analyzeAndUpsertTicker(
 
   if (!facts) return { ok: false, error: `No SEC XBRL filing data found for ${symbol}` }
 
+  // A ticker that maps to a holding-company shell has almost no XBRL history.
+  // Fall back to the operating entity before concluding the data doesn't exist.
+  let cik = resolved.cik
+  let effectiveFacts = facts
+  let effectiveSubmissions = submissions
+  if (countGaapConcepts(facts) < 150) {
+    const operatingCik = await findOperatingCik(submissions?.name ?? resolved.name).catch(() => null)
+    if (operatingCik && operatingCik !== resolved.cik) {
+      const [betterFacts, betterSubs] = await Promise.all([
+        getCompanyFacts(operatingCik),
+        getSubmissions(operatingCik),
+      ])
+      if (countGaapConcepts(betterFacts) > countGaapConcepts(facts)) {
+        cik = operatingCik
+        effectiveFacts = betterFacts!
+        effectiveSubmissions = betterSubs ?? submissions
+      }
+    }
+  }
+
   const price = history.latestPrice !== null
     ? { symbol, price: history.latestPrice, date: history.bars.at(-1)?.date ?? "" }
     : null
 
-  const series = extractSeries(facts)
-  const fundamentals = normalizeFundamentals(facts, series)
+  const series = extractSeries(effectiveFacts)
+  const fundamentals = normalizeFundamentals(effectiveFacts, series)
   const priceMetrics = history.bars.length > 0 ? computePriceMetrics(history.bars, benchmark) : null
 
   const marketCap = price && fundamentals.sharesOutstanding
     ? price.price * fundamentals.sharesOutstanding
     : null
 
-  const sicCode = submissions?.sic ?? null
+  const sicCode = effectiveSubmissions?.sic ?? null
   const piotroski = computePiotroski(series)
   const altman = computeAltmanZ(series, marketCap, sicCode)
   const beneish = computeBeneishM(series)
@@ -97,13 +117,13 @@ export async function analyzeAndUpsertTicker(
 
   // Form 4 parsing costs one small fetch per filing, so it's capped and
   // guarded rather than gated behind an opt-in flag.
-  const insider = await analyzeInsiderActivity(resolved.cik, submissions?.recentForms ?? [])
+  const insider = await analyzeInsiderActivity(cik, effectiveSubmissions?.recentForms ?? [])
     .catch(() => null)
 
   // Live 8-K events are free (already in the submissions payload) so they
   // always run. This is what catches a restatement filed last week that no
   // backward-looking ratio can see.
-  const liveEvents = summarizeLiveEvents(submissions?.recentForms ?? [])
+  const liveEvents = summarizeLiveEvents(effectiveSubmissions?.recentForms ?? [])
 
   // News costs a web search + AI call, so it's opt-in like the narrative read.
   let news: Awaited<ReturnType<typeof scanCompanyNews>> = null
@@ -114,10 +134,10 @@ export async function analyzeAndUpsertTicker(
   let governance: Awaited<ReturnType<typeof readProxyGovernance>> = null
   if (opts.includeNarrative) {
     try {
-      const proxy = submissions?.recentForms?.find(f => f.form === "DEF 14A")
+      const proxy = effectiveSubmissions?.recentForms?.find(f => f.form === "DEF 14A")
       if (proxy) {
         governance = await readProxyGovernance(
-          resolved.cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate
+          cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate
         )
       }
     } catch { /* governance is an enhancement; never block the score */ }
@@ -154,10 +174,10 @@ export async function analyzeAndUpsertTicker(
   let narrative: Awaited<ReturnType<typeof readFilingNarrative>> = null
   if (opts.includeNarrative) {
     try {
-      const latest10K = submissions?.recentForms?.find(f => f.form === "10-K")
+      const latest10K = effectiveSubmissions?.recentForms?.find(f => f.form === "10-K")
       if (latest10K) {
         const sections = await fetchFilingSections(
-          resolved.cik, latest10K.accessionNumber, latest10K.primaryDocument,
+          cik, latest10K.accessionNumber, latest10K.primaryDocument,
           latest10K.form, latest10K.filingDate
         )
         if (sections) narrative = await readFilingNarrative(sections)
@@ -186,12 +206,12 @@ export async function analyzeAndUpsertTicker(
   }
 
   const data = {
-    cik: resolved.cik,
+    cik,
     symbol,
-    name: submissions?.name ?? resolved.name,
-    sector: submissions?.sicDescription ?? null,
+    name: effectiveSubmissions?.name ?? resolved.name,
+    sector: effectiveSubmissions?.sicDescription ?? null,
     sicCode,
-    exchange: submissions?.exchanges?.[0] ?? null,
+    exchange: effectiveSubmissions?.exchanges?.[0] ?? null,
 
     revenueTtm: fundamentals.revenueTtm,
     revenueGrowthYoyPct: fundamentals.revenueGrowthYoyPct,
