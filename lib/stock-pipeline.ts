@@ -23,6 +23,7 @@ import { summarizeLiveEvents } from "@/lib/live-events"
 import { scanCompanyNews } from "@/lib/company-news"
 import { diffRiskFactors } from "@/lib/risk-factor-diff"
 import { computeValuation, classifyValue } from "@/lib/valuation"
+import { fetchDeepHistory } from "@/lib/price-history"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
 import { computeBalanceSheetRisk } from "@/lib/balance-sheet-risk"
@@ -101,10 +102,20 @@ export async function analyzeAndUpsertTicker(
   // Historical market caps at each fiscal period end, for the own-history
   // valuation percentile. Shares are matched to the period they were reported
   // for and priced at that period's close.
+  //
+  // Uses DEEP history, not `history.bars`. The live provider chain returns only
+  // ~13 months, so every fiscal year end older than that prices to null and the
+  // series falls below the five years the percentile requires — leaving the
+  // composite to fall back on the absolute-yield term alone. That silently
+  // ships a weaker valuation score than the one that was backtested, since the
+  // own-history percentile carries 70% of the composite and is the component
+  // with measured signal.
+  const deepBars = await fetchDeepHistory(symbol).catch(() => [])
+  const valuationBars = deepBars.length > history.bars.length ? deepBars : history.bars
   const sharesByEnd = new Map((series.sharesOutstanding ?? []).map(o => [o.end, o.value]))
   const closeOnDate = (iso: string): number | null => {
     let found: number | null = null
-    for (const b of history.bars) {
+    for (const b of valuationBars) {
       if (b.date <= iso) found = b.close
       else break
     }
