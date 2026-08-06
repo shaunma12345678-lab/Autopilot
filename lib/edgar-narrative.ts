@@ -62,6 +62,29 @@ function extractSection(text: string, startPattern: RegExp, endPattern: RegExp, 
   return best.slice(0, budget)
 }
 
+// Full plain text of a filing, for deterministic analysis that has no context
+// budget (year-over-year risk diffing). fetchFilingSections() is the LLM-facing
+// path and caps each section; this one does not truncate.
+export async function fetchFilingText(
+  cik: string,
+  accessionNumber: string,
+  primaryDocument: string
+): Promise<string | null> {
+  try {
+    const cikNum = String(Number(cik.replace(/\D/g, "")))
+    const accession = accessionNumber.replace(/-/g, "")
+    const res = await fetch(`${SEC_ARCHIVES}/${cikNum}/${accession}/${primaryDocument}`, {
+      headers: { "User-Agent": userAgent(), Accept: "text/html" },
+      signal: AbortSignal.timeout(45000),
+    })
+    if (!res.ok) return null
+    const text = htmlToText(await res.text())
+    return text.length < 5000 ? null : text
+  } catch {
+    return null
+  }
+}
+
 export interface FilingSections {
   business: string | null
   riskFactors: string | null

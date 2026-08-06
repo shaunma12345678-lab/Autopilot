@@ -19,7 +19,7 @@
 // the already-identified new items — it never decides what counts as "new",
 // because that's a deterministic text comparison and shouldn't depend on a
 // model's judgment.
-import { fetchFilingSections } from "./edgar-narrative"
+import { fetchFilingText } from "./edgar-narrative"
 import { runAgent } from "./claude"
 
 export interface RiskFactorDiff {
@@ -38,13 +38,42 @@ const EMPTY: RiskFactorDiff = {
   summary: "", riskPenalty: 0, currentFilingDate: null, priorFilingDate: null,
 }
 
-// Risk factors are written as headed paragraphs. Splitting on sentence-ish
-// boundaries loses the unit of meaning, so this splits on paragraph length.
+// WHY THIS DOESN'T EXTRACT "Item 1A" BY HEADING:
+//
+// Heading-anchored extraction is unreliable in both directions, verified
+// against real filings. Intel's 10-K never uses the string "Item 1A." in its
+// body at all — it uses a thematic layout, and the only match in the whole
+// 575k-character document is the cross-reference index at the very end.
+// Pfizer's has 29 matches with its only "Item 1B" sitting in the table of
+// contents, so a start/end span runs off into the financial statements.
+//
+// Risk-factor prose, however, is recognizable by its own language regardless of
+// how the filer formats headings: dense modal hedging ("could", "may",
+// "adversely affect", "no assurance"). Selecting on that is format-independent
+// and, critically, is applied identically to both years — so the comparison
+// stays apples-to-apples even if it catches some forward-looking MD&A too.
+const RISK_LANGUAGE = /\b(could|may|might|risk|adversely|no assurance|unable to|fail(?:ure)? to|if we|uncertain|materially|harm)\b/gi
+
+const MIN_RISK_MARKERS = 3
+// Financial-statement rows and tables survive HTML stripping as digit soup.
+// Real disclosure prose is overwhelmingly words.
+const MAX_DIGIT_RATIO = 0.12
+
+function isRiskProse(p: string): boolean {
+  const markers = (p.match(RISK_LANGUAGE) ?? []).length
+  if (markers < MIN_RISK_MARKERS) return false
+  const digits = (p.match(/\d/g) ?? []).length
+  return digits / p.length <= MAX_DIGIT_RATIO
+}
+
+// Splits a filing into paragraph-sized units and keeps only risk-disclosure
+// prose. The unit of meaning is the paragraph, not the sentence.
 function splitRiskParagraphs(text: string): string[] {
   return text
     .split(/(?<=\.)\s+(?=[A-Z])/)
     .map(p => p.trim())
-    .filter(p => p.length > 120 && p.length < 2000)
+    .filter(p => p.length > 150 && p.length < 2500)
+    .filter(isRiskProse)
 }
 
 // Normalized token set, for overlap comparison. Deliberately crude — we're
@@ -108,18 +137,20 @@ export async function diffRiskFactors(
 
   try {
     const [current, prior] = await Promise.all([
-      fetchFilingSections(cik, tenKs[0].accessionNumber, tenKs[0].primaryDocument, tenKs[0].form, tenKs[0].filingDate),
-      fetchFilingSections(cik, tenKs[1].accessionNumber, tenKs[1].primaryDocument, tenKs[1].form, tenKs[1].filingDate),
+      fetchFilingText(cik, tenKs[0].accessionNumber, tenKs[0].primaryDocument),
+      fetchFilingText(cik, tenKs[1].accessionNumber, tenKs[1].primaryDocument),
     ])
 
-    if (!current?.riskFactors || !prior?.riskFactors) {
-      return { ...EMPTY, summary: "Could not isolate Item 1A in both filings." }
+    if (!current || !prior) {
+      return { ...EMPTY, summary: "Could not retrieve both 10-K documents." }
     }
 
-    const currentParas = splitRiskParagraphs(current.riskFactors)
-    const priorParas = splitRiskParagraphs(prior.riskFactors)
-    if (currentParas.length < 3 || priorParas.length < 3) {
-      return { ...EMPTY, summary: "Risk sections too short to compare meaningfully." }
+    const currentParas = splitRiskParagraphs(current)
+    const priorParas = splitRiskParagraphs(prior)
+    // Too little risk prose on either side means the comparison would be
+    // driven by extraction noise rather than by real disclosure change.
+    if (currentParas.length < 20 || priorParas.length < 20) {
+      return { ...EMPTY, summary: "Not enough comparable disclosure text in both filings." }
     }
 
     const newRisks = findNewParagraphs(currentParas, priorParas).slice(0, 12)
@@ -141,7 +172,7 @@ export async function diffRiskFactors(
     try {
       const raw = await runAgent(
         MATERIALITY_SYSTEM,
-        `These risk-factor passages appear in the 10-K filed ${tenKs[0].filingDate} and did NOT appear in the one filed ${tenKs[1].filingDate}.
+        `These risk-disclosure passages appear in the 10-K filed ${tenKs[0].filingDate} and did NOT appear in the one filed ${tenKs[1].filingDate}.
 
 ${newRisks.map((r, i) => `[${i + 1}] ${r.slice(0, 900)}`).join("\n\n")}
 
