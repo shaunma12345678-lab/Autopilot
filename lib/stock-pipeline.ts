@@ -26,6 +26,8 @@ import { computeValuation, classifyValue } from "@/lib/valuation"
 import { buildBearCase } from "@/lib/bear-case"
 import { checkDataIntegrity } from "@/lib/filing-integrity"
 import { getMarketContext } from "@/lib/market-percentile"
+import { analyzeBenford } from "@/lib/benford"
+import { getShortInterest, interpretShortInterest } from "@/lib/short-interest"
 import { fetchDeepHistory } from "@/lib/price-history"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
@@ -100,6 +102,9 @@ export async function analyzeAndUpsertTicker(
   // Every score below is arithmetic on this XBRL; if the filing does not
   // internally reconcile, careful interpretation later cannot recover from it.
   const integrity = checkDataIntegrity(series)
+  // Digit analysis over every USD figure already in the payload — no extra
+  // fetch, and it reads the numbers as a distribution rather than one at a time.
+  const benford = analyzeBenford(effectiveFacts)
   if (integrity.corrupt) {
     return {
       ok: false,
@@ -158,6 +163,8 @@ export async function analyzeAndUpsertTicker(
     operatingCashFlow: series.cfo?.[0]?.value ?? null,
     rndExpense: series.researchAndDevelopment?.[0]?.value ?? null,
   }).catch(() => ({ percentiles: [], reasons: [] }))
+
+  const shortInterest = await getShortInterest(symbol).catch(() => null)
 
   const sectorBenchmark = await getSectorBenchmark(sicCode)
   const sectorRelative = scoreAgainstSector({
@@ -262,6 +269,7 @@ export async function analyzeAndUpsertTicker(
       ...(governance?.flags ?? []),
       ...(riskDiff?.materialNewRisks ?? []).map(r => `⚠ Newly disclosed this year: ${r}`),
       ...integrity.flags,
+      ...benford.flags,
       ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
     ],
     hasRestatement: liveEvents.hasRestatement,
@@ -416,6 +424,14 @@ export async function analyzeAndUpsertTicker(
     accountingFlags: [...accounting.flags, ...accounting.notes],
 
     goingConcernHits: goingConcern.hits,
+    benfordMad: benford.mad,
+    benfordConformity: benford.conformity,
+    benfordSampleSize: benford.sampleSize,
+    shortSharesCurrent: shortInterest?.currentShares ?? null,
+    shortChangePct: shortInterest?.changePct ?? null,
+    shortDaysToCover: shortInterest?.daysToCover ?? null,
+    shortTrend: shortInterest?.trend ?? null,
+    shortSettlementDate: shortInterest?.settlementDate ?? null,
     bearSummary: bear?.summary ?? null,
     bearThesisRisks: bear?.thesisRisks ?? null,
     bearKillShot: bear?.killShot ?? null,

@@ -694,6 +694,18 @@ model Ticker {
   // issue. Stored now.
   goingConcernHits         Int?
 
+  // Benford digit analysis (lib/benford.ts) — forensic, never accusatory.
+  benfordMad               Float?
+  benfordConformity        String?
+  benfordSampleSize        Int?
+
+  // Short interest (lib/short-interest.ts) — what informed money bets against.
+  shortSharesCurrent       Float?
+  shortChangePct           Float?
+  shortDaysToCover         Float?
+  shortTrend               String?
+  shortSettlementDate      String?
+
   // Adversarial pass (lib/bear-case.ts) — a second read whose only job is to
   // attack the investment. Kept separate from qualityReasons so the case
   // against is never blended into the case for.
