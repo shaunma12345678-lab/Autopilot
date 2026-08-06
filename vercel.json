@@ -54,7 +54,7 @@
     },
     {
       "path": "/api/cron/deep-research",
-      "schedule": "15,45 * * * *"
+      "schedule": "*/15 * * * *"
     }
   ]
 }
