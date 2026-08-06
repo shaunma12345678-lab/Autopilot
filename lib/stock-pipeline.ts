@@ -27,6 +27,7 @@ import { computeBalanceSheetRisk } from "@/lib/balance-sheet-risk"
 import { computeAccountingQuality } from "@/lib/accounting-quality"
 import { checkContradictions } from "@/lib/contradiction-check"
 import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
+import { assessStockConviction } from "@/lib/conviction"
 import { computeCapitalAllocation } from "@/lib/capital-allocation"
 import { readProxyGovernance } from "@/lib/governance"
 
@@ -182,6 +183,7 @@ export async function analyzeAndUpsertTicker(
     deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
   })
 
+
   const positionCtx = computePositionContext(history.bars)
   const situationSummary = describeSituation({
     ctx: positionCtx,
@@ -211,6 +213,22 @@ export async function analyzeAndUpsertTicker(
   const contradiction = checkContradictions({
     narrative, fundamentals, forward, accounting, balanceSheet,
     capitalAllocation,
+  })
+
+  const conviction = assessStockConviction({
+    qualityScore: result.qualityScore,
+    riskScore: result.riskScore,
+    piotroskiScore: piotroski.normalized,
+    altmanZone: altman.zone,
+    beneishFlag: beneish.flagged,
+    accountingQualityScore: accounting.qualityScore,
+    consistencyScore: consistency.score,
+    forwardScore: forward.forwardScore,
+    governanceScore: governance?.governanceScore ?? null,
+    credibilityScore: contradiction.credibilityScore,
+    hasRestatement: liveEvents.hasRestatement,
+    earlyWarning: result.earlyWarning,
+    dataConfidence: result.dataConfidence,
   })
 
 
@@ -301,6 +319,10 @@ export async function analyzeAndUpsertTicker(
     inventoryTurnsTrend: accounting.inventoryTurnsTrend,
     accountingQualityScore: accounting.qualityScore,
     accountingFlags: [...accounting.flags, ...accounting.notes],
+
+    convictionTier: conviction.tier,
+    convictionGates: conviction.gates,
+    convictionSummary: conviction.summary,
 
     credibilityScore: contradiction.credibilityScore,
     contradictions: contradiction.contradictions,

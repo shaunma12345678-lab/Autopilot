@@ -15,11 +15,13 @@ import { prisma } from "@/lib/prisma"
 import { analyzeAndUpsertTicker } from "@/lib/stock-pipeline"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
-// Small on purpose: each ticker pulls a multi-MB companyfacts payload plus a
-// full daily price history, behind SEC's 10 req/sec cap. Three per run finishes
-// well inside the function timeout; the every-20-minutes schedule still cycles
-// the whole tracked universe quickly.
-const BATCH_SIZE = 3
+// Sized against measured throughput, not guesswork. After the benchmark-cache
+// and Form 4 fixes, a full analysis runs a verified ~12s median (p90 13.2s,
+// max 14.0s across 80 companies). SEC's ceiling is 10 req/sec and we're far
+// under it, so the binding constraint is the 300s function limit on Pro.
+// 18 x ~13s leaves comfortable headroom, and cycles a 200-company universe
+// roughly every 4 hours instead of every 22.
+const BATCH_SIZE = 18
 
 // A diversified starter set so the screener has something to rank from day
 // one — real usage (on-demand lookups) grows the dataset from here.

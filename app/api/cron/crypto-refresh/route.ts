@@ -13,10 +13,13 @@ import { analyzeAndUpsertCrypto } from "@/lib/crypto-pipeline"
 import { nextCryptoToEnrich } from "@/lib/crypto-universe"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
-// Small on purpose: CoinGecko's free tier is throttled to one request every 2s
-// on our side and each asset makes several, before GoPlus/DefiLlama/GitHub/
-// Binance enrichment. Two per run stays well inside the function timeout.
-const BATCH_SIZE = 2
+// Raised sharply now that the aggregator is optional. Core market data comes
+// from our own regulated-exchange engine (lib/exchange-aggregator.ts), which
+// has no meaningful rate ceiling — CoinGecko's throttle was the entire reason
+// this was 2. Enrichment still touches GoPlus/DefiLlama/GitHub per asset, so
+// 12 keeps the run inside the 300s limit while clearing the backlog roughly
+// six times faster.
+const BATCH_SIZE = 12
 
 const STARTER_COINS = [
   "bitcoin", "ethereum", "solana", "chainlink", "uniswap",

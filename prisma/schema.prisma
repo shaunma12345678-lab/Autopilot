@@ -624,6 +624,11 @@ model Ticker {
   narrativeSourceUrl       String?
   narrativeFilingDate      String?
 
+  // Conviction tiering — independent gates, not an average (lib/conviction.ts)
+  convictionTier           String?   // elite | high | standard | below-bar
+  convictionGates          Json?
+  convictionSummary        String?
+
   // Narrative-vs-numbers cross-validation (lib/contradiction-check.ts)
   credibilityScore         Int?
   contradictions           Json?
@@ -747,6 +752,7 @@ model ScoreSnapshot {
   forwardScore  Int?
   actionSignal  String?
   priceUsd      Float?
+  top10HolderPct Float?
   capturedAt    DateTime @default(now())
 
   @@index([subjectType, symbol, capturedAt])
@@ -846,6 +852,11 @@ model CryptoAsset {
   volatility30dPct       Float?
   maxDrawdown1yPct       Float?
   btcCorrelation         Float?
+
+  // Conviction tiering (lib/conviction.ts)
+  convictionTier         String?
+  convictionGates        Json?
+  convictionSummary      String?
 
   // Composite scoring + quality gate
   qualityScore           Int?

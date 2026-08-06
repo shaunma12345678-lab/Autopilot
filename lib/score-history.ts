@@ -31,6 +31,9 @@ export interface SnapshotInput {
   forwardScore: number | null
   actionSignal: string | null
   priceUsd: number | null
+  /** Crypto only: top-10 holder share. Tracked over time this becomes an
+   *  accumulation/distribution signal — see detectHolderTrend below. */
+  top10HolderPct?: number | null
 }
 
 export async function captureSnapshot(input: SnapshotInput): Promise<void> {
@@ -46,6 +49,7 @@ export async function captureSnapshot(input: SnapshotInput): Promise<void> {
         forwardScore: input.forwardScore,
         actionSignal: input.actionSignal,
         priceUsd: input.priceUsd,
+        top10HolderPct: input.top10HolderPct ?? null,
       },
     })
   } catch { /* history is additive; never block scoring on it */ }
@@ -167,5 +171,53 @@ export async function getTrajectory(
     }))
   } catch {
     return []
+  }
+}
+
+// ── On-chain accumulation vs distribution ─────────────────────────────────
+//
+// This is the crypto answer to "can we see what people are actually doing",
+// and it works where the equity equivalent doesn't. Institutional 13F holdings
+// arrive 45 days late and are self-reported. On-chain holder data is
+// real-time and cryptographically verifiable — nobody can misreport it.
+//
+// Tracking top-10 holder share across snapshots turns a static concentration
+// number into a direction: large wallets accumulating, or distributing into
+// retail. Distribution into a rising price is the classic exit pattern.
+export interface HolderTrend {
+  direction: "accumulating" | "distributing" | "stable" | "unknown"
+  changePct: number | null
+  note: string
+}
+
+export async function detectHolderTrend(symbol: string): Promise<HolderTrend> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma.scoreSnapshot as any).findMany({
+      where: { subjectType: "crypto", symbol },
+      orderBy: { capturedAt: "asc" },
+      take: 100,
+    }) as Array<{ top10HolderPct: number | null; capturedAt: string }>
+
+    const pts = rows.filter(r => typeof r.top10HolderPct === "number")
+    if (pts.length < 2) {
+      return { direction: "unknown", changePct: null, note: "Not enough holder history yet — this builds over successive scans." }
+    }
+
+    const first = pts[0].top10HolderPct as number
+    const last = pts[pts.length - 1].top10HolderPct as number
+    const changePct = last - first
+
+    if (changePct >= 2) {
+      return { direction: "accumulating", changePct,
+        note: `Top-10 wallets have grown their share by ${changePct.toFixed(1)} points. Large holders are accumulating — though it also means concentration risk is rising.` }
+    }
+    if (changePct <= -2) {
+      return { direction: "distributing", changePct,
+        note: `Top-10 wallets have reduced their share by ${Math.abs(changePct).toFixed(1)} points. Large holders are distributing into the market — worth understanding who is buying the other side.` }
+    }
+    return { direction: "stable", changePct, note: `Top-10 holder share has moved less than 2 points — no clear accumulation or distribution.` }
+  } catch {
+    return { direction: "unknown", changePct: null, note: "Holder history unavailable." }
   }
 }

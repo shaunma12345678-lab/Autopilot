@@ -16,6 +16,7 @@ import { getConsensusQuote, listingQualityScore } from "@/lib/exchange-aggregato
 import { computeMetricsFromCloses } from "@/lib/price-history"
 import { scoreCrypto } from "@/lib/crypto-scoring"
 import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
+import { assessCryptoConviction } from "@/lib/conviction"
 import { stampFields, type ProvenanceMap } from "@/lib/data-integrity"
 
 export interface AnalyzeCryptoResult {
@@ -113,6 +114,20 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
   })
 
+  const conviction = assessCryptoConviction({
+    qualityScore: result.qualityScore,
+    riskScore: result.riskScore,
+    securityScore: security?.securityScore ?? null,
+    isHoneypot: security?.isHoneypot ?? null,
+    isMintable: security?.isMintable ?? null,
+    venueCount: exchange?.venueCount ?? null,
+    liquidityGrade: exchange?.liquidityGrade ?? null,
+    fdvToMcapRatio: result.fdvToMcapRatio,
+    protocolRevenue30dUsd: revenue30d,
+    devActivityScore: devActivity?.devActivityScore ?? null,
+    dataConfidence: result.dataConfidence,
+  })
+
   const fieldSources: ProvenanceMap = {
     ...stampFields([
       "priceUsd", "volume24hUsd", "marketCapUsd", "marketCapRank",
@@ -184,6 +199,10 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     maxDrawdown1yPct: historyMetrics.maxDrawdown1yPct,
     btcCorrelation: historyMetrics.benchmarkCorrelation,
 
+    convictionTier: conviction.tier,
+    convictionGates: conviction.gates,
+    convictionSummary: conviction.summary,
+
     qualityScore: result.qualityScore,
     qualityReasons: result.qualityReasons,
     riskScore: result.riskScore,
@@ -213,7 +232,8 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     riskScore: result.riskScore,
     forwardScore: null,
     actionSignal: result.actionSignal,
-    priceUsd: market.priceUsd,
+    priceUsd: exchange?.consensusPrice ?? market.priceUsd,
+    top10HolderPct: security?.top10HolderPct ?? null,
   })
 
   return { ok: true, asset: saved }
