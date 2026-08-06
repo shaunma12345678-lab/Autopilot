@@ -252,6 +252,56 @@ spread is now *negative*. The "weak" bucket outperforms on every measure
 including the median, though n=41 is small enough that a handful of names drive
 it.
 
+#### Results — broad universe (205 tracked tickers, both horizons)
+
+The mega-cap runs above tested the least favorable universe for this system's
+premise. This run uses the real tracked universe including 46 companies under
+$2B revenue, applies the `findOperatingCik` holdco fallback, and excludes
+warrants/units/rights. 5,445 observations across 182 companies.
+
+| Horizon | Quality quartile spread | Valuation quartile spread |
+|---|---|---|
+| 90-day | **-1.00%** | **+1.09%** |
+| 365-day | **-1.22%** | **+6.04%** |
+
+**H1 is supported.** Ranking on cheapness separates forward returns where
+ranking on quality does not, and the separation grows with horizon — the shape
+the value literature predicts. Quality ranks in the *wrong* direction on both
+horizons; the broader sample strengthens that finding rather than overturning it.
+
+**H2 and H3 are both rejected, and H3 is inverted.** By value tier at 365 days:
+
+| Tier | n | mean excess | median excess | beat SPY |
+|---|---|---|---|---|
+| cheap_but_impaired | 108 | +17.09% | +14.47% | 57.4% |
+| cheap_and_sound | 1209 | +3.94% | -0.06% | 49.9% |
+| fair | 1531 | +0.18% | -2.94% | 45.5% |
+| expensive | 2536 | -1.14% | -5.06% | 42.1% |
+
+The soundness gate in `lib/valuation.ts` was designed to exclude the
+cheap-but-impaired bucket as a value trap. That bucket is the best performer by
+a wide margin, and the median is high too, so it is not merely outlier-driven.
+The pre-registered hypothesis was wrong and the threshold has NOT been changed
+in response — changing it now would fit this sample.
+
+**This is not a recommendation to buy impaired companies, and the number should
+not be read as one.** Survivorship bias does its maximum damage in exactly this
+bucket. Every company that was cheap and impaired and then went to zero is
+absent from the sample: it delisted, the price provider serves no history for
+it, and it never became an observation. +17.09% is a rebound figure measured
+only on survivors. The true figure is materially lower by an amount that cannot
+be quantified without delisted-company price data.
+
+Separately, every 365-day beat rate sits below 50% while means sit near zero.
+That is expected rather than anomalous: equity returns are positively skewed, a
+minority of large winners carries the index, and this universe leans small-cap
+where the median name lags.
+
+**What this justifies changing:** the valuation axis earns a place in the live
+scoring as a third independent axis alongside strength and risk. It does not
+justify a soundness gate in either direction until the survivorship problem is
+addressed.
+
 #### What both backtests actually diagnose
 
 The inversion at the low end is the recognizable signature of value and mean
@@ -260,7 +310,8 @@ spread, the two runs point at one structural gap rather than at a broken
 criterion.
 
 **This system measures how good a business is. It does not measure whether that
-business is mispriced.** Those are different questions, and only the second one
+business is mispriced.** The broad-universe run above confirms this directly:
+the valuation axis separates returns and the quality axis does not. Those are different questions, and only the second one
 produces return. Quality is public, well-analyzed, and already reflected in the
 price — which is exactly why a quality ranking of mega-caps should be expected
 to have no forward-return edge. The backtest is consistent with the finance
