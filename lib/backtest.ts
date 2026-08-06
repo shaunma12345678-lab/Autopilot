@@ -33,6 +33,7 @@ import { computeAltmanZ } from "./stock-scores/altman"
 import { computeBeneishM } from "./stock-scores/beneish"
 import { scoreStock } from "./stock-scoring"
 import { computeMetricsFromCloses, type DailyBar } from "./price-history"
+import { computeValuation, classifyValue, type ValueTier } from "./valuation"
 
 export interface BacktestObservation {
   symbol: string
@@ -44,6 +45,8 @@ export interface BacktestObservation {
   forwardReturnPct: number
   benchmarkReturnPct: number
   excessReturnPct: number
+  valuationScore: number | null
+  valueTier: ValueTier
 }
 
 export interface TierStats {
@@ -61,6 +64,10 @@ export interface BacktestResult {
   horizonDays: number
   byTier: TierStats[]
   bySignal: TierStats[]
+  byValueTier: TierStats[]
+  /** Same test as quartileSpreadPct but ranked on valuation instead of
+   *  quality — the direct test of hypothesis H1. */
+  valuationQuartileSpreadPct: number | null
   /** Mean excess of top-quartile scores minus bottom-quartile. The headline:
    *  if the score has no predictive content this sits near zero. */
   quartileSpreadPct: number | null
@@ -119,7 +126,10 @@ export function scoreAsOf(
   benchmarkBars: DailyBar[],
   asOf: string,
   sicCode: string | null
-): { qualityScore: number | null; strengthTier: string | null; actionSignal: string | null; dataConfidence: string } | null {
+): {
+  qualityScore: number | null; strengthTier: string | null; actionSignal: string | null
+  dataConfidence: string; valuationScore: number | null; valueTier: ValueTier
+} | null {
   const pit = factsAsOf(facts, asOf)
   const series = extractSeries(pit)
   const fundamentals = normalizeFundamentals(pit, series)
@@ -150,11 +160,28 @@ export function scoreAsOf(
     goingConcernHits: 0,
   })
 
+  // Historical market caps, reconstructed at each fiscal period end from the
+  // share count reported for that period and the close on that date. Both
+  // inputs are point-in-time, so the valuation history carries no look-ahead
+  // either.
+  const sharesByEnd = new Map((series.sharesOutstanding ?? []).map(o => [o.end, o.value]))
+  const anchorSeries = series.cfo?.length ? series.cfo : series.netIncome
+  const historicalMarketCaps = (anchorSeries ?? []).map(o => {
+    const sh = sharesByEnd.get(o.end)
+    const px = closeOn(bars, o.end)
+    return sh && px ? sh * px : null
+  })
+
+  const valuation = computeValuation(series, marketCap, historicalMarketCaps)
+  const { tier: valueTier } = classifyValue(valuation.valuationScore, result.qualityScore, result.riskScore)
+
   return {
     qualityScore: result.qualityScore,
     strengthTier: result.strengthTier,
     actionSignal: result.actionSignal,
     dataConfidence: result.dataConfidence,
+    valuationScore: valuation.valuationScore,
+    valueTier,
   }
 }
 
@@ -180,7 +207,7 @@ function statsFor(label: string, rows: BacktestObservation[]): TierStats {
 export function aggregate(obs: BacktestObservation[], horizonDays: number): BacktestResult {
   const notes: string[] = []
   if (obs.length === 0) {
-    return { observations: 0, symbolsTested: 0, horizonDays, byTier: [], bySignal: [], quartileSpreadPct: null, notes: ["No observations produced."] }
+    return { observations: 0, symbolsTested: 0, horizonDays, byTier: [], bySignal: [], byValueTier: [], quartileSpreadPct: null, valuationQuartileSpreadPct: null, notes: ["No observations produced."] }
   }
 
   const group = (key: (o: BacktestObservation) => string | null) => {
@@ -198,6 +225,7 @@ export function aggregate(obs: BacktestObservation[], horizonDays: number): Back
 
   const byTier = group(o => o.strengthTier)
   const bySignal = group(o => o.actionSignal)
+  const byValueTier = group(o => o.valueTier)
 
   // Quartile spread — the cleanest single test of whether the score ranks.
   const sorted = [...obs].sort((a, b) => b.qualityScore - a.qualityScore)
@@ -212,6 +240,19 @@ export function aggregate(obs: BacktestObservation[], horizonDays: number): Back
     notes.push("Sample too small for a quartile spread — needs at least 40 observations.")
   }
 
+  // H1: does ranking on CHEAPNESS separate forward returns where ranking on
+  // quality did not?
+  let valuationQuartileSpreadPct: number | null = null
+  const valued = obs.filter(o => o.valuationScore !== null)
+  const vq = Math.floor(valued.length / 4)
+  if (vq >= 10) {
+    const vs = [...valued].sort((a, b) => (b.valuationScore ?? 0) - (a.valuationScore ?? 0))
+    const cheap = vs.slice(0, vq).map(o => o.excessReturnPct)
+    const rich = vs.slice(-vq).map(o => o.excessReturnPct)
+    valuationQuartileSpreadPct =
+      cheap.reduce((a, b) => a + b, 0) / cheap.length - rich.reduce((a, b) => a + b, 0) / rich.length
+  }
+
   notes.push(
     `Every score was computed from filings available on its as-of date; datapoints filed later were discarded, so there is no look-ahead bias.`,
     `Returns are excess of SPY over the same ${horizonDays}-day window.`,
@@ -224,7 +265,9 @@ export function aggregate(obs: BacktestObservation[], horizonDays: number): Back
     horizonDays,
     byTier,
     bySignal,
+    byValueTier,
     quartileSpreadPct,
+    valuationQuartileSpreadPct,
     notes,
   }
 }

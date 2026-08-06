@@ -140,6 +140,8 @@ async function main() {
             forwardReturnPct: fwd,
             benchmarkReturnPct: bench,
             excessReturnPct: fwd - bench,
+            valuationScore: scored.valuationScore,
+            valueTier: scored.valueTier,
           })
           countedThisDate = true
         }
@@ -163,8 +165,12 @@ async function main() {
     result.byTier.forEach(t => console.log(row(t)))
     console.log(`\nBy action signal:`)
     result.bySignal.forEach(t => console.log(row(t)))
-    console.log(`\nTop-quartile minus bottom-quartile mean excess: ${
+    console.log(`\nBy value tier (quality vs price paid):`)
+    result.byValueTier.forEach(t => console.log(row(t)))
+    console.log(`\nQuality quartile spread (top-bottom):   ${
       result.quartileSpreadPct === null ? "n/a" : `${result.quartileSpreadPct >= 0 ? "+" : ""}${result.quartileSpreadPct.toFixed(2)}%`}`)
+    console.log(`Valuation quartile spread (cheap-rich): ${
+      result.valuationQuartileSpreadPct === null ? "n/a" : `${result.valuationQuartileSpreadPct >= 0 ? "+" : ""}${result.valuationQuartileSpreadPct.toFixed(2)}%`}`)
   }
 }
 
