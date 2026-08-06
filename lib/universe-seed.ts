@@ -78,9 +78,22 @@ export async function seedUniverse(limit: number): Promise<SeedResult> {
     fetched: payload.data.length, eligible: 0, created: 0, alreadyTracked: 0, skipped: 0,
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const existing = await (prisma.ticker as any).findMany({ select: { symbol: true } }) as Array<{ symbol: string }>
-  const tracked = new Set(existing.map(t => t.symbol))
+  // PAGINATED DELIBERATELY. PostgREST caps an unbounded select at 1,000 rows,
+  // and the shim only passes a limit when `take` is set — so a plain findMany
+  // silently returns a truncated set with no error. That produced a seeding
+  // deadlock: with 1,900 rows already stored the query saw 1,000, ~900
+  // already-created symbols were treated as new, and every insert collided on
+  // the unique index while the batch reported zero progress.
+  const tracked = new Set<string>()
+  const PAGE = 1000
+  for (let skip = 0; ; skip += PAGE) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const page = await (prisma.ticker as any).findMany({
+      select: { symbol: true }, take: PAGE, skip,
+    }) as Array<{ symbol: string }>
+    for (const t of page) tracked.add(t.symbol)
+    if (page.length < PAGE) break
+  }
 
   const candidates: Array<{ cik: string; symbol: string; name: string; exchange: string }> = []
   for (const row of payload.data) {
