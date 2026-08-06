@@ -46,55 +46,61 @@ const MAX_AGE_DAYS = 75
 // two full weeks of average volume to exit. That is a genuinely crowded trade.
 const CROWDED_DAYS_TO_COVER = 10
 
-interface FinraRow {
-  symbolCode?: string
-  currentShortPositionQuantity?: string | number
-  previousShortPositionQuantity?: string | number
-  daysToCoverQuantity?: string | number
-  changePercent?: string | number
-  settlementDate?: string
-}
-
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null
   const n = Number(v)
   return isFinite(n) ? n : null
 }
 
+// FINRA returns CSV (text/plain), not JSON, despite an Accept header, and it
+// REJECTS sortFields unless settlementDate is given as an EQUAL filter, since
+// it is a partition key. So the newest reading is found by requesting a recent
+// date window and taking the maximum client-side.
+function parseCsv(text: string): Array<Record<string, string>> {
+  const lines = text.trim().split("\n")
+  if (lines.length < 2) return []
+  const split = (line: string) =>
+    line.split(",").map(c => c.replace(/^"|"$/g, "").trim())
+  const headers = split(lines[0])
+  return lines.slice(1).map(line => {
+    const cells = split(line)
+    return Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? ""]))
+  })
+}
+
 export async function getShortInterest(symbol: string): Promise<ShortInterestRead | null> {
   try {
+    const end = new Date()
+    const start = new Date(end.getTime() - MAX_AGE_DAYS * 86_400_000)
+    const iso = (d: Date) => d.toISOString().slice(0, 10)
+
     const res = await fetch(FINRA_API, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        limit: 4,
-        // Newest first. Without an explicit sort FINRA returns rows in an
-        // unspecified order, and taking the first row silently yields a reading
-        // that can be years stale — verified: an unsorted query for SWKS
-        // returned settlement dates from 2020.
-        sortFields: ["-settlementDate"],
+        limit: 20,
         compareFilters: [{ fieldName: "symbolCode", fieldValue: symbol.toUpperCase(), compareType: "EQUAL" }],
+        dateRangeFilters: [{ fieldName: "settlementDate", startDate: iso(start), endDate: iso(end) }],
       }),
       signal: AbortSignal.timeout(20000),
     })
     if (!res.ok) return null
 
-    const rows = await res.json() as FinraRow[]
-    if (!Array.isArray(rows) || rows.length === 0) return null
+    const rows = parseCsv(await res.text())
+    if (rows.length === 0) return null
 
-    const latest = rows[0]
+    // Newest settlement in the window. The range filter already bounds staleness.
+    const latest = rows.reduce((best, r) =>
+      (r.settlementDate ?? "") > (best.settlementDate ?? "") ? r : best, rows[0])
+
     const settlementDate = latest.settlementDate ?? ""
     if (!settlementDate) return null
-
-    // Refuse a stale reading rather than presenting it as current. A position
-    // from last year says nothing about today and would be read as if it did.
-    const ageDays = (Date.now() - new Date(settlementDate).getTime()) / 86_400_000
-    if (!isFinite(ageDays) || ageDays > MAX_AGE_DAYS) return null
 
     const currentShares = num(latest.currentShortPositionQuantity) ?? 0
     const previousShares = num(latest.previousShortPositionQuantity) ?? 0
     const daysToCover = num(latest.daysToCoverQuantity)
     const changePct = num(latest.changePercent) ?? 0
+    if (currentShares <= 0) return null
 
     const trend: ShortInterestRead["trend"] =
       changePct > 10 ? "building" : changePct < -10 ? "covering" : "stable"
