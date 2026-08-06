@@ -211,6 +211,18 @@ async function fetchNasdaqHistory(symbol: string): Promise<HistoryResult | null>
 // dead source degrades the score's confidence rather than breaking the run.
 // Two keyless providers with independent rate limits means throttling on one
 // doesn't cost us the signal.
+// Deep history for backtesting, straight to Yahoo with a long range.
+//
+// The normal provider chain leads with TwelveData, whose free tier returns
+// about 13 months — one market regime, which is not enough to test a scoring
+// model against. Yahoo serves ~10 years for the same request. This bypasses
+// the chain deliberately: it is used only by the offline backtest, never on a
+// user-facing request path, so the chain's redundancy isn't needed here.
+export async function fetchDeepHistory(symbol: string, range = "10y"): Promise<DailyBar[]> {
+  const r = await fetchYahooHistory(symbol, range)
+  return r?.bars ?? []
+}
+
 export async function fetchHistory(symbol: string): Promise<HistoryResult> {
   const twelve = await fetchTwelveDataHistory(symbol)
   if (twelve) return twelve
