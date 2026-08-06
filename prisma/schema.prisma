@@ -732,6 +732,27 @@ model TickerSignal {
   @@index([signalType])
 }
 
+// ── Score history — the baseline that makes deterioration detectable ──
+// Every scoring run appends a snapshot. Without history there is no way to
+// distinguish "this has always been mediocre" from "this was strong and is
+// now falling apart" — and that difference is the entire basis of a sell
+// signal. It also powers the trajectory chart.
+model ScoreSnapshot {
+  id            String   @id @default(cuid())
+  subjectType   String   // stock | crypto
+  subjectId     String
+  symbol        String
+  qualityScore  Int?
+  riskScore     Int?
+  forwardScore  Int?
+  actionSignal  String?
+  priceUsd      Float?
+  capturedAt    DateTime @default(now())
+
+  @@index([subjectType, symbol, capturedAt])
+  @@index([subjectId])
+}
+
 // ── Discovery: companies surfaced by event, not by hand ──
 // Mirrors the residential RawSignal -> Lead pipeline: discovery writes cheap
 // event rows, a second pass analyzes the high-priority ones.

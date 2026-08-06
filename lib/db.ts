@@ -193,6 +193,7 @@ export const db = {
   cryptoAsset:      model("CryptoAsset"),
   cryptoSignal:     model("CryptoSignal"),
   discoveryEvent:   model("DiscoveryEvent"),
+  scoreSnapshot:    model("ScoreSnapshot"),
   exchangeRequest:  model("ExchangeRequest"),
   entity:           model("Entity"),
   entityAlias:      model("EntityAlias"),

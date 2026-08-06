@@ -14,6 +14,7 @@ import { resolveChain, fetchTokenSecurity, notApplicableSecurity } from "@/lib/t
 import { fetchOrderbookDepth } from "@/lib/orderbook-depth"
 import { computeMetricsFromCloses } from "@/lib/price-history"
 import { scoreCrypto } from "@/lib/crypto-scoring"
+import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { stampFields, type ProvenanceMap } from "@/lib/data-integrity"
 
 export interface AnalyzeCryptoResult {
@@ -47,6 +48,17 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
 
   const historyMetrics = computeMetricsFromCloses(priceHistory, btcHistory)
 
+  const deterioration = await detectDeterioration({
+    subjectType: "crypto",
+    symbol: found.symbol,
+    qualityScore: null,
+    riskScore: null,
+    forwardScore: null,
+    hardExits: [
+      { active: security?.isHoneypot === true, reason: "Honeypot contract detected — the code appears to prevent selling. Anyone holding this should treat it as a total-loss condition." },
+    ],
+  }).catch(() => null)
+
   const result = scoreCrypto({
     market,
     protocolRevenue30dUsd: revenue30d,
@@ -57,6 +69,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     volatility30dPct: historyMetrics.volatility30dPct,
     maxDrawdown1yPct: historyMetrics.maxDrawdown1yPct,
     btcCorrelation: historyMetrics.benchmarkCorrelation,
+    deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
   })
 
   const fieldSources: ProvenanceMap = {
@@ -139,6 +152,17 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   const saved = existing
     ? await (prisma.cryptoAsset as any).update({ where: { id: existing.id }, data })
     : await (prisma.cryptoAsset as any).create({ data })
+
+  await captureSnapshot({
+    subjectType: "crypto",
+    subjectId: saved.id,
+    symbol: found.symbol,
+    qualityScore: result.qualityScore,
+    riskScore: result.riskScore,
+    forwardScore: null,
+    actionSignal: result.actionSignal,
+    priceUsd: market.priceUsd,
+  })
 
   return { ok: true, asset: saved }
 }

@@ -20,7 +20,17 @@
 // moment output is personalized to a user's portfolio or goals it stops being
 // impersonal information. See components/dashboard/MarketsDisclaimer.tsx.
 
-export type ActionSignal = "buy" | "hold" | "pass"
+// SELL is deliberately separate from PASS, and the difference is not cosmetic.
+//
+//   PASS = "don't start a position here."   (a screening result)
+//   SELL = "what you already hold has changed for the worse." (a position result)
+//
+// A company scoring 45 might have scored 45 for years — persistently mediocre,
+// which is a PASS and always was. Or it might have scored 80 last quarter and
+// broken down. Identical score, opposite meaning to someone holding it. Only
+// history separates them, which is why SELL requires a baseline and PASS
+// doesn't. See lib/score-history.ts.
+export type ActionSignal = "buy" | "hold" | "pass" | "sell"
 
 export interface ActionSignalResult {
   signal: ActionSignal | null
@@ -37,6 +47,8 @@ export interface ActionSignalInput {
   forwardScore?: number | null
   /** Hard disqualifiers surfaced by the asset-specific scorer (honeypot, going concern, etc.). */
   hardFail?: { active: boolean; reason: string } | null
+  /** Material degradation against this asset's OWN history (lib/score-history.ts). */
+  deterioration?: { shouldSell: boolean; reasons: string[] } | null
 }
 
 // ── Thresholds, CALIBRATED against the real distribution ───────────────────
@@ -64,7 +76,7 @@ const FORWARD_ADEQUATE = 45
 const FORWARD_GOOD = 55
 
 export function deriveActionSignal(input: ActionSignalInput): ActionSignalResult {
-  const { qualityScore, riskScore, dataConfidence, forwardScore, hardFail } = input
+  const { qualityScore, riskScore, dataConfidence, forwardScore, hardFail, deterioration } = input
 
   // 1. Never emit a signal we can't stand behind.
   if (qualityScore === null || dataConfidence === "insufficient") {
@@ -75,9 +87,22 @@ export function deriveActionSignal(input: ActionSignalInput): ActionSignalResult
     }
   }
 
-  // 2. A hard disqualifier overrides everything else.
+  // 2. A hard disqualifier overrides everything else. For a holder this is an
+  //    exit condition, not merely "don't buy" — so it reads as SELL when the
+  //    thesis has objectively broken, and PASS when it simply never qualified.
   if (hardFail?.active) {
-    return { signal: "pass", label: "PASS", rationale: hardFail.reason }
+    return { signal: "sell", label: "SELL", rationale: hardFail.reason }
+  }
+
+  // 3. Material deterioration against its own baseline. This is the case a
+  //    single-snapshot screen structurally cannot see: something that WAS
+  //    strong and no longer is.
+  if (deterioration?.shouldSell && deterioration.reasons.length > 0) {
+    return {
+      signal: "sell",
+      label: "SELL",
+      rationale: deterioration.reasons[0],
+    }
   }
 
   const risk = riskScore ?? 50
@@ -144,10 +169,20 @@ export function deriveActionSignal(input: ActionSignalInput): ActionSignalResult
 export const ACTION_SIGNAL_STYLES: Record<ActionSignal, string> = {
   buy: "text-emerald-300 border-emerald-500/50 bg-emerald-500/15",
   hold: "text-yellow-300 border-yellow-500/50 bg-yellow-500/15",
-  pass: "text-red-300 border-red-500/50 bg-red-500/15",
+  // PASS is muted (you simply don't act); SELL is loud (you hold something
+  // that has changed and the page should say so).
+  pass: "text-gray-300 border-gray-500/50 bg-gray-500/15",
+  sell: "text-red-300 border-red-500/60 bg-red-500/20",
+}
+
+export const ACTION_SIGNAL_MEANING: Record<ActionSignal, string> = {
+  buy: "Fundamentals and risk both support starting a position here.",
+  hold: "Neither clearly compelling nor clearly avoidable.",
+  pass: "Doesn't meet the bar to start a position. This is a screening result, not a comment on anything you already own.",
+  sell: "For anyone holding this: the case that supported it has materially weakened, or an event has broken it outright.",
 }
 
 export function actionSignalStyle(signal: string | null | undefined): string {
-  if (signal === "buy" || signal === "hold" || signal === "pass") return ACTION_SIGNAL_STYLES[signal]
+  if (signal === "buy" || signal === "hold" || signal === "pass" || signal === "sell") return ACTION_SIGNAL_STYLES[signal]
   return "text-gray-400 border-gray-600/50 bg-gray-600/15"
 }

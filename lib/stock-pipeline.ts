@@ -26,6 +26,7 @@ import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-i
 import { computeBalanceSheetRisk } from "@/lib/balance-sheet-risk"
 import { computeAccountingQuality } from "@/lib/accounting-quality"
 import { checkContradictions } from "@/lib/contradiction-check"
+import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { computeCapitalAllocation } from "@/lib/capital-allocation"
 import { readProxyGovernance } from "@/lib/governance"
 
@@ -146,6 +147,21 @@ export async function analyzeAndUpsertTicker(
     } catch { /* governance is an enhancement; never block the score */ }
   }
 
+  // Deterioration is measured against this asset's own history, so it needs a
+  // provisional read of the current scores first. Cheap: one indexed query.
+  const provisionalRisk = 20 + liveEvents.riskPenalty + balanceSheet.riskPenalty + accounting.riskPenalty
+  const deterioration = await detectDeterioration({
+    subjectType: "stock",
+    symbol,
+    qualityScore: null,     // filled from the real score below on the next run
+    riskScore: provisionalRisk,
+    forwardScore: forward.forwardScore,
+    hardExits: [
+      { active: liveEvents.hasRestatement, reason: "Filed a restatement — the company stated its prior financial statements should not be relied on. Every metric derived from them is unreliable until restated figures are filed." },
+      { active: goingConcern.hits > 0, reason: '"Going concern" doubt disclosed in recent SEC filings — the most serious solvency warning a company can issue.' },
+    ],
+  }).catch(() => null)
+
   const result = scoreStock({
     fundamentals, price, priceMetrics, piotroski, altman, beneish, sectorRelative,
     goingConcernHits: goingConcern.hits,
@@ -163,6 +179,7 @@ export async function analyzeAndUpsertTicker(
     forwardScore: forward.forwardScore,
     consistencyScore: consistency.score,
     insiderScoreBonus: insider?.scoreBonus ?? 0,
+    deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
   })
 
   const positionCtx = computePositionContext(history.bars)
@@ -404,6 +421,19 @@ export async function analyzeAndUpsertTicker(
       activity: insider,
     }).catch(() => {})
   }
+
+  // Append to score history so the NEXT run can measure deterioration against
+  // today. This is what makes a sell signal possible at all.
+  await captureSnapshot({
+    subjectType: "stock",
+    subjectId: saved.id,
+    symbol,
+    qualityScore: result.qualityScore,
+    riskScore: result.riskScore,
+    forwardScore: forward.forwardScore,
+    actionSignal: result.actionSignal,
+    priceUsd: price?.price ?? null,
+  })
 
   await logStockUnderwriteCall(saved).catch(() => {})
 

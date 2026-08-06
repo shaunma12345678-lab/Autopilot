@@ -30,6 +30,7 @@ export interface CryptoScoreInput {
   volatility30dPct: number | null
   maxDrawdown1yPct: number | null
   btcCorrelation: number | null
+  deterioration?: { shouldSell: boolean; reasons: string[] } | null
 }
 
 export type StrengthTier = "strong" | "mixed" | "weak"
@@ -252,6 +253,7 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     riskScore,
     dataConfidence,
     forwardScore: null,
+    deterioration: input.deterioration ?? null,
     hardFail: security?.isHoneypot === true
       ? { active: true, reason: "Honeypot contract detected — the code appears to prevent selling. This is a total-loss risk." }
       : null,

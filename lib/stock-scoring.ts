@@ -45,6 +45,8 @@ export interface StockScoreInput {
   hasRestatement?: boolean
   /** Forward composite, used to gate BUY (see lib/action-signal.ts). */
   forwardScore?: number | null
+  /** Material degradation vs this asset's own baseline (lib/score-history.ts). */
+  deterioration?: { shouldSell: boolean; reasons: string[] } | null
   /** Multi-year durability, 0-100 (see lib/consistency.ts). */
   consistencyScore?: number | null
   /** Small additive bonus for genuine insider cluster buying. */
@@ -292,6 +294,7 @@ export function scoreStock(input: StockScoreInput): StockScoreResult {
     riskScore,
     dataConfidence,
     forwardScore: input.forwardScore ?? null,
+    deterioration: input.deterioration ?? null,
     hardFail: input.hasRestatement
       ? { active: true, reason: "Filed a restatement (8-K item 4.02) — the company stated its prior financial statements should not be relied on, so every metric derived from them is unreliable." }
       : input.goingConcernHits > 0

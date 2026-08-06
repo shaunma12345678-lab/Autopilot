@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     "RawSignal", "Source",
     "Ticker", "TickerSignal", "CryptoAsset", "CryptoSignal",
     "ExchangeRequest", "Entity", "EntityAlias", "EntityProperty", "UnderwriteCall",
-    "DiscoveryEvent",
+    "DiscoveryEvent", "ScoreSnapshot",
   ]
 
   for (const t of tables) {

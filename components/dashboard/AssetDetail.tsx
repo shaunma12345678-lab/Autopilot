@@ -14,7 +14,7 @@
 // The forward section shows DATED FACTS a company has already disclosed (debt
 // maturities, token unlocks) rather than a guess dressed up as a chart.
 import { useState, useEffect, useCallback } from "react"
-import { actionSignalStyle } from "@/lib/action-signal"
+import { actionSignalStyle, ACTION_SIGNAL_MEANING } from "@/lib/action-signal"
 import MarketsDisclaimer from "./MarketsDisclaimer"
 
 interface CalendarEntry { date: string; label: string; detail: string; kind: string }
@@ -130,8 +130,13 @@ export default function AssetDetail({
       </div>
 
       {a.actionRationale && (
-        <div className={`rounded-xl border px-4 py-2.5 ${actionSignalStyle(a.actionSignal)}`}>
+        <div className={`rounded-xl border px-4 py-2.5 space-y-1 ${actionSignalStyle(a.actionSignal)}`}>
           <p className="text-[11px]">{a.actionRationale}</p>
+          {a.actionSignal && ACTION_SIGNAL_MEANING[a.actionSignal as keyof typeof ACTION_SIGNAL_MEANING] && (
+            <p className="text-[10px] opacity-70">
+              What {String(a.actionSignal).toUpperCase()} means here: {ACTION_SIGNAL_MEANING[a.actionSignal as keyof typeof ACTION_SIGNAL_MEANING]}
+            </p>
+          )}
         </div>
       )}
 
