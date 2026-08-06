@@ -10,6 +10,7 @@ export const maxDuration = 300
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { analyzeAndUpsertCrypto } from "@/lib/crypto-pipeline"
+import { nextCryptoToEnrich } from "@/lib/crypto-universe"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
 // Small on purpose: CoinGecko's free tier is throttled to one request every 2s
@@ -31,22 +32,18 @@ export async function GET(request: NextRequest) {
   const startedAt = new Date()
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const existing = await (prisma.cryptoAsset as any).findMany({ select: { coingeckoId: true } }) as { coingeckoId: string }[]
-    const existingIds = new Set(existing.map(a => a.coingeckoId))
-    const missingStarters = STARTER_COINS.filter(id => !existingIds.has(id))
+    // Enrichment order: assets that have never been analyzed come first
+    // (the bulk universe ingest creates them with market data only), then the
+    // stalest. This is what promotes a bulk row from "low confidence" into the
+    // ranked lists.
+    let queriesToProcess = await nextCryptoToEnrich(BATCH_SIZE)
 
-    let queriesToProcess: string[]
-    if (missingStarters.length > 0) {
-      queriesToProcess = missingStarters.slice(0, BATCH_SIZE)
-    } else {
+    // Fall back to the starter watchlist only when the universe is empty.
+    if (queriesToProcess.length === 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stale = await (prisma.cryptoAsset as any).findMany({
-        orderBy: { lastScoredAt: "asc" },
-        take: BATCH_SIZE,
-        select: { coingeckoId: true },
-      }) as { coingeckoId: string }[]
-      queriesToProcess = stale.map(a => a.coingeckoId)
+      const existing = await (prisma.cryptoAsset as any).findMany({ select: { coingeckoId: true } }) as { coingeckoId: string }[]
+      const have = new Set(existing.map(a => a.coingeckoId))
+      queriesToProcess = STARTER_COINS.filter(id => !have.has(id)).slice(0, BATCH_SIZE)
     }
 
     const results: Record<string, string> = {}
