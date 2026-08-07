@@ -58,6 +58,24 @@ export interface TierStats {
   hitRatePct: number
 }
 
+// Calibration — does the system's own stated confidence mean anything?
+//
+// Spec: "of the times the system said high confidence, how often was it
+// directionally right? If high-confidence calls aren't meaningfully more
+// accurate than low-confidence ones, the confidence scoring itself is broken."
+//
+// This does not need to wait for live outcomes to resolve. The point-in-time
+// backtest already pairs a stated confidence with a KNOWN forward return, so
+// calibration is measurable now rather than in 90 days. A confidence level that
+// does not separate outcomes is not a weaker signal — it is a false promise,
+// and it is worse than reporting no confidence at all.
+export interface CalibrationBucket {
+  level: string
+  n: number
+  beatBenchmarkPct: number
+  meanExcessPct: number
+}
+
 export interface BacktestResult {
   observations: number
   symbolsTested: number
@@ -65,6 +83,10 @@ export interface BacktestResult {
   byTier: TierStats[]
   bySignal: TierStats[]
   byValueTier: TierStats[]
+  /** Hit rate by the confidence the system stated at the time. */
+  calibration: CalibrationBucket[]
+  /** Does stated confidence separate outcomes at all? */
+  calibrationVerdict: string
   /** Same test as quartileSpreadPct but ranked on valuation instead of
    *  quality — the direct test of hypothesis H1. */
   valuationQuartileSpreadPct: number | null
@@ -211,7 +233,7 @@ function statsFor(label: string, rows: BacktestObservation[]): TierStats {
 export function aggregate(obs: BacktestObservation[], horizonDays: number): BacktestResult {
   const notes: string[] = []
   if (obs.length === 0) {
-    return { observations: 0, symbolsTested: 0, horizonDays, byTier: [], bySignal: [], byValueTier: [], quartileSpreadPct: null, valuationQuartileSpreadPct: null, notes: ["No observations produced."] }
+    return { observations: 0, symbolsTested: 0, horizonDays, byTier: [], bySignal: [], byValueTier: [], calibration: [], calibrationVerdict: "no data", quartileSpreadPct: null, valuationQuartileSpreadPct: null, notes: ["No observations produced."] }
   }
 
   const group = (key: (o: BacktestObservation) => string | null) => {
@@ -244,6 +266,31 @@ export function aggregate(obs: BacktestObservation[], horizonDays: number): Back
     notes.push("Sample too small for a quartile spread — needs at least 40 observations.")
   }
 
+  // ── Calibration ──────────────────────────────────────────────────────────
+  const calibration: CalibrationBucket[] = []
+  for (const level of ["high", "medium", "low"]) {
+    const rows = obs.filter(o => o.dataConfidence === level)
+    if (rows.length < 20) continue
+    calibration.push({
+      level, n: rows.length,
+      beatBenchmarkPct: (rows.filter(r => r.excessReturnPct > 0).length / rows.length) * 100,
+      meanExcessPct: rows.reduce((s, r) => s + r.excessReturnPct, 0) / rows.length,
+    })
+  }
+
+  let calibrationVerdict = "insufficient data to judge calibration"
+  const high = calibration.find(c => c.level === "high")
+  const lower = calibration.filter(c => c.level !== "high")
+  if (high && lower.length > 0) {
+    const lowerAvg = lower.reduce((s, c) => s + c.beatBenchmarkPct * c.n, 0) / lower.reduce((s, c) => s + c.n, 0)
+    const gap = high.beatBenchmarkPct - lowerAvg
+    calibrationVerdict = gap >= 3
+      ? `Calibrated: high-confidence readings beat the benchmark ${gap.toFixed(1)} points more often than lower-confidence ones.`
+      : gap <= -3
+        ? `INVERTED: high-confidence readings beat the benchmark ${Math.abs(gap).toFixed(1)} points LESS often than lower-confidence ones. Stated confidence is actively misleading and should not be shown until this is understood.`
+        : `NOT CALIBRATED: high-confidence readings are within ${Math.abs(gap).toFixed(1)} points of lower-confidence ones. The confidence label separates data completeness, not outcome quality — it should be described as such rather than implying reliability.`
+  }
+
   // H1: does ranking on CHEAPNESS separate forward returns where ranking on
   // quality did not?
   let valuationQuartileSpreadPct: number | null = null
@@ -270,6 +317,8 @@ export function aggregate(obs: BacktestObservation[], horizonDays: number): Back
     byTier,
     bySignal,
     byValueTier,
+    calibration,
+    calibrationVerdict,
     quartileSpreadPct,
     valuationQuartileSpreadPct,
     notes,

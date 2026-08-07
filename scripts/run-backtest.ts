@@ -191,6 +191,11 @@ async function main() {
     result.bySignal.forEach(t => console.log(row(t)))
     console.log(`\nBy value tier (quality vs price paid):`)
     result.byValueTier.forEach(t => console.log(row(t)))
+    console.log(`\nCalibration — does stated confidence mean anything?`)
+    result.calibration.forEach(c =>
+      console.log(`  ${c.level.padEnd(8)} n=${String(c.n).padStart(4)}  beat-SPY ${c.beatBenchmarkPct.toFixed(1)}%  mean ${c.meanExcessPct >= 0 ? "+" : ""}${c.meanExcessPct.toFixed(2)}%`))
+    console.log(`  -> ${result.calibrationVerdict}`)
+
     console.log(`\nQuality quartile spread (top-bottom):   ${
       result.quartileSpreadPct === null ? "n/a" : `${result.quartileSpreadPct >= 0 ? "+" : ""}${result.quartileSpreadPct.toFixed(2)}%`}`)
     console.log(`Valuation quartile spread (cheap-rich): ${
