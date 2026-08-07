@@ -27,6 +27,7 @@ import { computeAltmanZ } from "../lib/stock-scores/altman"
 import { computeBeneishM } from "../lib/stock-scores/beneish"
 import { analyzeBenford } from "../lib/benford"
 import { checkDataIntegrity } from "../lib/filing-integrity"
+import { fetchDeepHistory } from "../lib/price-history"
 
 interface Case {
   symbol: string
@@ -39,16 +40,30 @@ interface Case {
 // Documented cases, with the date the issue became public. Controls are large
 // filers with no known accounting problem over the same period.
 const CASES: Case[] = [
+  // Documented accounting or disclosure failures, with the date each became
+  // public. Chosen for XBRL-era coverage — pre-2010 cases have no structured
+  // financial data to reconstruct.
   { symbol: "KHC",  label: "Kraft Heinz — SEC subpoena, procurement accounting, $15B writedown", disclosureDate: "2019-02-21", known: "accounting_problem" },
-  { symbol: "UAA",  label: "Under Armour — revenue pull-forward, SEC charged 2021",              disclosureDate: "2019-11-03", known: "accounting_problem" },
+  { symbol: "UAA",  label: "Under Armour — revenue pull-forward, SEC charged",                   disclosureDate: "2019-11-03", known: "accounting_problem" },
   { symbol: "GE",   label: "General Electric — SEC investigation, insurance/power charges",      disclosureDate: "2018-01-24", known: "accounting_problem" },
-  { symbol: "NKLA", label: "Nikola — fraud allegations, founder later convicted",                disclosureDate: "2020-09-10", known: "accounting_problem" },
+  { symbol: "WFC",  label: "Wells Fargo — unauthorised accounts scandal",                        disclosureDate: "2016-09-08", known: "accounting_problem" },
+  { symbol: "VRX",  label: "Valeant — Philidor channel stuffing, restatement",                   disclosureDate: "2015-10-21", known: "accounting_problem" },
+  { symbol: "TUP",  label: "Tupperware — going concern, restatement of prior periods",           disclosureDate: "2023-06-01", known: "accounting_problem" },
+  { symbol: "LUMN", label: "Lumen — multi-billion goodwill impairments",                         disclosureDate: "2019-02-13", known: "accounting_problem" },
+  { symbol: "BBBY", label: "Bed Bath & Beyond — collapse into bankruptcy",                       disclosureDate: "2022-08-31", known: "accounting_problem" },
 
+  // Controls: large filers with no known accounting problem in the same window.
   { symbol: "JNJ",  label: "Johnson & Johnson (control)", disclosureDate: "2019-02-21", known: "control" },
   { symbol: "PG",   label: "Procter & Gamble (control)",  disclosureDate: "2019-02-21", known: "control" },
   { symbol: "KO",   label: "Coca-Cola (control)",         disclosureDate: "2019-11-03", known: "control" },
   { symbol: "COST", label: "Costco (control)",            disclosureDate: "2018-01-24", known: "control" },
+  { symbol: "MMM",  label: "3M (control)",                disclosureDate: "2016-09-08", known: "control" },
+  { symbol: "HD",   label: "Home Depot (control)",        disclosureDate: "2015-10-21", known: "control" },
+  { symbol: "LMT",  label: "Lockheed Martin (control)",   disclosureDate: "2023-06-01", known: "control" },
+  { symbol: "UNP",  label: "Union Pacific (control)",     disclosureDate: "2019-02-13", known: "control" },
+  { symbol: "TGT",  label: "Target (control)",            disclosureDate: "2022-08-31", known: "control" },
 ]
+
 
 // Analyse this many days before the problem surfaced, so the test asks whether
 // the signals were available IN ADVANCE rather than concurrently.
@@ -80,8 +95,20 @@ async function run(c: Case) {
   const series = extractSeries(pit)
   const f = normalizeFundamentals(pit, series)
 
+  // MARKET CAP AT asOf, not null. The previous run passed null here, which
+  // meant computeAltmanZ could never produce a zone and one of six signals was
+  // silently dead across every case — a flaw in the test, not the system.
+  const bars = await fetchDeepHistory(c.symbol).catch(() => [])
+  let priceAt: number | null = null
+  for (const b of bars) {
+    if (b.date <= asOf) priceAt = b.close
+    else break
+  }
+  const sharesAt = series.sharesOutstanding?.[0]?.value ?? null
+  const marketCapAt = priceAt && sharesAt ? priceAt * sharesAt : null
+
   const piotroski = computePiotroski(series)
-  const altman = computeAltmanZ(series, null, subs?.sic ?? null)
+  const altman = computeAltmanZ(series, marketCapAt, subs?.sic ?? null)
   const beneish = computeBeneishM(series)
   const benford = analyzeBenford(pit)
   const integrity = checkDataIntegrity(series)
