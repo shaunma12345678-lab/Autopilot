@@ -75,7 +75,7 @@ const MAX_REVENUE_FOR_EDGE = 50_000_000_000
 const MIN_REVENUE = 100_000_000
 
 interface TickerRow {
-  symbol: string; name: string; sector: string | null; exchange: string | null
+  symbol: string; name: string; sector: string | null; exchange: string | null; sicCode: string | null
   qualityScore: number | null; riskScore: number | null; dataConfidence: string
   valuationScore: number | null; valuationPercentile: number | null; fcfYieldPct: number | null
   piotroskiScore: number | null; altmanZone: string | null; beneishFlag: boolean | null
@@ -225,8 +225,26 @@ export async function runOpportunityScreen(limit = 25): Promise<{
   // exists to avoid.
   survivors.sort((a, b) => (b.valuationScore ?? 0) - (a.valuationScore ?? 0))
 
+  // SECTOR CAP. Cheapness is strongly correlated within an industry: when
+  // energy sells off, every energy name screens cheap at once. Without a cap a
+  // valuation-ranked list silently becomes a single-sector bet wearing the
+  // appearance of diversification — the user sees eight independent ideas and
+  // owns one macro position. Taking the best few per sector keeps the ranking
+  // intact while forcing the list to span more than one thesis.
+  const MAX_PER_SECTOR = 3
+  const perSector = new Map<string, number>()
+  const diversified: TickerRow[] = []
+  for (const t of survivors) {
+    const key = t.sector ?? t.sicCode?.slice(0, 2) ?? "unknown"
+    const n = perSector.get(key) ?? 0
+    if (n >= MAX_PER_SECTOR) continue
+    perSector.set(key, n + 1)
+    diversified.push(t)
+    if (diversified.length >= limit) break
+  }
+
   return {
-    rows: survivors.slice(0, limit).map(t => ({
+    rows: diversified.map(t => ({
       symbol: t.symbol, name: t.name, sector: t.sector, exchange: t.exchange,
       qualityScore: t.qualityScore, riskScore: t.riskScore,
       valuationScore: t.valuationScore, valuationPercentile: t.valuationPercentile,
