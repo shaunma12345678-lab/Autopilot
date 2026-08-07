@@ -46,10 +46,28 @@ let tickerMapCache: CompanyTickerEntry[] | null = null
 let tickerMapCachedAt = 0
 const TICKER_MAP_TTL_MS = 7 * 24 * 60 * 60 * 1000 // weekly refresh
 
+// Single-flight guard. Without it, concurrent callers each trigger their own
+// fetch of the ~1MB ticker file: nothing is cached until one SUCCEEDS, so a
+// burst produces a thundering herd, SEC throttles it, every call returns empty,
+// and no cache is ever populated to stop the cycle.
+//
+// This was not theoretical. Parallelising the refresh cron to 4 workers turned
+// a working run into 60 consecutive "not a known SEC-registered ticker" errors
+// in 2.2 seconds — on MPC, BEN, APD and FCX, all obviously registered. Sharing
+// one in-flight promise makes concurrency safe.
+let tickerMapInFlight: Promise<CompanyTickerEntry[]> | null = null
+
 export async function getCompanyTickers(): Promise<CompanyTickerEntry[]> {
   if (tickerMapCache && Date.now() - tickerMapCachedAt < TICKER_MAP_TTL_MS) {
     return tickerMapCache
   }
+  if (tickerMapInFlight) return tickerMapInFlight
+
+  tickerMapInFlight = fetchTickerMap().finally(() => { tickerMapInFlight = null })
+  return tickerMapInFlight
+}
+
+async function fetchTickerMap(): Promise<CompanyTickerEntry[]> {
   try {
     const res = await throttledFetch(TICKERS_URL)
     if (!res.ok) return tickerMapCache ?? []
