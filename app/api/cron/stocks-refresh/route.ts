@@ -75,13 +75,39 @@ export async function GET(request: NextRequest) {
     if (missingStarters.length > 0) {
       symbolsToProcess = missingStarters.slice(0, BATCH_SIZE)
     } else {
+      // NEVER-SCORED COMPANIES FIRST, as an explicit query rather than by
+      // ordering on nulls.
+      //
+      // `orderBy: { lastScoredAt: "asc" }` looks like it prioritises unscored
+      // rows, and does the exact opposite: PostgREST follows Postgres and sorts
+      // NULLS LAST on ascending, so the 5,556 never-scored companies sorted to
+      // the very end and a batch of 60 never reached them. The cron re-scored
+      // the same 273 companies indefinitely while reporting success on every
+      // run, and coverage sat frozen at 4.7% of the universe.
+      //
+      // Asking for `lastScoredAt: null` directly cannot be misread and does not
+      // depend on null-ordering semantics that differ between layers.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stale = await (prisma.ticker as any).findMany({
-        orderBy: { lastScoredAt: "asc" },
+      const unscored = await (prisma.ticker as any).findMany({
+        where: { lastScoredAt: null },
         take: BATCH_SIZE,
         select: { symbol: true },
       }) as { symbol: string }[]
-      symbolsToProcess = stale.map(t => t.symbol)
+
+      symbolsToProcess = unscored.map(t => t.symbol)
+
+      // Only once the whole universe has been scored once does this fall back
+      // to refreshing the stalest rows, which is the correct steady state.
+      if (symbolsToProcess.length < BATCH_SIZE) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const stale = await (prisma.ticker as any).findMany({
+          where: { lastScoredAt: { not: null } },
+          orderBy: { lastScoredAt: "asc" },
+          take: BATCH_SIZE - symbolsToProcess.length,
+          select: { symbol: true },
+        }) as { symbol: string }[]
+        symbolsToProcess = [...symbolsToProcess, ...stale.map(t => t.symbol)]
+      }
     }
 
     const results: Record<string, string> = {}
