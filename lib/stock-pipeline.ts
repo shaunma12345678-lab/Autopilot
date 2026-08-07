@@ -28,6 +28,7 @@ import { checkDataIntegrity } from "@/lib/filing-integrity"
 import { getMarketContext } from "@/lib/market-percentile"
 import { analyzeBenford } from "@/lib/benford"
 import { getShortInterest, interpretShortInterest } from "@/lib/short-interest"
+import { getFederalRevenue, reconcileFederalRevenue } from "@/lib/federal-revenue"
 import { fetchDeepHistory } from "@/lib/price-history"
 import { computeConsistency } from "@/lib/consistency"
 import { analyzeInsiderActivity, recordClusterBuyDiscovery } from "@/lib/form4-insider"
@@ -165,6 +166,7 @@ export async function analyzeAndUpsertTicker(
   }).catch(() => ({ percentiles: [], reasons: [] }))
 
   const shortInterest = await getShortInterest(symbol).catch(() => null)
+  const federal = await getFederalRevenue(effectiveSubmissions?.name ?? resolved.name).catch(() => null)
 
   const sectorBenchmark = await getSectorBenchmark(sicCode)
   const sectorRelative = scoreAgainstSector({
@@ -270,6 +272,8 @@ export async function analyzeAndUpsertTicker(
       ...(riskDiff?.materialNewRisks ?? []).map(r => `⚠ Newly disclosed this year: ${r}`),
       ...integrity.flags,
       ...benford.flags,
+      ...interpretShortInterest(shortInterest, null, false).flags,
+      ...reconcileFederalRevenue(federal, fundamentals.revenueGrowthYoyPct).flags,
       ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
     ],
     hasRestatement: liveEvents.hasRestatement,
@@ -432,6 +436,9 @@ export async function analyzeAndUpsertTicker(
     shortDaysToCover: shortInterest?.daysToCover ?? null,
     shortTrend: shortInterest?.trend ?? null,
     shortSettlementDate: shortInterest?.settlementDate ?? null,
+    federalContractValueUsd: federal?.activeContractValueUsd ?? null,
+    federalContractChangePct: federal?.changePct ?? null,
+    federalAwardCount: federal?.awardCount ?? null,
     bearSummary: bear?.summary ?? null,
     bearThesisRisks: bear?.thesisRisks ?? null,
     bearKillShot: bear?.killShot ?? null,

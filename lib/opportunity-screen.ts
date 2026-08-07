@@ -29,6 +29,7 @@
 // composite lets a cheap price hide it, which is precisely how a screen ends up
 // recommending companies that are about to fail.
 import { prisma } from "@/lib/prisma"
+import { ELITE_FILERS, getFilerChanges, normalizeIssuer, type HoldingChange } from "@/lib/institutional-holdings"
 
 export interface OpportunityRow {
   symbol: string
@@ -48,6 +49,8 @@ export interface OpportunityRow {
   /** What is still wrong with it. A screen that only lists positives is a
    *  brochure, not an analysis. */
   cautions: string[]
+  /** Independent confirmation from managers who filed a 13F on it. */
+  smartMoney: string[]
 }
 
 // ── Disqualifiers ──────────────────────────────────────────────────────────
@@ -172,6 +175,26 @@ export async function runOpportunityScreen(limit = 25): Promise<{
   screened: number
   rejected: Record<string, number>
 }> {
+  // Institutional position changes, fetched once for the whole screen rather
+  // than per company. This is CONFIRMATION, never a gate: a manager buying is
+  // one more independent party reaching the same conclusion, but the 45-day
+  // filing lag means it can never be a reason to include something that failed
+  // the fundamentals.
+  const institutional: HoldingChange[] = []
+  for (const filer of ELITE_FILERS) {
+    const changes = await getFilerChanges(filer).catch(() => [])
+    institutional.push(...changes)
+  }
+  const buysByIssuer = new Map<string, HoldingChange[]>()
+  for (const c of institutional) {
+    if (c.changeType !== "new_position" && c.changeType !== "increased") continue
+    const key = normalizeIssuer(c.issuer)
+    if (!key) continue
+    const arr = buysByIssuer.get(key) ?? []
+    arr.push(c)
+    buysByIssuer.set(key, arr)
+  }
+
   // Paginated: PostgREST caps an unbounded select at 1,000 rows and returns the
   // truncation silently, which would quietly screen only part of the universe.
   const all: TickerRow[] = []
@@ -210,6 +233,8 @@ export async function runOpportunityScreen(limit = 25): Promise<{
       fcfYieldPct: t.fcfYieldPct, piotroskiScore: t.piotroskiScore,
       altmanZone: t.altmanZone, revenueTtm: t.revenueTtm,
       reasons: buildReasons(t), cautions: buildCautions(t),
+      smartMoney: (buysByIssuer.get(normalizeIssuer(t.name)) ?? []).map(c =>
+        `${c.filer} ${c.changeType === "new_position" ? "opened a new position" : `increased ${c.changePct?.toFixed(0)}%`} ($${(c.valueUsd / 1e6).toFixed(0)}M) as of ${c.asOfDate} — filed 45 days after quarter end, so a research lead rather than a current position.`),
     })),
     screened: all.length,
     rejected,

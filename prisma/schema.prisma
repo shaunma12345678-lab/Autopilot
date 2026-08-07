@@ -706,6 +706,12 @@ model Ticker {
   shortTrend               String?
   shortSettlementDate      String?
 
+  // Federal contract scale (lib/federal-revenue.ts) — the paying agency's own
+  // record, one side of the ledger the company does not write.
+  federalContractValueUsd  Float?
+  federalContractChangePct Float?
+  federalAwardCount        Int?
+
   // Adversarial pass (lib/bear-case.ts) — a second read whose only job is to
   // attack the investment. Kept separate from qualityReasons so the case
   // against is never blended into the case for.
