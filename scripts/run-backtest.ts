@@ -9,6 +9,7 @@
 import { resolveCik, getSubmissions, getCompanyFacts, countGaapConcepts, findOperatingCik } from "../lib/edgar-client"
 import { fetchDeepHistory } from "../lib/price-history"
 import { scoreAsOf, aggregate, type BacktestObservation } from "../lib/backtest"
+import { fitWalkForward, type LabelledObservation } from "../lib/walk-forward"
 
 // Horizon is a pre-specified variable, not a tuning knob. Fundamental quality
 // signals are documented to act slowly, so testing more than one holding period
@@ -72,6 +73,7 @@ async function main() {
   console.log(`SPY: ${benchmark.length} bars ${benchmark[0].date} -> ${benchmark[benchmark.length - 1].date}\n`)
 
   const byHorizon = new Map<number, BacktestObservation[]>(HORIZONS.map(h => [h, []]))
+  const labelled: LabelledObservation[] = []
   let done = 0
 
   for (const symbol of UNIVERSE) {
@@ -143,6 +145,28 @@ async function main() {
             valuationScore: scored.valuationScore,
             valueTier: scored.valueTier,
           })
+          // Feature vector captured once per as-of date, on the longest horizon
+          // only, so the walk-forward fit is not fed the same company twice.
+          if (h === MAX_HORIZON) {
+            labelled.push({
+              symbol, asOf,
+              qualityScore: scored.qualityScore,
+              strengthTier: scored.strengthTier,
+              actionSignal: scored.actionSignal,
+              dataConfidence: scored.dataConfidence,
+              forwardReturnPct: fwd,
+              benchmarkReturnPct: bench,
+              excessReturnPct: fwd - bench,
+              valuationScore: scored.valuationScore,
+              valueTier: scored.valueTier,
+              features: {
+                qualityScore: scored.qualityScore,
+                valuationScore: scored.valuationScore,
+                piotroskiScore: scored.piotroskiScore ?? null,
+                riskScore: scored.riskScore ?? null,
+              },
+            })
+          }
           countedThisDate = true
         }
         if (countedThisDate) kept++
@@ -172,6 +196,23 @@ async function main() {
     console.log(`Valuation quartile spread (cheap-rich): ${
       result.valuationQuartileSpreadPct === null ? "n/a" : `${result.valuationQuartileSpreadPct >= 0 ? "+" : ""}${result.valuationQuartileSpreadPct.toFixed(2)}%`}`)
   }
+
+  // ── Walk-forward fit ─────────────────────────────────────────────────────
+  const SPLIT = "2023-01-01"
+  const fit = fitWalkForward(labelled, SPLIT)
+  console.log(`\n${"=".repeat(64)}`)
+  console.log(`WALK-FORWARD FIT (split ${SPLIT})`)
+  console.log(`${"=".repeat(64)}`)
+  console.log(`  train: ${fit.trainPeriod.n} obs ${fit.trainPeriod.from} -> ${fit.trainPeriod.to}`)
+  console.log(`  test : ${fit.testPeriod.n} obs ${fit.testPeriod.from} -> ${fit.testPeriod.to}`)
+  console.log(`\n  fitted weights (rank correlation, TRAIN ONLY):`)
+  for (const [k, v] of Object.entries(fit.weights)) {
+    console.log(`    ${k.padEnd(18)} ${v >= 0 ? "+" : ""}${v.toFixed(4)}`)
+  }
+  console.log(`\n  in-sample  quartile spread: ${fit.trainQuartileSpreadPct === null ? "n/a" : fit.trainQuartileSpreadPct.toFixed(2) + "%"}`)
+  console.log(`  OUT-OF-SAMPLE spread:       ${fit.testQuartileSpreadPct === null ? "n/a" : fit.testQuartileSpreadPct.toFixed(2) + "%"}   <-- the only real number`)
+  console.log()
+  fit.notes.forEach(n => console.log(`  - ${n}`))
 }
 
 main().catch(e => { console.error(e); process.exit(1) })

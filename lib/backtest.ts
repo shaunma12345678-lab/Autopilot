@@ -129,6 +129,7 @@ export function scoreAsOf(
 ): {
   qualityScore: number | null; strengthTier: string | null; actionSignal: string | null
   dataConfidence: string; valuationScore: number | null; valueTier: ValueTier
+  piotroskiScore: number | null; riskScore: number | null
 } | null {
   const pit = factsAsOf(facts, asOf)
   const series = extractSeries(pit)
@@ -149,11 +150,12 @@ export function scoreAsOf(
   const sharesOut = series.sharesOutstanding?.[0]?.value ?? null
   const marketCap = sharesOut ? sharesOut * priceAt : null
 
+  const piotroski = computePiotroski(series)
   const result = scoreStock({
     fundamentals,
     price: null,
     priceMetrics: metrics as never,
-    piotroski: computePiotroski(series),
+    piotroski,
     altman: computeAltmanZ(series, marketCap, sicCode),
     beneish: computeBeneishM(series),
     sectorRelative: null,
@@ -182,6 +184,8 @@ export function scoreAsOf(
     dataConfidence: result.dataConfidence,
     valuationScore: valuation.valuationScore,
     valueTier,
+    piotroskiScore: piotroski.normalized ?? null,
+    riskScore: result.riskScore,
   }
 }
 
