@@ -21,7 +21,22 @@ const CRON_SECRET = process.env.CRON_SECRET ?? ""
 // under it, so the binding constraint is the 300s function limit on Pro.
 // 18 x ~13s leaves comfortable headroom, and cycles a 200-company universe
 // roughly every 4 hours instead of every 22.
-const BATCH_SIZE = 18
+// Raised and parallelised. Sequential 18-at-~13s already sat near the 300s
+// ceiling, and the pipeline has since gained federal-contract, short-interest
+// and market-percentile lookups, which pushed it over.
+//
+// Concurrency helps here specifically because SEC is NOT the bottleneck: the
+// EDGAR client enforces a global 120ms floor, so parallel SEC calls simply
+// queue on that shared throttle and stay inside the 10 req/sec limit. What runs
+// concurrently is everything else — price history, USAspending, FINRA, frames —
+// which is where most of the per-company wall time actually goes.
+const BATCH_SIZE = 60
+const CONCURRENCY = 4
+
+// Hard stop before Vercel's 300s limit. Returning partial results that are
+// already persisted beats a function kill that reports nothing — the same
+// failure the deep-research cron hit at 290s.
+const WALL_CLOCK_BUDGET_MS = 250_000
 
 // A diversified starter set so the screener has something to rank from day
 // one — real usage (on-demand lookups) grows the dataset from here.
@@ -58,18 +73,35 @@ export async function GET(request: NextRequest) {
     }
 
     const results: Record<string, string> = {}
-    for (const symbol of symbolsToProcess) {
-      try {
-        const r = await analyzeAndUpsertTicker(symbol)
-        results[symbol] = r.ok ? "ok" : (r.error ?? "failed")
-      } catch (err) {
-        results[symbol] = err instanceof Error ? err.message : "failed"
+    const queue = [...symbolsToProcess]
+    let budgetExhausted = false
+
+    // Fixed-size worker pool. Each worker pulls the next symbol, so a slow
+    // company delays only its own worker rather than stalling a whole batch.
+    const worker = async () => {
+      for (;;) {
+        if (Date.now() - startedAt.getTime() > WALL_CLOCK_BUDGET_MS) {
+          budgetExhausted = true
+          return
+        }
+        const symbol = queue.shift()
+        if (!symbol) return
+        try {
+          const r = await analyzeAndUpsertTicker(symbol)
+          results[symbol] = r.ok ? "ok" : (r.error ?? "failed")
+        } catch (err) {
+          results[symbol] = err instanceof Error ? err.message : "failed"
+        }
       }
     }
 
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker))
+
     return Response.json({
       ok: true,
-      processed: symbolsToProcess.length,
+      processed: Object.keys(results).length,
+      deferred: queue.length,
+      budgetExhausted,
       results,
       duration: Date.now() - startedAt.getTime(),
     })
