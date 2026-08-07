@@ -56,14 +56,43 @@ function num(v: unknown): number | null {
 // REJECTS sortFields unless settlementDate is given as an EQUAL filter, since
 // it is a partition key. So the newest reading is found by requesting a recent
 // date window and taking the maximum client-side.
+// Quote-aware CSV splitting. A naive split(",") breaks on commas INSIDE quoted
+// fields, which shifts every column after them — and issuer names routinely
+// contain one ("Skyworks Solutions, Inc. Commo"). That silently produced a
+// wrong settlementDate for exactly those companies while working fine for
+// issuers whose names happen to have no comma, which is the worst kind of bug:
+// it looks like it works.
+//
+// FINRA also sends CRLF, so cells are trimmed BEFORE quotes are stripped —
+// otherwise the closing quote of the final cell is not at the end of the string
+// and the `$` anchor leaves it in place, making every header key unmatchable.
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = []
+  let cur = ""
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      // A doubled quote inside a quoted field is an escaped literal quote.
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++ }
+      else inQuotes = !inQuotes
+    } else if (ch === "," && !inQuotes) {
+      cells.push(cur.trim())
+      cur = ""
+    } else {
+      cur += ch
+    }
+  }
+  cells.push(cur.trim())
+  return cells
+}
+
 function parseCsv(text: string): Array<Record<string, string>> {
-  const lines = text.trim().split("\n")
+  const lines = text.trim().split(/\r?\n/)
   if (lines.length < 2) return []
-  const split = (line: string) =>
-    line.split(",").map(c => c.replace(/^"|"$/g, "").trim())
-  const headers = split(lines[0])
+  const headers = splitCsvLine(lines[0])
   return lines.slice(1).map(line => {
-    const cells = split(line)
+    const cells = splitCsvLine(line)
     return Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? ""]))
   })
 }

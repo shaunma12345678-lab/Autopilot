@@ -40,6 +40,11 @@ export async function GET(request: NextRequest) {
     const rawSignals = leadIds.length > 0 ? await (prisma.rawSignal as any).findMany({
       where: { leadId: { in: leadIds } },
       orderBy: { signalDate: "asc" },
+      // Explicit bound: PostgREST silently caps unbounded selects at 1,000, and
+      // a page of leads carrying several signals each would quietly lose the
+      // tail — leads would render with part of their evidence missing and
+      // nothing would report an error.
+      take: 5000,
     }) : []
 
     // Group signals by leadId
