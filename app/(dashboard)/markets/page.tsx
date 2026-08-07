@@ -8,6 +8,7 @@ import CryptoLookup from "@/components/dashboard/CryptoLookup"
 import CryptoTopPicks from "@/components/dashboard/CryptoTopPicks"
 import CryptoMarketsDashboard from "@/components/dashboard/CryptoMarketsDashboard"
 import MarketsDisclaimer from "@/components/dashboard/MarketsDisclaimer"
+import OpportunityLists from "@/components/dashboard/OpportunityLists"
 import TrackRecordPanel from "@/components/dashboard/TrackRecordPanel"
 import MarketScreens from "@/components/dashboard/MarketScreens"
 import DiscoveryFeed from "@/components/dashboard/DiscoveryFeed"
@@ -17,10 +18,11 @@ export const metadata = {
   title: "Markets | Autopilot",
 }
 
-type Tab = "stocks" | "crypto" | "accuracy"
+type Tab = "stocks" | "opportunities" | "crypto" | "accuracy"
 
 const TABS: { id: Tab; href: string; label: string; icon: string }[] = [
   { id: "stocks", href: "/markets", label: "Stocks", icon: "📈" },
+  { id: "opportunities", href: "/markets?tab=opportunities", label: "Opportunities", icon: "💎" },
   { id: "crypto", href: "/markets?tab=crypto", label: "Crypto", icon: "🪙" },
   { id: "accuracy", href: "/markets?tab=accuracy", label: "Scoring Accuracy", icon: "🎯" },
 ]
@@ -32,6 +34,8 @@ const BLURB: Record<Tab, string> = {
     "On-chain contract security (honeypot, mint authority, liquidity lock, holder concentration), real orderbook depth rather than wash-tradeable volume, dilution overhang, protocol revenue, and developer activity. A failed security check caps the score outright.",
   accuracy:
     "Every company assessment is logged when it's made and checked against real price history 90 days later — the full, uncherry-picked record of how often our scoring lined up with what followed.",
+  opportunities:
+    "Four lists, each answering a different question. Hidden gems are sound and cheap companies no tracked institutional manager holds. Cash generators rank on how much stated profit becomes real cash. The opportunity screen ranks on valuation among companies clearing every soundness gate. Smart money shows position changes at concentrated managers, from Form 13F.",
 }
 
 export default async function MarketsPage({
@@ -44,7 +48,11 @@ export default async function MarketsPage({
   if (!user) redirect("/login")
 
   const { tab } = await searchParams
-  const activeTab: Tab = tab === "crypto" ? "crypto" : tab === "accuracy" ? "accuracy" : "stocks"
+  const activeTab: Tab =
+    tab === "crypto" ? "crypto"
+    : tab === "accuracy" ? "accuracy"
+    : tab === "opportunities" ? "opportunities"
+    : "stocks"
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-6">
@@ -91,6 +99,8 @@ export default async function MarketsPage({
           <CryptoMarketsDashboard />
         </>
       )}
+
+      {activeTab === "opportunities" && <OpportunityLists />}
 
       {activeTab === "accuracy" && <TrackRecordPanel />}
     </div>
