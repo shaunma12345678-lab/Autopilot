@@ -17,6 +17,7 @@ import MarketsDisclaimer from "./MarketsDisclaimer"
 import MarketScreens from "./MarketScreens"
 import DiscoveryFeed from "./DiscoveryFeed"
 import TopRanked from "./TopRanked"
+import OpportunityLists from "./OpportunityLists"
 
 type SubTab = "stocks" | "crypto"
 
@@ -62,6 +63,20 @@ export default function StocksCrypto({ password }: { password: string }) {
       {subTab === "stocks" ? (
         <>
           <StockLookup password={password} />
+          <section className="space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-white">Opportunities</h3>
+              <p className="text-[11px] text-gray-500 mt-0.5 max-w-3xl">
+                Four lists, each answering a different question. Hidden gems are sound, cheap
+                companies no tracked institutional manager holds. Cash generators rank on how much
+                stated profit becomes real cash. The opportunity screen ranks on valuation among
+                companies clearing every soundness gate. Smart money shows position changes at
+                concentrated managers, from Form 13F.
+              </p>
+            </div>
+            <OpportunityLists password={password} />
+          </section>
+
           <TopRanked kind="stock" password={password} />
           <DiscoveryFeed password={password} />
           <MarketScreens kind="stock" password={password} />
