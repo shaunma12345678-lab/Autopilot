@@ -54,8 +54,20 @@ export async function GET(request: NextRequest) {
   const startedAt = new Date()
 
   try {
+    // Query ONLY the starters, never the whole table. PostgREST caps an
+    // unbounded select at 1,000 rows and returns the truncation silently, so
+    // fetching every symbol to test 16 of them meant any starter outside that
+    // arbitrary 1,000-row window looked missing.
+    //
+    // The consequence was severe and invisible: with 5,829 tickers stored, this
+    // re-scored PG every 20 minutes and never once reached the 5,561 unscored
+    // companies. Coverage sat at 268 while the cron reported success on every run.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const existing = await (prisma.ticker as any).findMany({ select: { symbol: true } }) as { symbol: string }[]
+    const existing = await (prisma.ticker as any).findMany({
+      where: { symbol: { in: STARTER_TICKERS } },
+      select: { symbol: true },
+      take: STARTER_TICKERS.length,
+    }) as { symbol: string }[]
     const existingSymbols = new Set(existing.map(t => t.symbol))
     const missingStarters = STARTER_TICKERS.filter(s => !existingSymbols.has(s))
 
