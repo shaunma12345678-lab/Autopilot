@@ -19,6 +19,7 @@ import { stampFields, type ProvenanceMap } from "@/lib/data-integrity"
 import { computeForwardSignals } from "@/lib/forward-signals"
 import { computePositionContext, describeSituation } from "@/lib/position-context"
 import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
+import { extractNarrative } from "@/lib/narrative-extract"
 import { summarizeLiveEvents } from "@/lib/live-events"
 import { readCompanyNews } from "@/lib/news-feed"
 import { diffRiskFactors } from "@/lib/risk-factor-diff"
@@ -221,7 +222,19 @@ export async function analyzeAndUpsertTicker(
 
       opts.includeNarrative && latest10K
         ? fetchFilingSections(cik, latest10K.accessionNumber, latest10K.primaryDocument, latest10K.form, latest10K.filingDate)
-            .then(sections => (sections ? readFilingNarrative(sections) : null))
+            .then(async sections => {
+              if (!sections) return null
+              // Rules first. Contradiction detection needs management's CLAIMS,
+              // not prose, and rules cannot rate-limit or exhaust a quota — the
+              // failure that silently disabled this check entirely.
+              const deterministic = extractNarrative(
+                sections.mdna, sections.business, sections.sourceUrl, sections.filingDate
+              )
+              if (deterministic) return deterministic
+              // Only fall back to the model when extraction genuinely found no
+              // claims, which usually means the filing sections did not parse.
+              return readFilingNarrative(sections).catch(() => null)
+            })
             .catch(() => null)
         : Promise.resolve(null),
 
