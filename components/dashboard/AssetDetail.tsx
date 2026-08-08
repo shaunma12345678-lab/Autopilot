@@ -223,6 +223,58 @@ export default function AssetDetail({
         </Block>
       )}
 
+      {isStock && a.shortTrend && (
+        <Block title="What informed money is betting against">
+          <p className="text-[11px] text-gray-300">
+            Short interest {a.shortTrend === "building" ? "is building" : a.shortTrend === "covering" ? "is being covered" : "is stable"}
+            {typeof a.shortChangePct === "number" ? ` — ${a.shortChangePct >= 0 ? "+" : ""}${a.shortChangePct.toFixed(1)}% in the latest reporting period` : ""}
+            {typeof a.shortSharesCurrent === "number" ? `, to ${(a.shortSharesCurrent / 1e6).toFixed(1)}M shares` : ""}
+            {typeof a.shortDaysToCover === "number" ? `. About ${a.shortDaysToCover.toFixed(1)} days of average volume to exit.` : "."}
+            {a.shortSettlementDate ? ` Reported to FINRA as of ${a.shortSettlementDate}.` : ""}
+          </p>
+          <p className="text-[10px] text-gray-600 mt-1.5">
+            Read against the fundamentals, not alone. Rising shorts on a deteriorating business is
+            confirmation; rising shorts on a sound one is genuine disagreement. High days-to-cover
+            says how violently the price could move on news, not which direction.
+          </p>
+        </Block>
+      )}
+
+      {isStock && a.benfordConformity && a.benfordConformity !== "insufficient_data" && (
+        <Block title="Forensic digit analysis">
+          <p className="text-[11px] text-gray-300">
+            Reported figures show <span className="font-semibold">{String(a.benfordConformity).replace("_", " ")}</span> conformity
+            to the Benford distribution
+            {typeof a.benfordMad === "number" ? ` (MAD ${a.benfordMad.toFixed(4)}` : ""}
+            {typeof a.benfordSampleSize === "number" ? ` across ${a.benfordSampleSize.toLocaleString()} values)` : a.benfordMad ? ")" : ""}.
+          </p>
+          <p className="text-[10px] text-gray-600 mt-1.5">
+            Leading digits in naturally occurring financial data follow a known distribution;
+            invented numbers do not. A deviation is a prompt to read the filings carefully, never
+            evidence of wrongdoing — few line items, contractually fixed values and heavy rounding
+            all produce the same result.
+          </p>
+        </Block>
+      )}
+
+      {isStock && typeof a.federalContractValueUsd === "number" && a.federalContractValueUsd > 0 && (
+        <Block title="Federal contracts — the government's own record">
+          <p className="text-[11px] text-gray-300">
+            Holds ${(a.federalContractValueUsd / 1e9).toFixed(1)}B of active federal contracts by
+            lifetime award value
+            {typeof a.federalAwardCount === "number" ? ` across ${a.federalAwardCount} awards` : ""}
+            {typeof a.federalContractChangePct === "number"
+              ? `, ${a.federalContractChangePct >= 0 ? "up" : "down"} ${Math.abs(a.federalContractChangePct).toFixed(0)}% versus the prior comparable window`
+              : ""}.
+          </p>
+          <p className="text-[10px] text-gray-600 mt-1.5">
+            Recorded by the paying agency rather than by the company — one side of the ledger it does
+            not write. This is contract scale, not annual revenue: award values are lifetime and
+            include option years.
+          </p>
+        </Block>
+      )}
+
       {isStock && a.valuationScore !== null && a.valuationScore !== undefined && (
         <Block title="Price paid vs. its own history">
           <p className="text-[11px] text-gray-300">
