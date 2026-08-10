@@ -82,10 +82,16 @@ interface TickerRow {
   goingConcernHits: number | null; revenueTtm: number | null; freeCashFlowTtm: number | null
   hasRestatement: boolean | null; debtWallToFcfYears: number | null
   actionSignal: string | null; riskFlags: unknown
+  convictionTier: string | null; convictionSummary: string | null; credibilityScore: number | null
+  falsificationFragility: string | null; falsificationSummary: string | null
+  falsificationTriggered: unknown
 }
 
-function disqualify(t: TickerRow): string | null {
-  // ── Facts that end the conversation ──────────────────────────────────────
+// Shared with the other stock rankings (/api/stocks/top-picks,
+// /api/markets/top-ranked) — every fact here is a hard disqualifier, not a
+// score penalty, so nothing that fails one of these should ever be called a
+// "top" anything regardless of which list is asking or how it ranks.
+export function hasDisqualifyingRedFlag(t: TickerRow): string | null {
   if (t.dataConfidence !== "high" && t.dataConfidence !== "medium") {
     return "not enough verified filing data to judge"
   }
@@ -101,6 +107,25 @@ function disqualify(t: TickerRow): string | null {
   if (t.beneishFlag) {
     return "Beneish M-Score flags a statistically elevated likelihood of earnings manipulation"
   }
+  // Conviction is 10 independent gates — financial trend, cash conversion,
+  // multi-year durability, forward indicators, governance, and whether
+  // management's narrative actually matches the audited numbers. Failing
+  // enough of those to land in the bottom tier is itself a red flag even when
+  // no single fact above triggered on its own; a company can look clean on
+  // every individual check and still be badly run.
+  if (t.convictionTier === "below-bar") {
+    return t.convictionSummary ?? "failed too many independent quality gates (governance, consistency, or credibility)"
+  }
+
+  return null
+}
+
+// Exported for unit testing the full threshold set alongside
+// hasDisqualifyingRedFlag; runOpportunityScreen is the only production caller.
+export function disqualify(t: TickerRow): string | null {
+  // ── Facts that end the conversation ──────────────────────────────────────
+  const redFlag = hasDisqualifyingRedFlag(t)
+  if (redFlag) return redFlag
 
   // ── Thresholds ───────────────────────────────────────────────────────────
   if (t.qualityScore === null || t.qualityScore < MIN_QUALITY) {
@@ -148,6 +173,12 @@ function buildReasons(t: TickerRow): string[] {
   if (t.revenueTtm !== null) {
     out.push(`About $${(t.revenueTtm / 1e9).toFixed(1)}B of revenue — large enough to be liquid, small enough that reading the filings still carries an edge.`)
   }
+  if (t.convictionTier === "elite" || t.convictionTier === "high") {
+    out.push(`Conviction: ${t.convictionSummary ?? t.convictionTier} — cleared the independent governance/consistency/credibility gates, not just the score thresholds.`)
+  }
+  if (t.credibilityScore !== null && t.credibilityScore >= 85) {
+    out.push(`Management's narrative matches the audited numbers (credibility ${t.credibilityScore}/100) — no contradiction found between what they say and what they filed.`)
+  }
   return out
 }
 
@@ -161,6 +192,20 @@ function buildCautions(t: TickerRow): string[] {
   }
   if (t.altmanZone === "grey") {
     out.push("Altman Z-Score is in the grey zone: not distressed, but not clearly safe either.")
+  }
+  if (t.convictionTier === "standard") {
+    out.push(`Conviction: ${t.convictionSummary ?? "cleared the bar but failed some independent quality gates"}.`)
+  }
+  if (t.credibilityScore !== null && t.credibilityScore < 75) {
+    out.push(`Credibility ${t.credibilityScore}/100 — some tension between management's narrative and the audited numbers.`)
+  } else if (t.credibilityScore === null) {
+    out.push("Management's narrative hasn't been cross-checked against the numbers yet (no deep-research pass done).")
+  }
+  const triggered = Array.isArray(t.falsificationTriggered) ? (t.falsificationTriggered as string[]) : []
+  if (triggered.length > 0) {
+    out.push(`A condition previously stated as thesis-breaking has since triggered: ${triggered[0]}`)
+  } else if (t.falsificationFragility === "fragile") {
+    out.push(`Fragile case: ${t.falsificationSummary ?? "at least one thesis-breaking condition sits close to tripping"}`)
   }
   const flags = Array.isArray(t.riskFlags) ? (t.riskFlags as string[]) : []
   for (const f of flags.slice(0, 3)) out.push(f)

@@ -48,6 +48,45 @@ async function exec<T>(q: unknown): Promise<{ data: T; error: unknown }> {
   return q as Promise<{ data: T; error: unknown }>
 }
 
+// PostgREST caches the schema and refuses any write containing a column it
+// doesn't recognize (PGRST204) — errors the whole row rather than dropping
+// the one unknown field. That's correct for a typo, but it means an app
+// deploy and a database migration can never land in the same instant: code
+// referencing a new column and a database that doesn't have it yet is a
+// normal, transient state during every schema change, not a bug — and today
+// it hard-fails every write until the two happen to line up.
+//
+// This makes that transient state survivable: on a "column not found" error,
+// strip exactly that field and retry. The row still saves with everything
+// the schema currently supports; the new field starts persisting on its own
+// the moment the column exists, with no redeploy required.
+const MISSING_COLUMN = /Could not find the '([^']+)' column/
+
+// Exported for unit testing without a live Supabase connection.
+export function isMissingColumnError(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null
+  const e = error as { code?: string; message?: string }
+  if (e.code !== "PGRST204") return null
+  const m = typeof e.message === "string" ? e.message.match(MISSING_COLUMN) : null
+  return m ? m[1] : null
+}
+
+export async function execDroppingMissingColumns<T>(
+  build: (data: W) => unknown,
+  data: W
+): Promise<{ data: T; error: unknown }> {
+  const payload = { ...data }
+  // Bounded by the field count: each failed attempt removes exactly one key,
+  // so this can never loop more than the payload has fields to strip.
+  for (let i = 0; i <= Object.keys(payload).length; i++) {
+    const result = await exec<T>(build(payload))
+    const missing = isMissingColumnError(result.error)
+    if (!missing || !(missing in payload)) return result
+    delete payload[missing]
+  }
+  return exec<T>(build(payload))
+}
+
 function model(tableName: string) {
   return {
     async findFirst(args: { where?: W; orderBy?: W | W[]; select?: W; include?: W } = {}) {
@@ -87,7 +126,10 @@ function model(tableName: string) {
     },
 
     async create(args: { data: W; select?: W }) {
-      const { data, error } = await exec<unknown>(sb().from(tableName).insert(args.data).select().single())
+      const { data, error } = await execDroppingMissingColumns<unknown>(
+        d => sb().from(tableName).insert(d).select().single(),
+        args.data
+      )
       if (error) throw error
       return data
     },
@@ -99,10 +141,14 @@ function model(tableName: string) {
     },
 
     async update(args: { where: W; data: W; select?: W }) {
-      let q = sb().from(tableName).update(args.data)
-      q = applyFilters(q, args.where)
-      q = q.select()
-      const { data, error } = await exec<unknown[]>(q)
+      const { data, error } = await execDroppingMissingColumns<unknown[]>(
+        d => {
+          let q = sb().from(tableName).update(d)
+          q = applyFilters(q, args.where)
+          return q.select()
+        },
+        args.data
+      )
       if (error) throw error
       return (data ?? [])[0] ?? null
     },

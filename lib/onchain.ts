@@ -44,6 +44,11 @@ const SUPPORTED: Record<string, { slug: string; kind: ChainKind }> = {
 
 export type ChainKind = "settlement" | "payments" | "smart_contract"
 
+// Every symbol this module can read directly. Exported so the scoring
+// pipeline can build the peer set for compareOnChain() without duplicating
+// the chain list.
+export const ONCHAIN_SUPPORTED_SYMBOLS: string[] = Object.keys(SUPPORTED)
+
 export interface OnChainRead {
   symbol: string
   chainKind: ChainKind

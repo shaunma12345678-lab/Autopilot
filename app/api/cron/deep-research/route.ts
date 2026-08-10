@@ -12,8 +12,19 @@
 // look like candidates. Reading a proxy statement to discover that a company
 // scoring 30 also has weak governance changes nothing — it was already out.
 // Reading it on a company scoring 80 can reveal that the number is built on
-// related-party revenue, and that changes everything. So this works down from
-// the strongest scores, and re-checks the stalest among them.
+// related-party revenue, and that changes everything.
+//
+// "Candidate" used to mean qualityScore desc — which is circular. Quality
+// score doesn't depend on narrative/governance, so ranking the research queue
+// by quality score just re-researches whichever names already look strong on
+// the cheap metrics, forever, and it skews toward mega-caps (the biggest,
+// most stable balance sheets score well on the core ratios almost by
+// construction). It can never verify a name the opportunity screen would
+// actually surface, because the screen ranks its survivors by valuation, not
+// quality (see lib/opportunity-screen.ts). This orders the queue by
+// valuationScore desc over the same quality/risk-gated population the screen
+// itself draws from, so the names most likely to reach a user get the deep
+// read first — and re-checks the stalest among them once researched.
 //
 // Secured with CRON_SECRET so only Vercel's cron invoker can trigger it.
 
@@ -43,13 +54,21 @@ export async function GET(request: NextRequest) {
   const startedAt = Date.now()
 
   try {
-    // Candidates worth the expense: decent score, confident data, and either
-    // never deep-researched or researched long enough ago to be stale.
+    // Candidates worth the expense: confident data, clears the same
+    // quality/risk bar the opportunity screen gates on (lib/opportunity-screen.ts
+    // MIN_QUALITY/MAX_RISK), and either never deep-researched or researched
+    // long enough ago to be stale. Ordered by valuation, not quality — that's
+    // what actually predicts which of these the screen will rank to the top.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pool = await (prisma.ticker as any).findMany({
-      where: { dataConfidence: { in: ["medium", "high"] }, qualityScore: { not: null } },
-      orderBy: { qualityScore: "desc" },
-      take: 120,
+      where: {
+        dataConfidence: { in: ["medium", "high"] },
+        qualityScore: { gte: 55 },
+        OR: [{ riskScore: null }, { riskScore: { lte: 55 } }],
+        valuationScore: { not: null },
+      },
+      orderBy: { valuationScore: "desc" },
+      take: 300,
     }) as Array<{ symbol: string; qualityScore: number | null; narrativeSummary: string | null; narrativeFilingDate: string | null }>
 
     const staleCutoff = Date.now() - RESEARCH_STALE_DAYS * 86400000

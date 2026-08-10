@@ -93,6 +93,15 @@ const RANKED: Array<{ concept: string; label: string; unit?: string }> = [
   { concept: "Assets", label: "total assets" },
   { concept: "NetCashProvidedByUsedInOperatingActivities", label: "operating cash flow" },
   { concept: "ResearchAndDevelopmentExpense", label: "R&D spend" },
+  // Leverage side — same absolute-dollar-only rule applies. Liabilities and
+  // StockholdersEquity are the two halves debtToEquity is already computed
+  // from (see lib/edgar-normalize.ts); ranking each against every SEC filer
+  // separately from the ratio shows whether it's a large balance sheet
+  // carrying proportionate debt or a large balance sheet carrying a
+  // disproportionate share of it.
+  { concept: "Liabilities", label: "total liabilities" },
+  { concept: "LongTermDebtNoncurrent", label: "long-term debt" },
+  { concept: "StockholdersEquity", label: "stockholders' equity" },
 ]
 
 // The most recent period with complete frame coverage. SEC publishes a frame
@@ -108,6 +117,9 @@ export async function getMarketContext(values: {
   totalAssets?: number | null
   operatingCashFlow?: number | null
   rndExpense?: number | null
+  totalLiabilities?: number | null
+  longTermDebt?: number | null
+  stockholdersEquity?: number | null
 }): Promise<MarketContext> {
   const lookup: Record<string, number | null | undefined> = {
     Revenues: values.revenueTtm,
@@ -115,6 +127,9 @@ export async function getMarketContext(values: {
     Assets: values.totalAssets,
     NetCashProvidedByUsedInOperatingActivities: values.operatingCashFlow,
     ResearchAndDevelopmentExpense: values.rndExpense,
+    Liabilities: values.totalLiabilities,
+    LongTermDebtNoncurrent: values.longTermDebt,
+    StockholdersEquity: values.stockholdersEquity,
   }
 
   const percentiles: MarketPercentile[] = []
@@ -161,6 +176,20 @@ export async function getMarketContext(values: {
   const ni = percentiles.find(p => p.concept === "NetIncomeLoss")
   if (ni && rev && ni.percentile - rev.percentile > 15) {
     reasons.push(`Earns more than its revenue rank implies — ${ni.percentile.toFixed(0)}th percentile on net income against ${rev.percentile.toFixed(0)}th on revenue, which is what structurally better economics looks like.`)
+  }
+
+  // Leverage relative to size: a company can rank modestly on assets and still
+  // carry a liabilities load near the top of the whole market, which the
+  // debtToEquity ratio alone doesn't show — it's silent on whether the SCALE
+  // of debt is itself unusual.
+  const liab = percentiles.find(p => p.concept === "Liabilities")
+  const assets = percentiles.find(p => p.concept === "Assets")
+  if (liab && assets && liab.percentile - assets.percentile > 15) {
+    reasons.push(`⚠ Carries more total liabilities than its asset base would suggest — ${liab.percentile.toFixed(0)}th percentile on liabilities against ${assets.percentile.toFixed(0)}th on assets, across every SEC filer reporting both.`)
+  }
+  const equity = percentiles.find(p => p.concept === "StockholdersEquity")
+  if (liab && equity && liab.percentile - equity.percentile > 20) {
+    reasons.push(`⚠ Liabilities rank well above stockholders' equity across the whole market — ${liab.percentile.toFixed(0)}th percentile on liabilities against ${equity.percentile.toFixed(0)}th on equity, a market-wide leverage comparison the debt-to-equity ratio alone doesn't show.`)
   }
 
   return { percentiles, reasons }

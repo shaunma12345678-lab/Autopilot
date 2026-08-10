@@ -13,7 +13,8 @@ import { resolveProtocolSlug, getProtocolRevenue30d, getNextUnlock } from "@/lib
 import { resolveChain, fetchTokenSecurity, notApplicableSecurity } from "@/lib/token-security"
 import { fetchOrderbookDepth } from "@/lib/orderbook-depth"
 import { getConsensusQuote, listingQualityScore } from "@/lib/exchange-aggregator"
-import { computeMetricsFromCloses } from "@/lib/price-history"
+import { computeMetricsFromCloses, computePricePercentile } from "@/lib/price-history"
+import { isOnChainSupported, compareOnChain, ONCHAIN_SUPPORTED_SYMBOLS } from "@/lib/onchain"
 import { scoreCrypto } from "@/lib/crypto-scoring"
 import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { assessCryptoConviction } from "@/lib/conviction"
@@ -76,7 +77,15 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   const chain = resolveChain(market.platforms)
 
   const slug = await resolveProtocolSlug(resolvedName).catch(() => null)
-  const [revenue30d, nextUnlock, devActivity, security, depth, exchange, priceHistory, btcHistory] = await Promise.all([
+  // On-chain read only applies to the base-layer chains lib/onchain.ts can
+  // read directly (ERC-20 tokens live in Ethereum contract calls, not their
+  // own chain, so they're correctly out of scope rather than mismeasured).
+  // The comparison needs the FULL peer set fetched together — a single-asset
+  // read has nothing to rank a percentile against — so this is one extra
+  // batch of cheap Blockchair calls, gated behind the symbol actually being
+  // on the supported list rather than running on every token.
+  const onChainEligible = isOnChainSupported(resolvedSymbol)
+  const [revenue30d, nextUnlock, devActivity, security, depth, exchange, priceHistory, btcHistory, onChain] = await Promise.all([
     slug ? getProtocolRevenue30d(slug).catch(() => null) : Promise.resolve(null),
     slug ? getNextUnlock(slug).catch(() => null) : Promise.resolve(null),
     getDevActivity(market.githubRepoUrl).catch(() => null),
@@ -85,9 +94,14 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     Promise.resolve(exchangeEarly),
     getCoinPriceHistory(resolvedId).catch(() => [] as number[]),
     getBtcHistory().catch(() => [] as number[]),
+    onChainEligible ? compareOnChain(ONCHAIN_SUPPORTED_SYMBOLS).catch(() => null) : Promise.resolve(null),
   ])
 
+  const onChainRead = onChain?.reads.find(r => r.symbol === resolvedSymbol.toUpperCase()) ?? null
+  const onChainPercentile = onChain?.percentileWithinKind[resolvedSymbol.toUpperCase()] ?? null
+
   const historyMetrics = computeMetricsFromCloses(priceHistory, btcHistory)
+  const pricePercentile1y = computePricePercentile(priceHistory)
 
   const deterioration = await detectDeterioration({
     subjectType: "crypto",
@@ -111,6 +125,8 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     maxDrawdown1yPct: historyMetrics.maxDrawdown1yPct,
     btcCorrelation: historyMetrics.benchmarkCorrelation,
     exchange,
+    onChainPercentile,
+    onChainNotes: onChainRead?.notes ?? [],
     deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
   })
 
@@ -198,6 +214,11 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     volatility30dPct: historyMetrics.volatility30dPct,
     maxDrawdown1yPct: historyMetrics.maxDrawdown1yPct,
     btcCorrelation: historyMetrics.benchmarkCorrelation,
+    pricePercentile1y,
+
+    onchainTransactions24h: onChainRead?.transactions24h ?? null,
+    onchainMarketCapPerTx: onChainRead?.marketCapPerDailyTx ?? null,
+    onchainPercentile: onChainPercentile,
 
     convictionTier: conviction.tier,
     convictionGates: conviction.gates,

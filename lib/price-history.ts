@@ -404,6 +404,25 @@ export async function getBenchmarkHistory(): Promise<DailyBar[]> {
   return bars
 }
 
+// Where the current close sits within its own trailing-year range, 0 = the
+// low, 100 = the high. This is crypto's stand-in for lib/valuation.ts's
+// own-history percentile: crypto has no earnings or FCF yield to anchor a
+// true valuation multiple, but "cheap versus how it has actually traded" is
+// still a real, computable fact from the close series CoinGecko already
+// supplies — it's a price-based proxy, not a market-cap-based one, so it
+// should be read and labeled as such rather than conflated with the stock
+// side's valuationScore.
+export function computePricePercentile(closes: number[]): number | null {
+  if (closes.length < 60) return null
+  const window = closes.slice(-365)
+  const last = window[window.length - 1]
+  const high = Math.max(...window)
+  const low = Math.min(...window)
+  const range = high - low
+  if (range <= 0) return null
+  return Math.round(((last - low) / range) * 100)
+}
+
 // Generic series metrics for crypto, which supplies its own close series
 // (CoinGecko market_chart) rather than a daily bar array.
 export function computeMetricsFromCloses(closes: number[], benchmarkCloses: number[] = []): {

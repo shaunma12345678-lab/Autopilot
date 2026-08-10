@@ -652,6 +652,16 @@ model Ticker {
   contradictions           Json?
   contradictionFlags       Json?
 
+  // Falsification conditions (lib/falsification.ts) — "what would change my
+  // mind", as checkable thresholds derived from the thesis itself, not a
+  // sentence. Recomputed every scoring run; falsificationTriggered records
+  // which conditions from the PRIOR run have since tripped against fresh
+  // data, which is what makes the commitment checkable rather than decorative.
+  falsificationConditions  Json?
+  falsificationFragility   String?   // robust | moderate | fragile
+  falsificationSummary     String?
+  falsificationTriggered   Json?
+
   // Accounting quality — is reported profit backed by cash? (lib/accounting-quality.ts)
   cashConversionRatio      Float?
   avgCashConversion        Float?
@@ -907,6 +917,17 @@ model CryptoAsset {
   volatility30dPct       Float?
   maxDrawdown1yPct       Float?
   btcCorrelation         Float?
+  // Where price sits in its own 1-year range, 0=low, 100=high — crypto's
+  // price-based stand-in for the stock side's own-history valuation
+  // percentile (see lib/price-history.ts computePricePercentile). Used to
+  // rank the crypto opportunity screen (lib/crypto-opportunity-screen.ts).
+  pricePercentile1y      Int?
+
+  // On-chain activity (lib/onchain.ts) — the crypto equivalent of reading the
+  // filings. Only populated for base-layer chains it can read directly.
+  onchainTransactions24h Int?
+  onchainMarketCapPerTx  Float?
+  onchainPercentile      Float?   // vs. same-purpose chains only, 0-100
 
   // Conviction tiering (lib/conviction.ts)
   convictionTier         String?

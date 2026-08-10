@@ -327,6 +327,85 @@ export default function AssetDetail({
         <Block title="Why this score"><List items={a.qualityReasons} /></Block>
       )}
 
+      {a.convictionTier && (
+        <Block title="Conviction — independent gates, not an average">
+          <div className="flex items-center gap-2">
+            <span className={`text-[10px] font-black px-2 py-1 rounded-lg border uppercase ${
+              a.convictionTier === "elite" ? "text-emerald-400 border-emerald-500/40 bg-emerald-500/10"
+              : a.convictionTier === "high" ? "text-blue-300 border-blue-500/40 bg-blue-500/10"
+              : a.convictionTier === "standard" ? "text-yellow-300 border-yellow-500/40 bg-yellow-500/10"
+              : "text-red-400 border-red-500/40 bg-red-500/10"
+            }`}>{a.convictionTier}</span>
+            {a.convictionSummary && <p className="text-[11px] text-gray-300">{a.convictionSummary}</p>}
+          </div>
+          {Array.isArray(a.convictionGates) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 pt-1">
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              {(a.convictionGates as any[]).map((g, i) => (
+                <p key={i} className={`text-[10px] ${g.passed === true ? "text-emerald-400/80" : g.passed === false ? "text-red-400/80" : "text-gray-600"}`}>
+                  {g.passed === true ? "✓" : g.passed === false ? "✗" : "—"} {g.name}
+                </p>
+              ))}
+            </div>
+          )}
+          <p className="text-[10px] text-gray-600 pt-1">
+            A composite score averages, which lets one weakness hide behind several strengths.
+            This must clear every gate independently — no amount of strength elsewhere compensates
+            for failing one.
+          </p>
+        </Block>
+      )}
+
+      {isStock && (a.bearSummary || a.bearKillShot) && (
+        <Block title="The case against — an adversarial pass">
+          {a.bearSummary && <p className="text-[11px] text-gray-300">{a.bearSummary}</p>}
+          {a.bearKillShot && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
+              <p className="text-[10px] font-bold text-red-300 uppercase tracking-wide">Sharpest objection</p>
+              <p className="text-[11px] text-red-200 mt-0.5">{a.bearKillShot}</p>
+            </div>
+          )}
+          <List items={a.bearThesisRisks} tone="text-amber-300/80" />
+          {Array.isArray(a.bearWhatMustGoRight) && a.bearWhatMustGoRight.length > 0 && (
+            <>
+              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide pt-1">For the bull case to hold, this has to go right</p>
+              <List items={a.bearWhatMustGoRight} />
+            </>
+          )}
+          <p className="text-[10px] text-gray-600 pt-1">
+            Built from the same numbers and disclosures as the score above, arguing against it —
+            every objection has to point at a figure or filing, not just a feeling. Kept separate
+            from the bull case rather than netted against it.
+            {a.bearConviction && ` Bear conviction: ${a.bearConviction}.`}
+          </p>
+        </Block>
+      )}
+
+      {isStock && a.falsificationSummary && (
+        <Block title="What would change this">
+          <div className="flex items-center gap-2">
+            {a.falsificationFragility && (
+              <span className={`text-[10px] font-black px-2 py-1 rounded-lg border uppercase ${
+                a.falsificationFragility === "robust" ? "text-emerald-400 border-emerald-500/40 bg-emerald-500/10"
+                : a.falsificationFragility === "moderate" ? "text-yellow-300 border-yellow-500/40 bg-yellow-500/10"
+                : "text-red-400 border-red-500/40 bg-red-500/10"
+              }`}>{a.falsificationFragility}</span>
+            )}
+            <p className="text-[11px] text-gray-300">{a.falsificationSummary}</p>
+          </div>
+          {Array.isArray(a.falsificationTriggered) && a.falsificationTriggered.length > 0 && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 mt-1">
+              <p className="text-[10px] font-bold text-red-300 uppercase tracking-wide">Already triggered since last assessed</p>
+              <List items={a.falsificationTriggered} tone="text-red-200" />
+            </div>
+          )}
+          <p className="text-[10px] text-gray-600 pt-1">
+            Checkable conditions derived from the thesis itself, not a vague promise — the next
+            scoring run tests these against fresh data and reports here if one has tripped.
+          </p>
+        </Block>
+      )}
+
       {data.discoveries.length > 0 && (
         <Block title="How we found this">
           {data.discoveries.slice(0, 4).map((d, i) => (

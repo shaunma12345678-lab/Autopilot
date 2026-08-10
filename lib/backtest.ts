@@ -26,6 +26,28 @@
 // BENCHMARK-RELATIVE. Raw forward returns mostly measure whether the market
 // went up, which tells you nothing about the criteria. Every return here is
 // excess return versus SPY over the identical window.
+//
+// H4 (pre-registered 2026-08-08, before this is run). The broad-universe run
+// documented in STOCK_CRYPTO_ANALYSIS_IMPLEMENTATION.md found: quality alone
+// does not rank forward returns; valuation does, and the effect strengthens
+// with horizon; and lib/opportunity-screen.ts's binary quality>=55 gate
+// combined with a cheap_and_sound tier beats fair/expensive on every
+// measure, but loses to the (survivorship-tainted) cheap_but_impaired tier —
+// so a hard quality FLOOR is not obviously the right combination.
+//
+// The untested next question: does a CONTINUOUS combination beat the binary
+// gate? Specifically, spreadScore = min(qualityScore, valuationScore) —
+// never an average, because this system rejects averaging quality and
+// valuation everywhere else (see lib/valuation.ts classifyValue: "averaging
+// quality and valuation would let a very cheap price paper over a failing
+// business"). The minimum rewards names strong on BOTH axes simultaneously
+// and never lets either compensate for the other, which is the same
+// weakest-link principle the gate expresses, just continuous instead of a
+// step function at 55. If spreadQuartileSpreadPct below beats both
+// quartileSpreadPct and valuationQuartileSpreadPct, that is evidence for
+// ranking on the spread instead of gate-then-rank-by-valuation. If it
+// doesn't, the current design stands. No threshold here may be tuned after
+// seeing the result.
 import type { CompanyFacts } from "./edgar-client"
 import { extractSeries, normalizeFundamentals } from "./edgar-normalize"
 import { computePiotroski } from "./stock-scores/piotroski"
@@ -93,6 +115,10 @@ export interface BacktestResult {
   /** Mean excess of top-quartile scores minus bottom-quartile. The headline:
    *  if the score has no predictive content this sits near zero. */
   quartileSpreadPct: number | null
+  /** H4: ranked on min(qualityScore, valuationScore) — the weakest-link
+   *  combination, never an average. See the module comment above for the
+   *  full pre-registration. */
+  spreadQuartileSpreadPct: number | null
   notes: string[]
 }
 
@@ -233,7 +259,7 @@ function statsFor(label: string, rows: BacktestObservation[]): TierStats {
 export function aggregate(obs: BacktestObservation[], horizonDays: number): BacktestResult {
   const notes: string[] = []
   if (obs.length === 0) {
-    return { observations: 0, symbolsTested: 0, horizonDays, byTier: [], bySignal: [], byValueTier: [], calibration: [], calibrationVerdict: "no data", quartileSpreadPct: null, valuationQuartileSpreadPct: null, notes: ["No observations produced."] }
+    return { observations: 0, symbolsTested: 0, horizonDays, byTier: [], bySignal: [], byValueTier: [], calibration: [], calibrationVerdict: "no data", quartileSpreadPct: null, valuationQuartileSpreadPct: null, spreadQuartileSpreadPct: null, notes: ["No observations produced."] }
   }
 
   const group = (key: (o: BacktestObservation) => string | null) => {
@@ -304,6 +330,22 @@ export function aggregate(obs: BacktestObservation[], horizonDays: number): Back
       cheap.reduce((a, b) => a + b, 0) / cheap.length - rich.reduce((a, b) => a + b, 0) / rich.length
   }
 
+  // H4 — weakest-link spread. See the module-level pre-registration comment.
+  let spreadQuartileSpreadPct: number | null = null
+  const spreadable = valued // already filtered to valuationScore !== null
+  const sq = Math.floor(spreadable.length / 4)
+  if (sq >= 10) {
+    const withSpread = spreadable.map(o => ({
+      excessReturnPct: o.excessReturnPct,
+      spread: Math.min(o.qualityScore, o.valuationScore as number),
+    }))
+    const ss = [...withSpread].sort((a, b) => b.spread - a.spread)
+    const strong = ss.slice(0, sq).map(o => o.excessReturnPct)
+    const weak = ss.slice(-sq).map(o => o.excessReturnPct)
+    spreadQuartileSpreadPct =
+      strong.reduce((a, b) => a + b, 0) / strong.length - weak.reduce((a, b) => a + b, 0) / weak.length
+  }
+
   notes.push(
     `Every score was computed from filings available on its as-of date; datapoints filed later were discarded, so there is no look-ahead bias.`,
     `Returns are excess of SPY over the same ${horizonDays}-day window.`,
@@ -321,6 +363,7 @@ export function aggregate(obs: BacktestObservation[], horizonDays: number): Back
     calibrationVerdict,
     quartileSpreadPct,
     valuationQuartileSpreadPct,
+    spreadQuartileSpreadPct,
     notes,
   }
 }

@@ -40,6 +40,9 @@ import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { assessStockConviction } from "@/lib/conviction"
 import { computeCapitalAllocation } from "@/lib/capital-allocation"
 import { readProxyGovernance } from "@/lib/governance"
+import { detectConcentrationRisk, type ConcentrationRead } from "@/lib/concentration-risk"
+import { checkLitigation, type LitigationRead } from "@/lib/litigation-check"
+import { buildFalsificationSet, checkFalsified, type FalsificationCondition } from "@/lib/falsification"
 
 export interface AnalyzeStockResult {
   ok: boolean
@@ -164,6 +167,9 @@ export async function analyzeAndUpsertTicker(
     totalAssets: series.totalAssets?.[0]?.value ?? null,
     operatingCashFlow: series.cfo?.[0]?.value ?? null,
     rndExpense: series.researchAndDevelopment?.[0]?.value ?? null,
+    totalLiabilities: series.totalLiabilities?.[0]?.value ?? null,
+    longTermDebt: series.longTermDebt?.[0]?.value ?? null,
+    stockholdersEquity: series.stockholdersEquity?.[0]?.value ?? null,
   }).catch(() => ({ percentiles: [], reasons: [] }))
 
   const shortInterest = await getShortInterest(symbol).catch(() => null)
@@ -210,12 +216,14 @@ export async function analyzeAndUpsertTicker(
   let narrative: Awaited<ReturnType<typeof readFilingNarrative>> = null
   let news: Awaited<ReturnType<typeof readCompanyNews>> = null
   let riskDiff: Awaited<ReturnType<typeof diffRiskFactors>> | null = null
+  let concentration: ConcentrationRead | null = null
+  let litigation: LitigationRead | null = null
 
   if (opts.includeNarrative || opts.includeNews) {
     const proxy = effectiveSubmissions?.recentForms?.find(f => f.form === "DEF 14A")
     const latest10K = effectiveSubmissions?.recentForms?.find(f => f.form === "10-K")
 
-    const [gov, narr, nws, rdiff] = await Promise.all([
+    const [gov, narrRes, nws, rdiff, litig] = await Promise.all([
       opts.includeNarrative && proxy
         ? readProxyGovernance(cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate).catch(() => null)
         : Promise.resolve(null),
@@ -223,20 +231,24 @@ export async function analyzeAndUpsertTicker(
       opts.includeNarrative && latest10K
         ? fetchFilingSections(cik, latest10K.accessionNumber, latest10K.primaryDocument, latest10K.form, latest10K.filingDate)
             .then(async sections => {
-              if (!sections) return null
+              if (!sections) return { narrative: null, concentration: null }
               // Rules first. Contradiction detection needs management's CLAIMS,
               // not prose, and rules cannot rate-limit or exhaust a quota — the
               // failure that silently disabled this check entirely.
               const deterministic = extractNarrative(
                 sections.mdna, sections.business, sections.sourceUrl, sections.filingDate
               )
-              if (deterministic) return deterministic
               // Only fall back to the model when extraction genuinely found no
               // claims, which usually means the filing sections did not parse.
-              return readFilingNarrative(sections).catch(() => null)
+              const narrativeResult = deterministic ?? await readFilingNarrative(sections).catch(() => null)
+              // Customer/geographic concentration — see lib/concentration-risk.ts
+              // for why this reads prose rather than dimensional XBRL. Reuses
+              // the same section fetch rather than a second document fetch.
+              const concentrationResult = detectConcentrationRisk(sections.business, sections.mdna)
+              return { narrative: narrativeResult, concentration: concentrationResult }
             })
-            .catch(() => null)
-        : Promise.resolve(null),
+            .catch(() => ({ narrative: null, concentration: null }))
+        : Promise.resolve({ narrative: null, concentration: null }),
 
       opts.includeNews
         ? readCompanyNews(effectiveSubmissions?.name ?? resolved.name, symbol).catch(() => null)
@@ -247,10 +259,19 @@ export async function analyzeAndUpsertTicker(
       opts.includeNarrative
         ? diffRiskFactors(cik, effectiveSubmissions?.recentForms ?? []).catch(() => null)
         : Promise.resolve(null),
+
+      // Federal court litigation (lib/litigation-check.ts) — an external API
+      // with its own rate budget, independent of every SEC fetch above.
+      // Returns null instantly when COURTLISTENER_API_TOKEN isn't set.
+      opts.includeNarrative
+        ? checkLitigation(effectiveSubmissions?.name ?? resolved.name).catch(() => null)
+        : Promise.resolve(null),
     ])
 
     governance = gov
-    narrative = narr
+    narrative = narrRes.narrative
+    concentration = narrRes.concentration
+    litigation = litig
     news = nws
     riskDiff = rdiff
   }
@@ -270,13 +291,24 @@ export async function analyzeAndUpsertTicker(
     ],
   }).catch(() => null)
 
+  // Cross-validate management's narrative against the audited numbers BEFORE
+  // scoring, not after — a contradiction between what management claims and
+  // what the filing shows is exactly the kind of risk this system exists to
+  // catch, and a check that never reaches the risk score or the screen's gate
+  // is decoration, not analysis.
+  const contradiction = checkContradictions({
+    narrative, fundamentals, forward, accounting, balanceSheet,
+    capitalAllocation,
+  })
+
   const result = scoreStock({
     fundamentals, price, priceMetrics, piotroski, altman, beneish, sectorRelative,
     goingConcernHits: goingConcern.hits,
     externalRiskPenalty:
       liveEvents.riskPenalty + (news?.riskPenalty ?? 0) +
       balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0) + accounting.riskPenalty +
-      (riskDiff?.riskPenalty ?? 0),
+      (riskDiff?.riskPenalty ?? 0) + contradiction.riskPenalty + (concentration?.riskPenalty ?? 0) +
+      (litigation?.riskPenalty ?? 0),
     externalRiskFlags: [
       ...liveEvents.flags,
       ...balanceSheet.flags,
@@ -288,6 +320,9 @@ export async function analyzeAndUpsertTicker(
       ...interpretShortInterest(shortInterest, null, false).flags,
       ...reconcileFederalRevenue(federal, fundamentals.revenueGrowthYoyPct).flags,
       ...(news?.materialConcerns ?? []).map(c => `⚠ Reported in recent coverage: ${c}`),
+      ...contradiction.flags,
+      ...(concentration?.flags ?? []),
+      ...(litigation?.flags ?? []),
     ],
     hasRestatement: liveEvents.hasRestatement,
     forwardScore: forward.forwardScore,
@@ -305,13 +340,6 @@ export async function analyzeAndUpsertTicker(
     forwardScore: forward.forwardScore,
   })
 
-  // Cross-validate management's narrative against the audited numbers. This is
-  // the check that catches promotional language the AI would otherwise accept.
-  const contradiction = checkContradictions({
-    narrative, fundamentals, forward, accounting, balanceSheet,
-    capitalAllocation,
-  })
-
   const conviction = assessStockConviction({
     qualityScore: result.qualityScore,
     riskScore: result.riskScore,
@@ -327,6 +355,38 @@ export async function analyzeAndUpsertTicker(
     earlyWarning: result.earlyWarning,
     dataConfidence: result.dataConfidence,
   })
+
+  // Falsification conditions — "what would change my mind", as checkable
+  // thresholds derived from the thesis itself (lib/falsification.ts), not a
+  // sentence. Compared against whatever was stored on the PRIOR run before
+  // this write overwrites it, so a condition that has since tripped is
+  // caught and surfaced rather than silently replaced with a fresh set that
+  // looks clean again.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const priorTicker = await (prisma.ticker as any).findFirst({
+    where: { symbol },
+    select: { falsificationConditions: true },
+  }).catch(() => null)
+
+  const falsificationInputs = {
+    qualityScore: result.qualityScore,
+    valuationScore: valuation.valuationScore,
+    valuationPercentile: valuation.ownHistoryPercentile,
+    piotroskiScore: piotroski.normalized,
+    riskScore: result.riskScore,
+    altmanZone: altman.zone,
+    fcfYieldPct: valuation.fcfYieldPct,
+    freeCashFlowTtm: fundamentals.freeCashFlowTtm,
+    goingConcernHits: goingConcern.hits,
+    hasRestatement: liveEvents.hasRestatement,
+    shortTrend: shortInterest?.trend ?? null,
+    revenueGrowthYoyPct: fundamentals.revenueGrowthYoyPct,
+  }
+  const falsification = buildFalsificationSet(falsificationInputs)
+  const priorConditions = Array.isArray(priorTicker?.falsificationConditions)
+    ? (priorTicker.falsificationConditions as FalsificationCondition[])
+    : null
+  const falsificationCheck = priorConditions ? checkFalsified(priorConditions, falsificationInputs) : null
 
 
   // Adversarial pass. Runs only on the deep path — it costs an LLM call, and a
@@ -476,6 +536,13 @@ export async function analyzeAndUpsertTicker(
     contradictions: contradiction.contradictions,
     contradictionFlags: contradiction.flags,
 
+    falsificationConditions: falsification.conditions,
+    falsificationFragility: falsification.fragility,
+    falsificationSummary: falsification.summary,
+    falsificationTriggered: falsificationCheck
+      ? falsificationCheck.triggered.map(t => `${t.label}: ${t.why}`)
+      : null,
+
     debtDueNext12MoUsd: balanceSheet.debtDueNext12MoUsd,
     debtWallToFcfYears: balanceSheet.debtWallToFcfYears,
     sbcToRevenuePct: balanceSheet.sbcToRevenuePct,
@@ -538,7 +605,7 @@ export async function analyzeAndUpsertTicker(
     } : {}),
 
     qualityScore: result.qualityScore,
-    qualityReasons: [...result.qualityReasons, ...marketCtx.reasons],
+    qualityReasons: [...result.qualityReasons, ...marketCtx.reasons, ...(concentration?.notes ?? [])],
     riskScore: result.riskScore,
     riskFlags: result.riskFlags,
     strengthTier: result.strengthTier,

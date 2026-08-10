@@ -34,6 +34,11 @@ export interface CryptoScoreInput {
   deterioration?: { shouldSell: boolean; reasons: string[] } | null
   /** Our own regulated-venue market data (lib/exchange-aggregator.ts). */
   exchange?: ConsensusQuote | null
+  /** Market cap per daily on-chain transaction, ranked against same-purpose
+   *  chains only (lib/onchain.ts). Only populated for base-layer chains this
+   *  system can read directly — null for everything else, not zero. */
+  onChainPercentile?: number | null
+  onChainNotes?: string[]
 }
 
 export type StrengthTier = "strong" | "mixed" | "weak"
@@ -132,6 +137,14 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   }
 
   if (devActivity !== null) scored.push({ label: "Developer activity", weight: 9, points: clamp(devActivity.devActivityScore, 0, 100) })
+
+  // On-chain activity — the crypto equivalent of reading the filings
+  // (lib/onchain.ts). Only scored for base-layer chains ranked against
+  // same-purpose peers; higher percentile means more real network usage per
+  // dollar of market value, a number the project's own marketing can't shape.
+  if (input.onChainPercentile !== null && input.onChainPercentile !== undefined) {
+    scored.push({ label: "On-chain activity vs. peers", weight: 10, points: clamp(input.onChainPercentile, 0, 100) })
+  }
 
   // Exchange-native criteria. These replace aggregator volume as the liquidity
   // input because they're sourced from venues we'd actually transact on.
@@ -296,6 +309,14 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     reasons.push(Math.abs(input.btcCorrelation) > 0.85
       ? `Moves almost in lockstep with Bitcoin (correlation ${input.btcCorrelation.toFixed(2)}) — limited diversification value.`
       : `Correlation to Bitcoin is ${input.btcCorrelation.toFixed(2)}.`)
+  }
+  if (input.onChainPercentile !== null && input.onChainPercentile !== undefined) {
+    reasons.push(input.onChainPercentile >= 70
+      ? `✓ Real on-chain usage ranks in the ${input.onChainPercentile.toFixed(0)}th percentile against same-purpose chains — the network's own ledger, not the project's marketing.`
+      : input.onChainPercentile <= 30
+        ? `⚠ On-chain usage ranks only in the ${input.onChainPercentile.toFixed(0)}th percentile against same-purpose chains — the market pays more per unit of real activity than most peers.`
+        : `On-chain usage sits mid-pack (${input.onChainPercentile.toFixed(0)}th percentile) against same-purpose chains.`)
+    reasons.push(...(input.onChainNotes ?? []).slice(0, 2))
   }
 
   const ranked = [...scored].sort((a, b) => b.points - a.points)

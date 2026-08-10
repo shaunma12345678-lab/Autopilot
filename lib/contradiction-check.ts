@@ -41,7 +41,7 @@ export interface Contradiction {
 export interface ContradictionResult {
   contradictions: Contradiction[]
   omissions: string[]
-  credibilityScore: number   // 0-100; how well the narrative matches the numbers
+  credibilityScore: number | null   // 0-100; how well the narrative matches the numbers. null = no narrative to check, not "checked and mediocre"
   riskPenalty: number
   flags: string[]
 }
@@ -83,8 +83,12 @@ export function checkContradictions(params: {
   const omissions: string[] = []
 
   if (!narrative) {
+    // null, not a neutral 50 — "we never read the filing" and "we read it and
+    // it was middling" are different facts, and conflating them fails every
+    // un-researched ticker against the credibility gate in lib/conviction.ts
+    // before it was ever checked.
     return {
-      contradictions: [], omissions: [], credibilityScore: 50, riskPenalty: 0,
+      contradictions: [], omissions: [], credibilityScore: null, riskPenalty: 0,
       flags: [],
     }
   }
