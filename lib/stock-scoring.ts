@@ -37,6 +37,11 @@ export interface StockScoreInput {
   altman: AltmanResult | null
   beneish: BeneishResult | null
   sectorRelative: SectorRelativeResult | null
+  /** Net margin percentile against every SEC filer reporting both revenue and
+   *  net income that period (lib/market-percentile.ts) — thousands of real
+   *  peers, not the few hundred rows sectorRelative draws from. Null when
+   *  the frame join didn't clear its own reporter floor. */
+  marketNetMarginPercentile?: number | null
   goingConcernHits: number
   /** Risk contributed by live 8-K events and recent news, with their flags. */
   externalRiskPenalty?: number
@@ -135,6 +140,13 @@ export function scoreStock(input: StockScoreInput): StockScoreResult {
       score: v => clamp(50 + v * 1.2, 0, 100) },
     { key: "sectorRelative", label: "Performance vs. sector peers", weight: 9, isCore: false,
       value: input.sectorRelative?.score ?? null,
+      score: v => clamp(v, 0, 100) },
+    // Real cross-sectional data (thousands of SEC filers via frames) rather
+    // than sectorRelative's own accumulated sample of a few hundred rows —
+    // weighted close to Piotroski/consistency because the peer set behind it
+    // is genuinely the market, not an approximation of it.
+    { key: "marketMargin", label: "Net margin vs. every SEC filer", weight: 10, isCore: false,
+      value: input.marketNetMarginPercentile ?? null,
       score: v => clamp(v, 0, 100) },
     { key: "nearHigh", label: "Proximity to 52-week high", weight: 4, isCore: false,
       value: pm?.pctFrom52WeekHigh ?? null,

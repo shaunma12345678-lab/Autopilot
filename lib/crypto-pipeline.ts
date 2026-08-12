@@ -15,6 +15,7 @@ import { fetchOrderbookDepth } from "@/lib/orderbook-depth"
 import { getConsensusQuote, listingQualityScore } from "@/lib/exchange-aggregator"
 import { computeMetricsFromCloses, computePricePercentile } from "@/lib/price-history"
 import { isOnChainSupported, compareOnChain, ONCHAIN_SUPPORTED_SYMBOLS } from "@/lib/onchain"
+import { getRevenueYieldPercentile } from "@/lib/crypto-percentile"
 import { scoreCrypto } from "@/lib/crypto-scoring"
 import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { assessCryptoConviction } from "@/lib/conviction"
@@ -103,6 +104,16 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   const historyMetrics = computeMetricsFromCloses(priceHistory, btcHistory)
   const pricePercentile1y = computePricePercentile(priceHistory)
 
+  // Protocol revenue yield ranked against every other tracked asset with the
+  // same two fields present, rather than scored off a fixed multiplier — see
+  // lib/crypto-percentile.ts for why this is real but weaker evidence than
+  // the SEC-frames equivalent on the stock side.
+  const revenueYieldPct = revenue30d !== null && market.marketCapUsd && market.marketCapUsd > 0
+    ? ((revenue30d * 12) / market.marketCapUsd) * 100 : null
+  const revenueYieldPercentile = revenueYieldPct !== null
+    ? await getRevenueYieldPercentile(revenueYieldPct).catch(() => null)
+    : null
+
   const deterioration = await detectDeterioration({
     subjectType: "crypto",
     symbol: resolvedSymbol,
@@ -127,6 +138,8 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     exchange,
     onChainPercentile,
     onChainNotes: onChainRead?.notes ?? [],
+    revenueYieldPercentile: revenueYieldPercentile?.percentile ?? null,
+    revenueYieldPeerCount: revenueYieldPercentile?.peerCount ?? null,
     deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
   })
 

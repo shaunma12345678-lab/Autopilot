@@ -134,3 +134,23 @@ describe("scoreStock — weight renormalization, never zero-fill", () => {
     expect(Math.abs(withPiotroski.qualityScore! - withoutPiotroski.qualityScore!)).toBeLessThan(25)
   })
 })
+
+describe("scoreStock — market-wide net margin percentile (lib/market-percentile.ts)", () => {
+  it("a top-percentile market margin reading raises quality vs. the same company without it", () => {
+    const withMarketMargin = scoreStock(baseInput({ marketNetMarginPercentile: 95 }))
+    const without = scoreStock(baseInput({ marketNetMarginPercentile: null }))
+    expect(withMarketMargin.qualityScore!).toBeGreaterThan(without.qualityScore!)
+  })
+
+  it("a bottom-percentile market margin reading lowers quality vs. the same company without it", () => {
+    const withMarketMargin = scoreStock(baseInput({ marketNetMarginPercentile: 5 }))
+    const without = scoreStock(baseInput({ marketNetMarginPercentile: null }))
+    expect(withMarketMargin.qualityScore!).toBeLessThan(without.qualityScore!)
+  })
+
+  it("absence of the market percentile still scores normally (frame join is optional, not required)", () => {
+    const result = scoreStock(baseInput({ marketNetMarginPercentile: null }))
+    expect(result.qualityScore).not.toBeNull()
+    expect(result.dataConfidence).toBe("high")
+  })
+})

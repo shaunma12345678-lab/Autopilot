@@ -39,6 +39,12 @@ export interface CryptoScoreInput {
    *  system can read directly — null for everything else, not zero. */
   onChainPercentile?: number | null
   onChainNotes?: string[]
+  /** Protocol revenue yield ranked against every other tracked asset with
+   *  both fields present (lib/crypto-percentile.ts), rather than a fixed
+   *  multiplier. Null when the accumulated sample hasn't cleared its own
+   *  reporter floor yet — the fixed formula is the fallback in that case. */
+  revenueYieldPercentile?: number | null
+  revenueYieldPeerCount?: number | null
 }
 
 export type StrengthTier = "strong" | "mixed" | "weak"
@@ -120,10 +126,22 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   if (market.marketCapRank !== null) scored.push({ label: "Market cap rank", weight: 5, points: clamp(100 - market.marketCapRank / 20, 0, 100) })
   if (market.priceChange7dPct !== null) scored.push({ label: "7-day momentum", weight: 5, points: clamp(50 + market.priceChange7dPct, 0, 100) })
 
-  // Protocol revenue yield — the only genuine fundamental in crypto.
+  // Protocol revenue yield — the only genuine fundamental in crypto. Ranked
+  // against every other tracked asset when the sample supports it (real
+  // comparison); a fixed multiplier otherwise (arbitrary, but the only
+  // option with no peer data at all — see design rule 4 in
+  // lib/stock-scoring.ts, the same fallback pattern applied here).
   const revenueYieldPct = protocolRevenue30dUsd !== null && market.marketCapUsd && market.marketCapUsd > 0
     ? ((protocolRevenue30dUsd * 12) / market.marketCapUsd) * 100 : null
-  if (revenueYieldPct !== null) scored.push({ label: "Protocol revenue yield", weight: 14, points: clamp(revenueYieldPct * 20, 0, 100) })
+  if (revenueYieldPct !== null) {
+    const points = input.revenueYieldPercentile !== null && input.revenueYieldPercentile !== undefined
+      ? clamp(input.revenueYieldPercentile, 0, 100)
+      : clamp(revenueYieldPct * 20, 0, 100)
+    const label = input.revenueYieldPercentile !== null && input.revenueYieldPercentile !== undefined
+      ? `Protocol revenue yield vs. ${input.revenueYieldPeerCount ?? "tracked"} peers`
+      : "Protocol revenue yield"
+    scored.push({ label, weight: 14, points })
+  }
 
   // Supply already circulating — low means heavy future dilution ahead.
   const circulatingSupplyPct = market.maxSupply && market.maxSupply > 0 && market.circulatingSupply
@@ -301,6 +319,9 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     reasons.push(revenueYieldPct > 3
       ? `✓ Generates real protocol revenue — roughly ${revenueYieldPct.toFixed(1)}% annualized against market cap.`
       : `Protocol revenue is modest relative to valuation (~${revenueYieldPct.toFixed(1)}% annualized).`)
+    if (input.revenueYieldPercentile !== null && input.revenueYieldPercentile !== undefined) {
+      reasons.push(`Revenue yield ranks in the ${input.revenueYieldPercentile.toFixed(0)}th percentile against ${input.revenueYieldPeerCount ?? "the"} other tracked assets with both figures reported.`)
+    }
   }
   if (fdvToMcapRatio !== null && fdvToMcapRatio <= 1.15) {
     reasons.push("✓ Supply is essentially fully circulating — little dilution overhang.")

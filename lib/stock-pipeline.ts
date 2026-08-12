@@ -170,7 +170,9 @@ export async function analyzeAndUpsertTicker(
     totalLiabilities: series.totalLiabilities?.[0]?.value ?? null,
     longTermDebt: series.longTermDebt?.[0]?.value ?? null,
     stockholdersEquity: series.stockholdersEquity?.[0]?.value ?? null,
-  }).catch(() => ({ percentiles: [], reasons: [] }))
+    netMarginPct: fundamentals.netMarginPct,
+    operatingMarginPct: fundamentals.operatingMarginPct,
+  }).catch(() => ({ percentiles: [], reasons: [], netMarginPercentile: null, netMarginPeerCount: null }))
 
   const shortInterest = await getShortInterest(symbol).catch(() => null)
   const federal = await getFederalRevenue(effectiveSubmissions?.name ?? resolved.name).catch(() => null)
@@ -303,6 +305,7 @@ export async function analyzeAndUpsertTicker(
 
   const result = scoreStock({
     fundamentals, price, priceMetrics, piotroski, altman, beneish, sectorRelative,
+    marketNetMarginPercentile: marketCtx.netMarginPercentile,
     goingConcernHits: goingConcern.hits,
     externalRiskPenalty:
       liveEvents.riskPenalty + (news?.riskPenalty ?? 0) +

@@ -69,6 +69,34 @@ describe("scoreCrypto — on-chain activity wiring", () => {
   })
 })
 
+describe("scoreCrypto — revenue-yield percentile (lib/crypto-percentile.ts)", () => {
+  it("a top-percentile revenue yield outscores the same asset scored on the fixed formula alone", () => {
+    const withPercentile = scoreCrypto(baseInput({ revenueYieldPercentile: 95, revenueYieldPeerCount: 200 }))
+    const formulaOnly = scoreCrypto(baseInput({ revenueYieldPercentile: null }))
+    expect(withPercentile.qualityScore!).toBeGreaterThan(formulaOnly.qualityScore!)
+  })
+
+  it("a bottom-percentile revenue yield underscores the fixed-formula-only reading", () => {
+    const withPercentile = scoreCrypto(baseInput({ revenueYieldPercentile: 5, revenueYieldPeerCount: 200 }))
+    const formulaOnly = scoreCrypto(baseInput({ revenueYieldPercentile: null }))
+    expect(withPercentile.qualityScore!).toBeLessThan(formulaOnly.qualityScore!)
+  })
+
+  it("falls back to the fixed formula and still scores when no peer sample exists", () => {
+    const result = scoreCrypto(baseInput({
+      protocolRevenue30dUsd: 10_000_000, // well above the 3% annualized-yield threshold
+      revenueYieldPercentile: null, revenueYieldPeerCount: null,
+    }))
+    expect(result.qualityScore).not.toBeNull()
+    expect(result.qualityReasons.some(r => r.includes("real protocol revenue"))).toBe(true)
+  })
+
+  it("reports the peer count in the reasons when a percentile was used", () => {
+    const result = scoreCrypto(baseInput({ revenueYieldPercentile: 80, revenueYieldPeerCount: 340 }))
+    expect(result.qualityReasons.some(r => r.includes("340"))).toBe(true)
+  })
+})
+
 describe("scoreCrypto — breadth gate pulls thin reads toward neutral", () => {
   it("a read with only exchange-native criteria doesn't reach an extreme score", () => {
     const result = scoreCrypto(baseInput({

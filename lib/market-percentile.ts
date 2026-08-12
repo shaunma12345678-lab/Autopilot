@@ -27,35 +27,81 @@ const FRAMES = "https://data.sec.gov/api/xbrl/frames/us-gaap"
 interface FrameEntry { cik: number; val: number }
 
 // Frames for a closed period are immutable, so this cache is correct rather
-// than merely convenient. Keyed by concept+unit+period.
-const frameCache = new Map<string, number[] | null>()
+// than merely convenient. Keyed by concept+unit+period. Stores the raw
+// {cik, val} pairs (sorted by val) so both the plain scale percentile below
+// and the margin percentile further down can share one fetch per
+// concept/period instead of each paying for its own SEC request.
+const framePairsCache = new Map<string, FrameEntry[] | null>()
 
-// Sorted values for a concept across every filer that reported it.
-async function getFrame(concept: string, period: string, unit = "USD"): Promise<number[] | null> {
+// A closed-period frame never changes in production, which is exactly why
+// the cache is unconditional above — but that means tests exercising
+// different mocked responses for the "same" period need a way to clear it
+// between cases. Test-only; nothing in the app calls this.
+export function __resetFrameCacheForTests(): void {
+  framePairsCache.clear()
+}
+
+async function getFramePairs(concept: string, period: string, unit = "USD"): Promise<FrameEntry[] | null> {
   const key = `${concept}/${unit}/${period}`
-  const cached = frameCache.get(key)
+  const cached = framePairsCache.get(key)
   if (cached !== undefined) return cached
 
   try {
     // throttledFetch already applies the SEC User-Agent and the 120ms request
     // floor, so headers must not be passed again here.
     const res = await throttledFetch(`${FRAMES}/${concept}/${unit}/${period}.json`)
-    if (!res.ok) { frameCache.set(key, null); return null }
+    if (!res.ok) { framePairsCache.set(key, null); return null }
 
     const data = await res.json() as { data?: FrameEntry[] }
-    const values = (data.data ?? [])
-      .map(d => d.val)
-      .filter(v => typeof v === "number" && isFinite(v))
-      .sort((a, b) => a - b)
+    const entries = (data.data ?? [])
+      .filter((d): d is FrameEntry => typeof d.val === "number" && isFinite(d.val) && typeof d.cik === "number")
+      .sort((a, b) => a.val - b.val)
 
     // A frame with few reporters is not a market distribution.
-    const result = values.length >= 100 ? values : null
-    frameCache.set(key, result)
+    const result = entries.length >= 100 ? entries : null
+    framePairsCache.set(key, result)
     return result
   } catch {
-    frameCache.set(key, null)
+    framePairsCache.set(key, null)
     return null
   }
+}
+
+// Sorted values for a concept across every filer that reported it.
+async function getFrame(concept: string, period: string, unit = "USD"): Promise<number[] | null> {
+  const pairs = await getFramePairs(concept, period, unit)
+  return pairs ? pairs.map(p => p.val) : null // already sorted by getFramePairs
+}
+
+// MARGIN PERCENTILES. Ratios themselves aren't published as frames — only
+// absolute-dollar concepts are — but a margin is just two absolute concepts
+// divided, and both halves ARE frames. Joining income-by-cik against
+// revenue-by-cik and dividing reconstructs the real cross-sectional margin
+// distribution: thousands of filers, not the few hundred rows
+// lib/sector-benchmarks.ts has accumulated in this system's own sample.
+async function getMarginPercentile(
+  incomeConcept: string, revenueConcept: string, period: string, ownMarginPct: number
+): Promise<{ percentile: number; peerCount: number } | null> {
+  const [incomePairs, revenuePairs] = await Promise.all([
+    getFramePairs(incomeConcept, period),
+    getFramePairs(revenueConcept, period),
+  ])
+  if (!incomePairs || !revenuePairs) return null
+
+  const revByCik = new Map(revenuePairs.map(e => [e.cik, e.val]))
+  const margins: number[] = []
+  for (const inc of incomePairs) {
+    const rev = revByCik.get(inc.cik)
+    // Revenue must be positive for a margin to mean anything, and a filer
+    // reporting income without revenue that period is usually a holding
+    // company or a mismatched fiscal-year join, not a real data point.
+    if (rev !== undefined && rev > 0) margins.push((inc.val / rev) * 100)
+  }
+  // Same 100-reporter floor as every other frame here — a distribution built
+  // from a handful of filers is noise wearing a number's clothing.
+  if (margins.length < 100) return null
+  margins.sort((a, b) => a - b)
+  return { percentile: percentileIn(margins, ownMarginPct), peerCount: margins.length }
 }
 
 // Percentile of `value` within a sorted array, 0-100.
@@ -80,6 +126,12 @@ export interface MarketPercentile {
 export interface MarketContext {
   percentiles: MarketPercentile[]
   reasons: string[]
+  /** Net margin percentile against every SEC filer reporting both revenue and
+   *  net income that period — null when the frame join didn't clear the
+   *  100-filer floor. Feeds a real scoring criterion in lib/stock-scoring.ts,
+   *  not just a reasons line. */
+  netMarginPercentile: number | null
+  netMarginPeerCount: number | null
 }
 
 // Concepts worth ranking market-wide. Deliberately absolute-dollar concepts
@@ -120,6 +172,8 @@ export async function getMarketContext(values: {
   totalLiabilities?: number | null
   longTermDebt?: number | null
   stockholdersEquity?: number | null
+  netMarginPct?: number | null
+  operatingMarginPct?: number | null
 }): Promise<MarketContext> {
   const lookup: Record<string, number | null | undefined> = {
     Revenues: values.revenueTtm,
@@ -192,5 +246,32 @@ export async function getMarketContext(values: {
     reasons.push(`⚠ Liabilities rank well above stockholders' equity across the whole market — ${liab.percentile.toFixed(0)}th percentile on liabilities against ${equity.percentile.toFixed(0)}th on equity, a market-wide leverage comparison the debt-to-equity ratio alone doesn't show.`)
   }
 
-  return { percentiles, reasons }
+  // Margin percentiles — computed separately from the RANKED loop above
+  // since a margin needs two frames joined by CIK, not one concept fetched
+  // directly.
+  let netMarginPercentile: number | null = null
+  let netMarginPeerCount: number | null = null
+  if (values.netMarginPct !== null && values.netMarginPct !== undefined && isFinite(values.netMarginPct)) {
+    for (const period of periods) {
+      const m = await getMarginPercentile("NetIncomeLoss", "Revenues", period, values.netMarginPct)
+      if (m) {
+        netMarginPercentile = m.percentile
+        netMarginPeerCount = m.peerCount
+        reasons.push(`Net margin ranks in the ${m.percentile.toFixed(0)}th percentile against ${m.peerCount.toLocaleString()} SEC filers reporting both revenue and net income that period — the real cross-sectional distribution, not a small internal sample.`)
+        break
+      }
+    }
+  }
+
+  if (values.operatingMarginPct !== null && values.operatingMarginPct !== undefined && isFinite(values.operatingMarginPct)) {
+    for (const period of periods) {
+      const m = await getMarginPercentile("OperatingIncomeLoss", "Revenues", period, values.operatingMarginPct)
+      if (m) {
+        reasons.push(`Operating margin ranks in the ${m.percentile.toFixed(0)}th percentile against ${m.peerCount.toLocaleString()} SEC filers reporting both figures that period.`)
+        break
+      }
+    }
+  }
+
+  return { percentiles, reasons, netMarginPercentile, netMarginPeerCount }
 }
