@@ -129,6 +129,77 @@ export default function AssetDetail({
         </div>
       </div>
 
+      {isStock && a.verdictSummary && (
+        <div className="rounded-2xl border border-indigo-500/30 bg-indigo-500/[0.06] px-4 py-3 space-y-2.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            {a.verdictLeadQuality && (
+              <span className={`text-[11px] font-black px-2.5 py-1 rounded-lg border uppercase ${
+                a.verdictLeadQuality === "strong_lead" ? "text-emerald-400 border-emerald-500/40 bg-emerald-500/10"
+                : a.verdictLeadQuality === "worth_watching" ? "text-blue-300 border-blue-500/40 bg-blue-500/10"
+                : a.verdictLeadQuality === "not_a_lead" ? "text-yellow-300 border-yellow-500/40 bg-yellow-500/10"
+                : "text-red-400 border-red-500/40 bg-red-500/10"
+              }`}>{String(a.verdictLeadQuality).replace(/_/g, " ")}</span>
+            )}
+            {a.verdictManagementQuality && (
+              <span className="text-[10px] font-semibold px-2 py-1 rounded-lg border border-gray-600/40 text-gray-300 bg-gray-800/50">
+                Management: {a.verdictManagementQuality}
+              </span>
+            )}
+          </div>
+          <p className="text-[12px] text-gray-200 leading-relaxed">{a.verdictSummary}</p>
+          {(Array.isArray(a.verdictKeyStrengths) && a.verdictKeyStrengths.length > 0) ||
+           (Array.isArray(a.verdictKeyConcerns) && a.verdictKeyConcerns.length > 0) ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <p className="text-[10px] font-bold text-emerald-400/80 uppercase tracking-wide mb-1">Why it&apos;s strong</p>
+                <List items={a.verdictKeyStrengths} tone="text-emerald-200/90" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-amber-400/80 uppercase tracking-wide mb-1">Why to be careful</p>
+                <List items={a.verdictKeyConcerns} tone="text-amber-200/90" />
+              </div>
+            </div>
+          ) : null}
+          {Array.isArray(a.verdictConflicts) && a.verdictConflicts.length > 0 && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
+              <p className="text-[10px] font-bold text-red-300 uppercase tracking-wide">Conflicts of interest disclosed</p>
+              <List items={a.verdictConflicts} tone="text-red-200" />
+            </div>
+          )}
+          {a.verdictConfidenceCaveat && (
+            <p className="text-[10px] text-gray-500 italic">{a.verdictConfidenceCaveat}</p>
+          )}
+          <p className="text-[9px] text-gray-600 pt-0.5">
+            Synthesized from the scores, filings and checks below — not a new analysis, and not advice. See &ldquo;Why this score&rdquo; and the sections below for the underlying evidence.
+          </p>
+        </div>
+      )}
+
+      {isStock && a.eventSignificanceHeadline && (
+        <div className={`rounded-xl border px-4 py-2.5 space-y-1 ${
+          a.eventSignificanceLevel === "major" ? "border-orange-500/40 bg-orange-500/10"
+          : a.eventSignificanceLevel === "moderate" ? "border-blue-500/30 bg-blue-500/10"
+          : "border-gray-700/40 bg-gray-900/50"
+        }`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-black uppercase tracking-wide text-gray-400">Recent development</span>
+            {a.eventSignificanceLevel && (
+              <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border uppercase ${
+                a.eventSignificanceLevel === "major" ? "text-orange-300 border-orange-500/40"
+                : a.eventSignificanceLevel === "moderate" ? "text-blue-300 border-blue-500/40"
+                : "text-gray-400 border-gray-600/40"
+              }`}>{a.eventSignificanceLevel}</span>
+            )}
+            {a.eventSignificanceDate && <span className="text-[10px] text-gray-500">{String(a.eventSignificanceDate).slice(0, 10)}</span>}
+          </div>
+          <p className="text-[11px] text-gray-200">{a.eventSignificanceHeadline}</p>
+          {a.eventSignificanceReasoning && <p className="text-[10px] text-gray-400">{a.eventSignificanceReasoning}</p>}
+          {a.eventSignificanceSourceUrl && (
+            <a href={a.eventSignificanceSourceUrl} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-400 hover:underline">Read the filing →</a>
+          )}
+        </div>
+      )}
+
       {a.actionRationale && (
         <div className={`rounded-xl border px-4 py-2.5 space-y-1 ${actionSignalStyle(a.actionSignal)}`}>
           <p className="text-[11px]">{a.actionRationale}</p>

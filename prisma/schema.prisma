@@ -704,6 +704,19 @@ model Ticker {
   // issue. Stored now.
   goingConcernHits         Int?
 
+  // Event significance (lib/event-significance.ts) — an AI read of the
+  // single freshest structurally-notable 8-K, judging scale from what's
+  // actually disclosed rather than treating every filing under one item
+  // code identically. Runs on the fast path specifically to catch new
+  // filings quickly; lastSignificantEventAccession prevents re-spending an
+  // AI call re-reading a filing already assessed.
+  lastSignificantEventAccession String?
+  eventSignificanceHeadline     String?
+  eventSignificanceLevel        String?   // major | moderate | minor | unclear
+  eventSignificanceReasoning    String?
+  eventSignificanceDate         String?
+  eventSignificanceSourceUrl    String?
+
   // Benford digit analysis (lib/benford.ts) — forensic, never accusatory.
   benfordMad               Float?
   benfordConformity        String?
@@ -731,6 +744,17 @@ model Ticker {
   bearConviction           String?
   bearWhatMustGoRight      Json?
   execChangeCount          Int?
+
+  // Investment verdict (lib/investment-verdict.ts) — synthesizes every
+  // signal above into one governing answer: is this well-run, and is it a
+  // good lead right now. The headline of the asset detail page.
+  verdictSummary            String?
+  verdictManagementQuality  String?   // strong | adequate | concerning | unclear
+  verdictLeadQuality        String?   // strong_lead | worth_watching | not_a_lead | avoid
+  verdictKeyStrengths       Json?
+  verdictKeyConcerns        Json?
+  verdictConflicts          Json?
+  verdictConfidenceCaveat   String?
 
   // Insider activity from Form 4 (see lib/form4-insider.ts)
   insiderBuyCount90d       Int?

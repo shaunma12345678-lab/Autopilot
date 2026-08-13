@@ -43,6 +43,8 @@ import { readProxyGovernance } from "@/lib/governance"
 import { detectConcentrationRisk, type ConcentrationRead } from "@/lib/concentration-risk"
 import { checkLitigation, type LitigationRead } from "@/lib/litigation-check"
 import { buildFalsificationSet, checkFalsified, type FalsificationCondition } from "@/lib/falsification"
+import { buildInvestmentVerdict } from "@/lib/investment-verdict"
+import { assessEventSignificance } from "@/lib/event-significance"
 
 export interface AnalyzeStockResult {
   ok: boolean
@@ -205,6 +207,55 @@ export async function analyzeAndUpsertTicker(
   // always run. This is what catches a restatement filed last week that no
   // backward-looking ratio can see.
   const liveEvents = summarizeLiveEvents(effectiveSubmissions?.recentForms ?? [])
+
+  // Event significance (lib/event-significance.ts) — runs on the FAST path,
+  // not gated behind opts.includeNarrative, because the whole point is
+  // catching a fresh, structurally important 8-K quickly rather than waiting
+  // for this company's turn in the slow deep-research rotation. Self-limiting
+  // on cost: it only fires when the freshest notable event is both recent
+  // (14 days) and one this company hasn't already been assessed for.
+  const freshestNotable = liveEvents.events.find(e =>
+    (e.severity !== "routine" || e.itemCodes.includes("1.01")) &&
+    Date.now() - new Date(e.date).getTime() < 14 * 86400000
+  )
+
+  let eventSignificance: Awaited<ReturnType<typeof assessEventSignificance>> = null
+  let significanceAccession: string | null = null
+
+  if (freshestNotable) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const priorSignificance = await (prisma.ticker as any).findFirst({
+      where: { symbol },
+      select: {
+        lastSignificantEventAccession: true, eventSignificanceHeadline: true,
+        eventSignificanceLevel: true, eventSignificanceReasoning: true,
+        eventSignificanceDate: true, eventSignificanceSourceUrl: true,
+      },
+    }).catch(() => null)
+
+    significanceAccession = priorSignificance?.lastSignificantEventAccession ?? null
+
+    if (priorSignificance?.lastSignificantEventAccession === freshestNotable.accessionNumber) {
+      // Already assessed this exact filing on a prior run — reuse rather
+      // than re-spending an AI call reading the same document again.
+      eventSignificance = priorSignificance.eventSignificanceHeadline ? {
+        headline: priorSignificance.eventSignificanceHeadline,
+        significance: priorSignificance.eventSignificanceLevel ?? "unclear",
+        reasoning: priorSignificance.eventSignificanceReasoning ?? "",
+        eventDate: priorSignificance.eventSignificanceDate ?? freshestNotable.date,
+        eventLabel: freshestNotable.label,
+        sourceUrl: priorSignificance.eventSignificanceSourceUrl ?? "",
+      } : null
+    } else {
+      const form = effectiveSubmissions?.recentForms?.find(f => f.accessionNumber === freshestNotable.accessionNumber)
+      if (form) {
+        eventSignificance = await assessEventSignificance(
+          cik, form.accessionNumber, form.primaryDocument, freshestNotable.date, freshestNotable.label
+        ).catch(() => null)
+        significanceAccession = freshestNotable.accessionNumber
+      }
+    }
+  }
 
   // DEEP RESEARCH — governance (DEF 14A), business narrative (10-K) and recent
   // news each cost a document fetch plus an AI call. Run sequentially they took
@@ -415,6 +466,49 @@ export async function analyzeAndUpsertTicker(
       }).catch(() => null)
     : null
 
+  // Investment verdict — synthesizes everything above into the one governing
+  // answer (lib/investment-verdict.ts). Runs only on the deep path and only
+  // once the bear case exists, since the verdict is instructed to weigh the
+  // kill shot as disqualifying when present.
+  const verdict = opts.includeNarrative && result.qualityScore !== null && result.dataConfidence !== "insufficient"
+    ? await buildInvestmentVerdict({
+        symbol,
+        name: effectiveSubmissions?.name ?? resolved.name,
+        qualityScore: result.qualityScore,
+        riskScore: result.riskScore,
+        strengthTier: result.strengthTier,
+        actionSignal: result.actionSignal,
+        convictionTier: conviction.tier,
+        convictionSummary: conviction.summary,
+        valuationTier: classifyValue(valuation.valuationScore, result.qualityScore, result.riskScore).tier,
+        valuationPercentile: valuation.ownHistoryPercentile,
+        piotroskiScore: piotroski.normalized,
+        altmanZone: altman.zone,
+        beneishFlag: beneish.flagged,
+        credibilityScore: contradiction.credibilityScore,
+        contradictionFlags: contradiction.flags,
+        governanceSummary: governance?.summary ?? null,
+        payAlignment: governance?.payAlignment ?? null,
+        relatedPartyTransactions: governance?.relatedPartyTransactions ?? [],
+        auditorConcerns: governance?.auditorConcerns ?? [],
+        dualClass: governance?.dualClass ?? null,
+        capitalAllocationReasons: capitalAllocation.reasons,
+        consistencyScore: consistency.score,
+        forwardScore: forward.forwardScore,
+        forwardReasons: forward.forwardReasons,
+        insiderSummary: insider?.summary ?? null,
+        litigationFlags: litigation?.flags ?? [],
+        concentrationFlags: concentration?.flags ?? [],
+        falsificationFragility: falsification.fragility,
+        falsificationSummary: falsification.summary,
+        falsificationTriggered: falsificationCheck?.triggered.map(t => t.label) ?? [],
+        bearSummary: bear?.summary ?? null,
+        bearKillShot: bear?.killShot ?? null,
+        hasRestatement: liveEvents.hasRestatement,
+        goingConcernHits: goingConcern.hits,
+      }).catch(() => null)
+    : null
+
   // Per-field source attribution — the integrity layer's core promise: a user
   // can always see whether a number was filed with the SEC, quoted from a
   // market feed, or computed by us.
@@ -520,6 +614,15 @@ export async function analyzeAndUpsertTicker(
     bearKillShot: bear?.killShot ?? null,
     bearConviction: bear?.bearConviction ?? null,
     bearWhatMustGoRight: bear?.whatWouldHaveToGoRight ?? null,
+
+    verdictSummary: verdict?.verdict ?? null,
+    verdictManagementQuality: verdict?.managementQuality ?? null,
+    verdictLeadQuality: verdict?.leadQuality ?? null,
+    verdictKeyStrengths: verdict?.keyStrengths ?? null,
+    verdictKeyConcerns: verdict?.keyConcerns ?? null,
+    verdictConflicts: verdict?.conflictsOfInterest ?? null,
+    verdictConfidenceCaveat: verdict?.confidenceCaveat ?? null,
+
     valuationScore: valuation.valuationScore,
     earningsYieldPct: valuation.earningsYieldPct,
     fcfYieldPct: valuation.fcfYieldPct,
@@ -582,6 +685,13 @@ export async function analyzeAndUpsertTicker(
     hasRestatement: liveEvents.hasRestatement,
     hasAuditorChange: liveEvents.hasAuditorChange,
     execChangeCount: liveEvents.execChangeCount,
+
+    lastSignificantEventAccession: significanceAccession,
+    eventSignificanceHeadline: eventSignificance?.headline ?? null,
+    eventSignificanceLevel: eventSignificance?.significance ?? null,
+    eventSignificanceReasoning: eventSignificance?.reasoning ?? null,
+    eventSignificanceDate: eventSignificance?.eventDate ?? null,
+    eventSignificanceSourceUrl: eventSignificance?.sourceUrl ?? null,
 
     ...(news ? {
       newsSummary: news.summary,
