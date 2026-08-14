@@ -21,23 +21,38 @@ describe("assessEventSignificance", () => {
     vi.mocked(runAgent).mockResolvedValueOnce({
       headline: "Signed a $500M supply agreement with Acme Corp.",
       significance: "major",
+      direction: "positive",
       reasoning: "The filing discloses a $500M dollar figure explicitly tied to a multi-year term.",
     })
     const result = await assessEventSignificance("0000320193", "0001193125-26-000001", "doc.htm", "2026-08-01", "Material agreement signed")
     expect(result).not.toBeNull()
     expect(result!.significance).toBe("major")
+    expect(result!.direction).toBe("positive")
     expect(result!.headline).toContain("Acme")
     expect(result!.sourceUrl).toBe("https://www.sec.gov/Archives/edgar/data/320193/000119312526000001/doc.htm")
     expect(result!.eventDate).toBe("2026-08-01")
   })
 
-  it("falls back to 'unclear' on an invalid significance value rather than guessing", async () => {
+  it("falls back to 'unclear' on an invalid significance or direction value rather than guessing", async () => {
     vi.mocked(fetchFilingText).mockResolvedValueOnce("Body text.")
     vi.mocked(runAgent).mockResolvedValueOnce({
-      headline: "Something happened.", significance: "huge_deal_bullish", reasoning: "test",
+      headline: "Something happened.", significance: "huge_deal_bullish", direction: "bullish", reasoning: "test",
     })
     const result = await assessEventSignificance("0000320193", "0001193125-26-000001", "doc.htm", "2026-08-01", "Material agreement signed")
     expect(result!.significance).toBe("unclear")
+    expect(result!.direction).toBe("unclear")
+  })
+
+  it("distinguishes a negative development from a positive one", async () => {
+    vi.mocked(fetchFilingText).mockResolvedValueOnce("CFO departs following an internal investigation into accounting practices.")
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      headline: "CFO departed following an internal accounting investigation.",
+      significance: "major",
+      direction: "negative",
+      reasoning: "The departure is explicitly tied to an accounting investigation, not a planned succession.",
+    })
+    const result = await assessEventSignificance("0000320193", "0001193125-26-000001", "doc.htm", "2026-08-01", "Executive or director change")
+    expect(result!.direction).toBe("negative")
   })
 
   it("returns null when the model call throws", async () => {

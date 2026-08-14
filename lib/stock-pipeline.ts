@@ -228,7 +228,7 @@ export async function analyzeAndUpsertTicker(
       where: { symbol },
       select: {
         lastSignificantEventAccession: true, eventSignificanceHeadline: true,
-        eventSignificanceLevel: true, eventSignificanceReasoning: true,
+        eventSignificanceLevel: true, eventSignificanceDirection: true, eventSignificanceReasoning: true,
         eventSignificanceDate: true, eventSignificanceSourceUrl: true,
       },
     }).catch(() => null)
@@ -241,6 +241,7 @@ export async function analyzeAndUpsertTicker(
       eventSignificance = priorSignificance.eventSignificanceHeadline ? {
         headline: priorSignificance.eventSignificanceHeadline,
         significance: priorSignificance.eventSignificanceLevel ?? "unclear",
+        direction: priorSignificance.eventSignificanceDirection ?? "unclear",
         reasoning: priorSignificance.eventSignificanceReasoning ?? "",
         eventDate: priorSignificance.eventSignificanceDate ?? freshestNotable.date,
         eventLabel: freshestNotable.label,
@@ -689,6 +690,7 @@ export async function analyzeAndUpsertTicker(
     lastSignificantEventAccession: significanceAccession,
     eventSignificanceHeadline: eventSignificance?.headline ?? null,
     eventSignificanceLevel: eventSignificance?.significance ?? null,
+    eventSignificanceDirection: eventSignificance?.direction ?? null,
     eventSignificanceReasoning: eventSignificance?.reasoning ?? null,
     eventSignificanceDate: eventSignificance?.eventDate ?? null,
     eventSignificanceSourceUrl: eventSignificance?.sourceUrl ?? null,

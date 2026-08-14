@@ -177,18 +177,22 @@ export default function AssetDetail({
 
       {isStock && a.eventSignificanceHeadline && (
         <div className={`rounded-xl border px-4 py-2.5 space-y-1 ${
-          a.eventSignificanceLevel === "major" ? "border-orange-500/40 bg-orange-500/10"
-          : a.eventSignificanceLevel === "moderate" ? "border-blue-500/30 bg-blue-500/10"
+          a.eventSignificanceDirection === "positive" ? "border-emerald-500/40 bg-emerald-500/10"
+          : a.eventSignificanceDirection === "negative" ? "border-red-500/40 bg-red-500/10"
+          : a.eventSignificanceDirection === "mixed" ? "border-yellow-500/30 bg-yellow-500/10"
           : "border-gray-700/40 bg-gray-900/50"
         }`}>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] font-black uppercase tracking-wide text-gray-400">Recent development</span>
-            {a.eventSignificanceLevel && (
+            {a.eventSignificanceDirection && a.eventSignificanceDirection !== "unclear" && (
               <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border uppercase ${
-                a.eventSignificanceLevel === "major" ? "text-orange-300 border-orange-500/40"
-                : a.eventSignificanceLevel === "moderate" ? "text-blue-300 border-blue-500/40"
-                : "text-gray-400 border-gray-600/40"
-              }`}>{a.eventSignificanceLevel}</span>
+                a.eventSignificanceDirection === "positive" ? "text-emerald-300 border-emerald-500/40"
+                : a.eventSignificanceDirection === "negative" ? "text-red-300 border-red-500/40"
+                : "text-yellow-300 border-yellow-500/40"
+              }`}>{a.eventSignificanceDirection === "positive" ? "good for the business" : a.eventSignificanceDirection === "negative" ? "bad for the business" : "mixed"}</span>
+            )}
+            {a.eventSignificanceLevel && (
+              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded border border-gray-600/40 text-gray-400 uppercase">{a.eventSignificanceLevel}</span>
             )}
             {a.eventSignificanceDate && <span className="text-[10px] text-gray-500">{String(a.eventSignificanceDate).slice(0, 10)}</span>}
           </div>
@@ -197,6 +201,9 @@ export default function AssetDetail({
           {a.eventSignificanceSourceUrl && (
             <a href={a.eventSignificanceSourceUrl} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-400 hover:underline">Read the filing →</a>
           )}
+          <p className="text-[9px] text-gray-600">
+            Judges impact on the business from what was disclosed — never a prediction of how the stock will react.
+          </p>
         </div>
       )}
 

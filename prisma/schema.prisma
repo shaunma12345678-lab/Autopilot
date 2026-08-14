@@ -713,6 +713,7 @@ model Ticker {
   lastSignificantEventAccession String?
   eventSignificanceHeadline     String?
   eventSignificanceLevel        String?   // major | moderate | minor | unclear
+  eventSignificanceDirection    String?   // positive | negative | mixed | unclear — business impact, never price
   eventSignificanceReasoning    String?
   eventSignificanceDate         String?
   eventSignificanceSourceUrl    String?
