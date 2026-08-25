@@ -112,6 +112,35 @@ model Site {
   @@index([slug])
 }
 
+// Every website generation, with the score it earned by ACTUALLY RENDERING
+// (lib/agents/site-verifier.ts) rather than by keyword presence. Replaces the
+// module-level counters in lib/agents/website-agent.ts, which reset on every
+// serverless cold start and so reported a quality baseline that was fiction
+// in production. Doubles as a build track record: what was generated, what
+// broke, and whether the auto-repair pass fixed it.
+model SiteBuild {
+  id             String   @id @default(cuid())
+  slug           String
+  title          String
+  businessType   String?
+  // Keyword heuristic from website-agent.ts — retained for comparison against
+  // the measured score, since the gap between them is the whole point.
+  heuristicScore Float?
+  // 0-10 from observed render failures. Null until a render pass reports in.
+  verifiedScore  Float?
+  passed         Boolean?
+  fatalCount     Int      @default(0)
+  majorCount     Int      @default(0)
+  minorCount     Int      @default(0)
+  issues         Json?
+  repairAttempted Boolean @default(false)
+  repairSucceeded Boolean?
+  createdAt      DateTime @default(now())
+
+  @@index([slug])
+  @@index([createdAt])
+}
+
 model Content {
   id          String      @id @default(cuid())
   businessId  String

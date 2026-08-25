@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import Link from "next/link"
+import {
+  instrumentHtml, evaluateRender, parseObservations,
+  type VerificationReport,
+} from "@/lib/agents/site-verifier"
 import AdminDistressMap from "@/components/admin/AdminDistressMap"
 import AdminRealEstate from "@/components/admin/AdminRealEstate"
 import MarketAnalysis from "@/components/dashboard/MarketAnalysis"
@@ -1492,6 +1496,119 @@ function SitesPanel({ password }: { password: string }) {
   const [publishing, setPublishing]     = useState(false)
   const promptRef                        = useRef<HTMLTextAreaElement>(null)
 
+  // ── Render verification (lib/agents/site-verifier.ts) ────────────────────
+  // The generator emits WebGL shaders, GSAP timelines and hand-written JS and
+  // never executes any of it, so a page whose script throws on line 1 shipped
+  // looking identical to one that works. This renders the real output in a
+  // hidden mobile-width iframe and reports what actually happened.
+  const [verifyReport, setVerifyReport] = useState<VerificationReport | null>(null)
+  const [verifying, setVerifying]       = useState(false)
+  const [repairing, setRepairing]       = useState(false)
+  const [verifyHtml, setVerifyHtml]     = useState<string | null>(null)
+  const verifyTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Refs, not state: the postMessage listener is registered once and would
+  // otherwise close over stale values from the render it was created in.
+  const buildIdRef                      = useRef<string | null>(null)
+  const repairedOnceRef                 = useRef(false)
+  const setBuildId = useCallback((id: string | null) => {
+    buildIdRef.current = id
+    repairedOnceRef.current = false   // new build — repair history resets
+  }, [])
+
+  const runVerification = useCallback((html: string) => {
+    if (!html) return
+    setVerifying(true)
+    setVerifyReport(null)
+    setVerifyHtml(instrumentHtml(html))
+    // The harness reports ~1.2s after load; if nothing arrives by well past
+    // that, the page hung hard enough that no result is coming.
+    if (verifyTimeout.current) clearTimeout(verifyTimeout.current)
+    verifyTimeout.current = setTimeout(() => {
+      setVerifying(prev => {
+        if (prev) {
+          setVerifyReport(evaluateRender({
+            jsErrors: ["The page never finished loading — no verification result was returned within 15 seconds."],
+            unhandledRejections: [], failedResources: [],
+            webglRequested: false, webglFailed: false,
+            brokenImages: 0, totalImages: 0, imagesMissingAlt: 0,
+            mobileOverflowPx: 0, emptySections: [], sectionCount: 0,
+            missingGlobals: [], bodyTextLength: 0, documentHeight: 0,
+          }))
+        }
+        return false
+      })
+    }, 15000)
+  }, [])
+
+  // Results arrive by postMessage from the instrumented iframe.
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      const payload = (e.data as { __siteVerifyResult?: unknown })?.__siteVerifyResult
+      if (!payload) return
+      const obs = parseObservations(payload)
+      if (!obs) return
+      if (verifyTimeout.current) clearTimeout(verifyTimeout.current)
+      const report = evaluateRender(obs)
+      setVerifyReport(report)
+      setVerifying(false)
+      setVerifyHtml(null)   // unmount the hidden iframe once it has reported
+
+      // Persist the measured score against this build. Best-effort — a failed
+      // stats write must never surface as a verification failure.
+      const id = buildIdRef.current
+      if (id) {
+        fetch("/api/admin/verify-site", {
+          method: "POST",
+          headers: { "x-admin-password": password, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            buildId: id,
+            observations: obs,
+            repairAttempted: repairedOnceRef.current,
+            repairSucceeded: repairedOnceRef.current && report.passed,
+          }),
+        }).catch(() => {})
+      }
+    }
+    window.addEventListener("message", onMessage)
+    return () => {
+      window.removeEventListener("message", onMessage)
+      if (verifyTimeout.current) clearTimeout(verifyTimeout.current)
+    }
+  }, [password])
+
+  async function repairSite() {
+    if (!preview || !verifyReport) return
+    setRepairing(true)
+    try {
+      const res = await fetch("/api/admin/repair-site", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ html: preview.html, observations: verifyReport.observations }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "Repair failed")
+
+      if (data.repaired) {
+        repairedOnceRef.current = true
+        setPreview(p => (p ? { ...p, html: data.html as string } : p))
+        setChatHistory(prev => [...prev, {
+          role: "ai",
+          text: `🔧 Repaired ${(data.fixedIssues as string[]).length} issue(s). Re-verifying the fix…`,
+        }])
+        runVerification(data.html as string)
+      } else {
+        setChatHistory(prev => [...prev, { role: "ai", text: `⚠ ${data.reason as string}` }])
+      }
+    } catch (err) {
+      setChatHistory(prev => [...prev, {
+        role: "ai",
+        text: `⚠ Repair failed: ${err instanceof Error ? err.message : String(err)}`,
+      }])
+    } finally {
+      setRepairing(false)
+    }
+  }
+
   // Detect if the user is issuing an edit command on an existing preview
   const EDIT_TRIGGERS = /^(change|make|update|fix|remove|add|replace|edit|modify|darker|lighter|bigger|smaller|shift|swap|convert|turn|color|font|size|hide|show|move|delete|rewrite|redo|adjust)/i
 
@@ -1622,14 +1739,17 @@ function SitesPanel({ password }: { password: string }) {
               break
 
             case "complete": {
-              const score  = data.qualityScore ? ` · Quality: ${(data.qualityScore as number).toFixed(1)}/10` : ""
               const iters  = (data.iterations as number) > 1 ? ` · ${data.iterations} passes` : ""
               const r      = data.research as { urlScraped: boolean; tavilyUsed: boolean; hasDesignSystem: boolean } | undefined
               const used   = [r?.urlScraped && "scraped site code", r?.tavilyUsed && "web research", r?.hasDesignSystem && "design system cloned"].filter(Boolean).join(" + ")
 
+              // The build id lets the verified render score be attached to this
+              // build once the page has actually been rendered below.
+              setBuildId((data.buildId as string | null) ?? null)
+
               setChatHistory(prev => [...prev, {
                 role: "ai",
-                text: `✓ "${data.title}" built${score}${iters}${used ? ` · ${used}` : ""}\n\nPreview loaded. Type an edit command (e.g. "make the hero darker") to refine, or hit Publish.`,
+                text: `✓ "${data.title}" built${iters}${used ? ` · ${used}` : ""}\n\nNow rendering it to verify it actually works…`,
               }])
               setPreview({
                 id:        "preview",
@@ -1647,6 +1767,8 @@ function SitesPanel({ password }: { password: string }) {
               setProgress(100)
               setPrompt("")
               setImageRefUrl("")
+              // Render the generated page for real before anyone trusts it.
+              runVerification(data.html as string)
               load()
               break
             }
@@ -1971,8 +2093,82 @@ function SitesPanel({ password }: { password: string }) {
                   >{publishing ? "Publishing…" : "Publish →"}</button>
                 </div>
               </div>
+              {/* Render verification — measured facts about the real page,
+                  not a keyword count. See lib/agents/site-verifier.ts. */}
+              {(verifying || verifyReport) && (
+                <div className="border-t border-gray-800 bg-gray-950/60 px-3 py-2">
+                  {verifying ? (
+                    <p className="text-[10px] text-gray-500 flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                      Rendering the page at mobile width to verify it actually works…
+                    </p>
+                  ) : verifyReport && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded border uppercase ${
+                            verifyReport.passed
+                              ? "text-emerald-400 border-emerald-600/50 bg-emerald-950/40"
+                              : "text-red-400 border-red-600/50 bg-red-950/40"
+                          }`}>
+                            {verifyReport.passed ? "✓ Verified" : "✕ Issues found"}
+                          </span>
+                          <span className="text-[10px] text-gray-400">
+                            Render score <span className="font-bold text-gray-200">{verifyReport.score}/10</span>
+                          </span>
+                          <span className="text-[10px] text-gray-600">{verifyReport.summary}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => runVerification(preview.html)}
+                            className="text-[10px] px-2 py-1 border border-gray-700 hover:border-gray-500 text-gray-500 hover:text-gray-300 rounded-lg transition-colors"
+                          >Re-verify</button>
+                          {verifyReport.issues.some(i => i.severity !== "minor") && (
+                            <button
+                              onClick={repairSite}
+                              disabled={repairing}
+                              className="text-[10px] px-2.5 py-1 border border-amber-700/60 bg-amber-950/30 text-amber-400 hover:bg-amber-950/60 rounded-lg transition-colors disabled:opacity-50 font-semibold"
+                            >{repairing ? "Repairing…" : "🔧 Auto-fix"}</button>
+                          )}
+                        </div>
+                      </div>
+                      {verifyReport.issues.length > 0 && (
+                        <div className="space-y-0.5 max-h-28 overflow-y-auto">
+                          {verifyReport.issues.slice(0, 8).map((iss, i) => (
+                            <p key={i} className={`text-[10px] ${
+                              iss.severity === "fatal" ? "text-red-400"
+                              : iss.severity === "major" ? "text-amber-400"
+                              : "text-gray-500"
+                            }`}>
+                              <span className="font-bold uppercase mr-1">{iss.severity}</span>{iss.detail}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <iframe srcDoc={preview.html} className="flex-1 w-full border-0" title="Site Preview" sandbox="allow-scripts allow-same-origin allow-popups" />
             </div>
+          )}
+
+          {/* Hidden verification frame — 390px wide (iPhone class) so the
+              overflow measurement reflects a real phone rather than a desktop
+              viewport. Unmounted as soon as it reports. */}
+          {verifyHtml && (
+            <iframe
+              srcDoc={verifyHtml}
+              title="Render verification"
+              sandbox="allow-scripts allow-same-origin"
+              aria-hidden="true"
+              tabIndex={-1}
+              style={{
+                position: "fixed", left: "-10000px", top: 0,
+                width: "390px", height: "844px", border: 0,
+                opacity: 0, pointerEvents: "none",
+              }}
+            />
           )}
         </div>
       )}

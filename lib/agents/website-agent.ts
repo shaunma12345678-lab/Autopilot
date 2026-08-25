@@ -12,7 +12,14 @@ function makeSlug(name: string): string {
 }
 
 // ── Quality baseline ──────────────────────────────────────────────────────────
-
+//
+// IN-PROCESS ONLY, AND DELIBERATELY NO LONGER REPORTED TO USERS. These are
+// module-level variables, so on Vercel they reset with every cold container —
+// they describe one lambda's lifetime, not the product's. They survive purely
+// as prompt context ("beat this bar"), where being approximate is harmless.
+//
+// The real, persisted build record lives in lib/agents/site-build-log.ts and
+// is keyed on VERIFIED render scores rather than the keyword heuristic below.
 let _qualityBaseline = 8.0
 let _totalGenerated  = 0
 
@@ -24,7 +31,14 @@ export function raiseQualityBaseline(score: number): void {
   if (score > _qualityBaseline) _qualityBaseline = Math.min(9.9, _qualityBaseline + 0.15)
 }
 
-// Instant heuristic scorer — no API call, no rate limit impact
+// Keyword-presence heuristic. NOT a measure of whether the page works — it
+// counts whether certain strings appear in the source, so a document whose
+// JavaScript throws on line 1 and renders blank scores identically to one
+// that works, because both contain the word "ShaderMaterial".
+//
+// Retained as a cheap signal of whether the generator ATTEMPTED the techniques
+// it was asked for. Whether the result actually runs is answered by rendering
+// it — see lib/agents/site-verifier.ts.
 function heuristicScore(html: string): number {
   const checks = [
     html.includes("ShaderMaterial"),

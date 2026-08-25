@@ -245,6 +245,7 @@ export const db = {
   entityAlias:      model("EntityAlias"),
   entityProperty:   model("EntityProperty"),
   underwriteCall:   model("UnderwriteCall"),
+  siteBuild:        model("SiteBuild"),
 
   // Prisma transaction compatibility — runs promises sequentially
   $transaction: async (fns: unknown[]) => {

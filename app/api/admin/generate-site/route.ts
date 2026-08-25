@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server"
-import { generateWebsite, getQualityBaseline, getGenerationCount, parseUserCommand } from "@/lib/agents/website-agent"
+import { generateWebsite, parseUserCommand } from "@/lib/agents/website-agent"
 import { buildResearchContext, analyzeScreenshot } from "@/lib/agents/site-researcher"
+import { recordBuild, getBuildStats } from "@/lib/agents/site-build-log"
 import { runAgent } from "@/lib/claude"
 
 export const maxDuration = 300
@@ -220,19 +221,36 @@ export async function POST(request: NextRequest) {
         }
 
         send("progress", { msg: "Saving your site…", pct: 97 })
+
+        // Record the build so the client can attach a verified render score to
+        // it. Best-effort: a stats row is never worth failing a generation for.
+        const buildId = await recordBuild({
+          slug: result.slug,
+          title: result.title,
+          businessType: parsed.type,
+          heuristicScore: result.qualityScore,
+        })
+        const stats = await getBuildStats()
+
         send("complete", {
           html:         result.html,
           title:        result.title,
           slug:         result.slug,
-          qualityScore: result.qualityScore,
+          // Explicitly named: this is the keyword heuristic, NOT a measure of
+          // whether the page works. The render score from the client-side
+          // verification pass is the one that reflects reality.
+          heuristicScore: result.qualityScore,
+          buildId,
           iterations:   result.iterations,
           research:     {
             ...researchMeta,
             designSystem: designSystemData,
           },
           meta: {
-            qualityBaseline: getQualityBaseline(),
-            totalGenerated:  getGenerationCount(),
+            verifiedBaseline: stats.verifiedBaseline,
+            verifiedCount:    stats.verifiedCount,
+            totalBuilds:      stats.totalBuilds,
+            passRatePct:      stats.passRatePct,
           },
           parsed,
         })
@@ -279,10 +297,17 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  // Real, persisted build stats. The previous version read module-level
+  // counters that reset on every serverless cold start, so the numbers it
+  // reported described one container's lifetime rather than the product's.
+  const stats = await getBuildStats()
+
   return Response.json({
-    qualityBaseline: getQualityBaseline(),
-    totalGenerated:  getGenerationCount(),
-    hasTavily:       !!(process.env.TAVILY_API_KEY),
-    hasAnthropic:    !!(process.env.ANTHROPIC_API_KEY),
+    verifiedBaseline: stats.verifiedBaseline,
+    verifiedCount:    stats.verifiedCount,
+    totalBuilds:      stats.totalBuilds,
+    passRatePct:      stats.passRatePct,
+    hasTavily:        !!(process.env.TAVILY_API_KEY),
+    hasAnthropic:     !!(process.env.ANTHROPIC_API_KEY),
   })
 }
