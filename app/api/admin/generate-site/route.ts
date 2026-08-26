@@ -176,49 +176,29 @@ export async function POST(request: NextRequest) {
 
         const directives = directivesResult.status === "fulfilled" ? directivesResult.value : null
 
-        // Step 3: Generate — send heartbeat every 8s so UI shows live progress
-        send("progress", { msg: "Generating your website with 20 techniques…", pct: 35 })
+        // Step 3: Generate. Progress is now REAL — each site section is its own
+        // model call, so the generator reports what actually finished rather
+        // than cycling scripted messages on an 8-second timer.
+        send("progress", { msg: "Generating your website section by section…", pct: 30 })
 
-        const generationMsgs = [
-          { pct: 42, msg: "Building hero section with WebGL shader…" },
-          { pct: 50, msg: "Writing kinetic word-reveal animations…" },
-          { pct: 58, msg: "Crafting service cards and layout…" },
-          { pct: 66, msg: "Adding testimonials with real copy…" },
-          { pct: 74, msg: "Assembling scroll-scrub animations…" },
-          { pct: 82, msg: "Applying grain texture and micro-interactions…" },
-          { pct: 88, msg: "Finalising typography and CTAs…" },
-          { pct: 93, msg: "Almost done — verifying all sections…" },
-        ]
-        let msgIdx = 0
-        const heartbeat = setInterval(() => {
-          if (msgIdx < generationMsgs.length) {
-            const m = generationMsgs[msgIdx++]
-            send("progress", { msg: m.msg, pct: m.pct })
-          }
-        }, 8000)
-
-        let result: Awaited<ReturnType<typeof generateWithRetry>>
-        try {
-          result = await generateWithRetry({
-            business: {
-              name:        parsed.name,
-              type:        parsed.type,
-              description: parsed.description,
-              location:    parsed.location,
-              phone:       parsed.phone    || null,
-              website:     parsed.website  || null,
-            },
-            brandVoice:      {},
-            brandColor:      parsed.brandColor,
-            services:        parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
-            tagline:         parsed.tagline || undefined,
-            reviews:         [],
-            researchContext: researchContext || undefined,
-            directives:      directives ?? undefined,
-          })
-        } finally {
-          clearInterval(heartbeat)
-        }
+        const result = await generateWithRetry({
+          business: {
+            name:        parsed.name,
+            type:        parsed.type,
+            description: parsed.description,
+            location:    parsed.location,
+            phone:       parsed.phone    || null,
+            website:     parsed.website  || null,
+          },
+          brandVoice:      {},
+          brandColor:      parsed.brandColor,
+          services:        parsed.services.length > 0 ? parsed.services : [`${parsed.type} Services`],
+          tagline:         parsed.tagline || undefined,
+          reviews:         [],
+          researchContext: researchContext || undefined,
+          directives:      directives ?? undefined,
+          onProgress:      (msg, pct) => send("progress", { msg, pct }),
+        })
 
         send("progress", { msg: "Saving your site…", pct: 97 })
 

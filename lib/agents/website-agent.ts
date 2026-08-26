@@ -661,12 +661,44 @@ export interface GenerateWebsiteParams {
   editRequest?:       string
   runCRO?:            boolean
   businessLiveData?:  { leadCount: number; reviewCount: number; avgRating: number; recentContent: string[]; totalRevenue?: string }
+  /** Real per-stage progress. Section-by-section generation knows exactly what
+   *  finished and when, so the UI no longer has to fake it on a timer. */
+  onProgress?:        (msg: string, pct: number) => void
+  /** Escape hatch back to the single-call path (see generateWebsite). */
+  singleCall?:        boolean
 }
 
 export interface GenerateWebsiteResult {
   html: string; title: string; slug: string
   qualityScore: number; iterations: number; researchUsed: boolean
   directives: SiteDirectives | null; complianceViolations: string[]; croResult: CROResult | null
+}
+
+// ── Bounded concurrency ───────────────────────────────────────────────────────
+//
+// Sections are independent, so they generate in parallel — but firing ten
+// model calls at once invites rate limiting, and a 429 mid-run costs more
+// wall time than the parallelism saved. Four at a time keeps the whole site
+// comfortably inside the route's 300s budget without tripping limits.
+const SECTION_CONCURRENCY = 4
+
+// Exported for testing: result ORDER is load-bearing here — sections are
+// assembled in array order, so an out-of-order return would scramble the page.
+export async function withConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const i = cursor++
+      results[i] = await fn(items[i], i)
+    }
+  })
+  await Promise.all(workers)
+  return results
 }
 
 // ── Single-call system prompt builder (lean — uses technique library) ─────────
@@ -887,6 +919,32 @@ SITE_HTML:
 <!DOCTYPE html>
 ...`
 
+  // ── SECTION-BY-SECTION (default) ───────────────────────────────────────────
+  //
+  // WHY THIS IS THE DEFAULT NOW. The single call below asks one response to
+  // contain the full CSS design system, ten sections of HTML, every technique's
+  // JavaScript, a WebGL shader and all the copy — inside 12,000 output tokens.
+  // The model has no choice but to ration, and every section gets roughly a
+  // tenth of the attention it needs. That is the real reason generated sites
+  // came out thin: not the prompt, the budget.
+  //
+  // Generating each section in its own call gives every one of them a full
+  // 6,000-token budget — roughly six times the total output — and lets each
+  // one be written with the model's whole attention. Sections are independent
+  // and share a fixed CSS contract (see buildSectionSystemPrompt), so they can
+  // run in parallel and still come out visually consistent.
+  //
+  // The single-call path is kept as a fallback: if section assembly fails for
+  // any reason, a thinner site beats no site.
+  if (!params.singleCall) {
+    try {
+      return await generateWebsiteSectioned(params, { sections, techniques, font, brandInt, mergedContext })
+    } catch (err) {
+      params.onProgress?.("Section build failed — falling back to single-pass generation…", 40)
+      console.error("[website-agent] sectioned generation failed, falling back:", err)
+    }
+  }
+
   // Single Groq call — 8K output tokens ≈ 32KB of complete HTML (~60-90 seconds)
   const hasAnthropic = !!(process.env.ANTHROPIC_API_KEY)
   const maxTokens    = hasAnthropic ? 12000 : 8000
@@ -914,6 +972,107 @@ SITE_HTML:
     qualityScore, iterations: 1,
     researchUsed: !!(researchContext || styleCloneContext || imageContext || competitorContext),
     directives: directives ?? null, complianceViolations, croResult,
+  }
+}
+
+// ── Section-by-section generation ─────────────────────────────────────────────
+//
+// Wires up the per-section architecture that already existed in this file
+// (generateDesignCss / generateSectionHtml / generateSharedJs / assembleHtml)
+// but was never called — generateWebsite went straight to one capped call.
+//
+// Budget comparison, which is the whole point:
+//   single call     1 × 12,000 tokens  for CSS + 10 sections + all JS
+//   section-by-section  1 × 5,000 (CSS) + 10 × 6,000 (sections) + 1 × 4,000 (JS)
+//
+// Every section is also written in isolation, so the model is not trading
+// hero quality against footer quality inside one response.
+async function generateWebsiteSectioned(
+  params: GenerateWebsiteParams,
+  plan: {
+    sections: SectionType[]
+    techniques: TechniqueKey[]
+    font: { import: string; display: string; body: string }
+    brandInt: string
+    mergedContext: string
+  }
+): Promise<GenerateWebsiteResult> {
+  const { business, brandColor, services, tagline, reviews = [], directives,
+    shaderGlsl, competitorContext, businessLiveData, onProgress } = params
+  const { sections, techniques, font, brandInt, mergedContext } = plan
+
+  onProgress?.(`Planning ${sections.length} sections…`, 30)
+
+  // CSS/JS carry no dependency on section markup (the CSS contract is fixed in
+  // buildSectionSystemPrompt), so all three stages run concurrently.
+  const designCssPromise = generateDesignCss({
+    business: { name: business.name, type: business.type, location: business.location },
+    brandColor, tagline, font, techniques, directives,
+  })
+  const sharedJsPromise = generateSharedJs({
+    business: { name: business.name, type: business.type },
+    brandColor, brandInt, techniques, sections, directives,
+  })
+
+  let completed = 0
+  const sectionHtml = await withConcurrency(sections, SECTION_CONCURRENCY, async (sectionType) => {
+    const html = await generateSectionHtml(sectionType, {
+      business: {
+        name: business.name, type: business.type, location: business.location,
+        phone: business.phone, description: business.description,
+      },
+      brandColor, brandInt, services, tagline, reviews, font, techniques,
+      directives, shaderGlsl,
+      researchContext: mergedContext || undefined,
+      competitorContext, businessLiveData,
+    })
+    completed++
+    // Real progress — this section genuinely just finished.
+    onProgress?.(
+      `Built ${sectionType} (${completed}/${sections.length})…`,
+      Math.round(35 + (completed / sections.length) * 45)
+    )
+    return { type: sectionType, html }
+  })
+
+  onProgress?.("Assembling design system and animations…", 85)
+  const [designCss, sharedJs] = await Promise.all([designCssPromise, sharedJsPromise])
+
+  // A section that came back empty would leave a visible hole; dropping it is
+  // better than assembling a page with a gap where the markup should be.
+  const usable = sectionHtml.filter(s => s.html && s.html.length > 40)
+  if (usable.length < Math.ceil(sections.length / 2)) {
+    throw new Error(`Only ${usable.length} of ${sections.length} sections generated usable markup`)
+  }
+
+  const title = `${business.name} — ${business.type}`
+  const slug  = makeSlug(business.name)
+
+  let html = assembleHtml({
+    business: {
+      name: business.name, type: business.type,
+      location: business.location, phone: business.phone,
+    },
+    brandColor, font, designCss, sections: usable, sharedJs, title, slug,
+  })
+  html = postProcess(html, brandColor, brandInt)
+
+  const qualityScore = heuristicScore(html)
+  raiseQualityBaseline(qualityScore)
+
+  const complianceViolations = directives ? await verifyCompliance(html, directives) : []
+
+  onProgress?.("Finalising…", 95)
+
+  return {
+    html, title, slug,
+    qualityScore,
+    // One pass per section plus CSS and JS — reported honestly rather than as 1.
+    iterations: usable.length + 2,
+    researchUsed: !!(params.researchContext || params.styleCloneContext || params.imageContext || competitorContext),
+    directives: directives ?? null,
+    complianceViolations,
+    croResult: null,
   }
 }
 
