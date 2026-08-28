@@ -176,6 +176,19 @@ export async function POST(request: NextRequest) {
 
         const directives = directivesResult.status === "fulfilled" ? directivesResult.value : null
 
+        // Site quality tracks the model far more than anything else here, and
+        // lib/claude.ts silently falls back to Groq llama-3.3-70b whenever
+        // ANTHROPIC_API_KEY is unset. That fallback is right for bulk scoring
+        // work and wrong for this: generated sites are the deliverable. Saying
+        // so plainly beats letting someone judge output quality without
+        // knowing which model produced it.
+        if (!process.env.ANTHROPIC_API_KEY) {
+          send("progress", {
+            msg: "⚠ ANTHROPIC_API_KEY not set — generating with Groq llama-3.3-70b, which produces materially weaker sites than Claude.",
+            pct: 28,
+          })
+        }
+
         // Step 3: Generate. Progress is now REAL — each site section is its own
         // model call, so the generator reports what actually finished rather
         // than cycling scripted messages on an 8-second timer.

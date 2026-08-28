@@ -1,4 +1,4 @@
-import { runAgent } from "@/lib/claude"
+import { runAgent, type ModelTier } from "@/lib/claude"
 import {
   T, selectTechniques, planSections, buildTechniqueBlock,
   type SectionType, type TechniqueKey,
@@ -289,7 +289,10 @@ Generate:
 
 Directives override: ${directives ? JSON.stringify({darkMode:directives.darkMode,tone:directives.tone,colorScheme:directives.colorScheme}) : "none"}
 ${directives?.darkMode === false ? "LIGHT THEME: use #fafafa for --bg, #0f172a for --text, adjust surface/border for light mode" : ""}`,
-    { model: "sonnet", maxTokens: 6000, jsonMode: false }
+    // Premium tier: this call decides the typography scale, palette and spacing
+    // that every other section inherits. Nothing downstream recovers from a
+    // mediocre design system, so it is worth the better model.
+    { model: premiumEnabled() ? "opus" : "sonnet", maxTokens: 6000, jsonMode: false }
   ) as string
 
   return raw.trim()
@@ -392,7 +395,7 @@ ${competitorContext ? `Competitor intel: ${competitorContext.slice(0,400)}` : ""
 Output ONLY the HTML for the ${sectionType} section — starting with <section, <nav, or <footer. No <html>, <head>, <body>, <style> or <script> wrappers. Use all CSS vars. Make it exceptional.`
 
   const raw = await runAgent(systemPrompt, userPrompt, {
-    model: "sonnet", maxTokens: 6000, jsonMode: false,
+    model: tierForSection(sectionType), maxTokens: 6000, jsonMode: false,
   }) as string
 
   return raw.replace(/^```(?:html)?\n?/i,"").replace(/\n?```$/i,"").trim()
@@ -681,6 +684,27 @@ export interface GenerateWebsiteResult {
 // wall time than the parallelism saved. Four at a time keeps the whole site
 // comfortably inside the route's 300s budget without tripping limits.
 const SECTION_CONCURRENCY = 4
+
+// ── Model tier per section ────────────────────────────────────────────────────
+//
+// Not every section carries equal weight in how good a site FEELS. The hero is
+// the entire first impression, and the design system decides the typography,
+// palette and spacing every other section inherits — get those two right and
+// the site reads as premium even where later sections are merely solid. Get
+// them wrong and nothing downstream recovers.
+//
+// So the expensive model is spent where it changes the verdict, and the
+// default model handles the rest. Set WEBSITE_PREMIUM_MODEL=off to run the
+// whole build on the default tier.
+const PREMIUM_SECTIONS = new Set<SectionType>(["hero"])
+
+function premiumEnabled(): boolean {
+  return process.env.WEBSITE_PREMIUM_MODEL !== "off"
+}
+
+function tierForSection(sectionType: SectionType): ModelTier {
+  return premiumEnabled() && PREMIUM_SECTIONS.has(sectionType) ? "opus" : "sonnet"
+}
 
 // Exported for testing: result ORDER is load-bearing here — sections are
 // assembled in array order, so an out-of-order return would scramble the page.
