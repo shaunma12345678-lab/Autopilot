@@ -8,6 +8,7 @@ import {
 } from "@/lib/agents/site-verifier"
 import AdminDistressMap from "@/components/admin/AdminDistressMap"
 import AdminRealEstate from "@/components/admin/AdminRealEstate"
+import RenovationCalculator from "@/components/admin/RenovationCalculator"
 import MarketAnalysis from "@/components/dashboard/MarketAnalysis"
 import FixerUppers from "@/components/dashboard/FixerUppers"
 import BestDeals from "@/components/dashboard/BestDeals"
@@ -2183,7 +2184,7 @@ export default function AdminPage() {
   const [agentData, setAgentData]   = useState<AgentData | null>(null)
   const [error, setError]           = useState("")
   const [loading, setLoading]       = useState(false)
-  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder" | "index" | "viral" | "content-engine" | "finance" | "stocks-crypto">("overview")
+  const [tab, setTab]               = useState<"overview" | "ap-agents" | "bos-agents" | "automations" | "queue" | "integrations" | "sandbox" | "users" | "businesses" | "sites" | "real-estate" | "distress-map" | "markets" | "fixers" | "best-deals" | "agent" | "distress-index" | "rental-calc" | "cash-buyers" | "pipeline" | "simulator" | "voice" | "inbound" | "acquisition" | "seller-finder" | "index" | "viral" | "content-engine" | "finance" | "stocks-crypto" | "reno-roi">("overview")
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const savedPw = typeof window !== "undefined" ? sessionStorage.getItem("ap_admin_pw") ?? "" : ""
@@ -2252,6 +2253,7 @@ export default function AdminPage() {
     { id: "bos-agents",   label: "Business OS" },
     { id: "automations",  label: "Automations" },
     { id: "agent",        label: "🤖 Agent" },
+    { id: "reno-roi",     label: "🔨 Reno ROI" },
     { id: "real-estate",  label: "🏚 Real Estate" },
     { id: "stocks-crypto", label: "📈 Stocks & Crypto" },
     { id: "seller-finder", label: "🧲 Seller Finder" },
@@ -2341,6 +2343,7 @@ export default function AdminPage() {
           {tab === "fixers" && <FixerUppers password={pw} />}
           {tab === "best-deals" && <BestDeals password={pw} />}
           {tab === "agent" && <AgentConsole password={pw} />}
+          {tab === "reno-roi" && <RenovationCalculator />}
           {tab === "distress-index" && <DistressIndex password={pw} />}
           {tab === "rental-calc" && <RentalCalculator />}
           {tab === "cash-buyers" && <CashBuyers password={pw} />}
