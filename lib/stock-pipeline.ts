@@ -39,6 +39,7 @@ import { checkContradictions } from "@/lib/contradiction-check"
 import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { assessStockConviction } from "@/lib/conviction"
 import { computeCapitalAllocation } from "@/lib/capital-allocation"
+import { assessIntrinsicValue, annualizedGrowthPct } from "@/lib/intrinsic-value"
 import { readProxyGovernance } from "@/lib/governance"
 import { readLeadership, type LeadershipRead } from "@/lib/leadership"
 import { detectConcentrationRisk, type ConcentrationRead } from "@/lib/concentration-risk"
@@ -198,6 +199,27 @@ export async function analyzeAndUpsertTicker(
   const balanceSheet = computeBalanceSheetRisk(series, fundamentals.freeCashFlowTtm)
   const accounting = computeAccountingQuality(series)
   const capitalAllocation = computeCapitalAllocation(series, history.bars)
+
+  // ── Absolute value: is this worth anything, not merely cheaper than usual ──
+  // lib/valuation.ts answers the RELATIVE question. A business in permanent
+  // decline gets cheaper against its own history the whole way down, so an
+  // absolute test is needed alongside it.
+  const capexByEnd = new Map((series.capex ?? []).map(o => [o.end, o.value]))
+  const fcfSeries = (series.cfo ?? []).map(o => {
+    const cx = capexByEnd.get(o.end)
+    return cx === undefined ? null : o.value - Math.abs(cx)
+  })
+  const intrinsic = assessIntrinsicValue({
+    marketCap,
+    freeCashFlowTtm: fundamentals.freeCashFlowTtm,
+    fcfGrowthPct: annualizedGrowthPct(fcfSeries),
+    roicPct: fundamentals.roicPct,
+    betaVsSpy: priceMetrics?.betaVsSpy ?? null,
+    totalDebt: (series.longTermDebt?.[0]?.value ?? 0) + (series.shortTermDebt?.[0]?.value ?? 0) || null,
+    interestExpense: series.interestExpense?.[0]?.value ?? null,
+    effectiveTaxRatePct: balanceSheet.effectiveTaxRatePct,
+  })
+
 
   // Form 4 parsing costs one small fetch per filing, so it's capped and
   // guarded rather than gated behind an opt-in flag.
@@ -376,7 +398,7 @@ export async function analyzeAndUpsertTicker(
       liveEvents.riskPenalty + (news?.riskPenalty ?? 0) +
       balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0) + accounting.riskPenalty +
       (riskDiff?.riskPenalty ?? 0) + contradiction.riskPenalty + (concentration?.riskPenalty ?? 0) +
-      (litigation?.riskPenalty ?? 0) + (leadership?.riskPenalty ?? 0),
+      (litigation?.riskPenalty ?? 0) + (leadership?.riskPenalty ?? 0) + intrinsic.riskPenalty,
     externalRiskFlags: [
       ...liveEvents.flags,
       ...balanceSheet.flags,
@@ -392,6 +414,7 @@ export async function analyzeAndUpsertTicker(
       ...(concentration?.flags ?? []),
       ...(litigation?.flags ?? []),
       ...(leadership?.flags ?? []),
+      ...intrinsic.flags,
     ],
     hasRestatement: liveEvents.hasRestatement,
     forwardScore: forward.forwardScore,

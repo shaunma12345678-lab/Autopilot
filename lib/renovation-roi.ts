@@ -245,8 +245,83 @@ export interface RoiReport {
   projectedValue: number
   /** True when planned work pushes past what the street supports. */
   exceedsCeiling: boolean
+  /** How much SHOULD be spent, as distinct from what was proposed. */
+  budget: BudgetGuidance
   summary: string
   warnings: string[]
+}
+
+export interface BudgetGuidance {
+  /** Spend beyond this cannot be recovered on a sale, by definition of the ceiling. */
+  maxRecoverableSpend: number
+  /** The subset of the proposed plan that actually pays, and what it costs. */
+  recommendedSpend: number
+  recommendedItems: string[]
+  /** Items to drop, with the reason. */
+  cutItems: Array<{ label: string; reason: string }>
+  /** Net gain if only the recommended subset is done. */
+  recommendedNetGain: number
+  /** Net gain if the whole proposed plan is done — the comparison that matters. */
+  fullPlanNetGain: number
+  guidance: string
+}
+
+/**
+ * How much to actually spend.
+ *
+ * A ranked list answers "which renovations are best" but not "how much should
+ * I put in", which is the question with money attached. The ceiling gives a
+ * hard upper bound — spend past the headroom and the excess cannot come back
+ * on a sale, whatever it is spent on.
+ *
+ * Within that bound, the recommended budget is the subset of the proposed plan
+ * that still pays for itself, dropping the rest. Table stakes are kept even
+ * when their own return is negative, because they gate the sale rather than
+ * add to the price.
+ */
+function buildBudget(lines: RoiLine[], headroom: number, tableStakesKeys: Set<string>): BudgetGuidance {
+  const recommended: RoiLine[] = []
+  const cuts: Array<{ label: string; reason: string }> = []
+
+  for (const line of lines) {
+    const mustDo = tableStakesKeys.has(line.key)
+    if (mustDo) { recommended.push(line); continue }
+    if (line.netGain > 0) { recommended.push(line); continue }
+
+    cuts.push({
+      label: line.label,
+      reason: line.valueLostToCeiling > 0
+        ? `Costs $${line.cost.toLocaleString()} but only $${line.valueAdded.toLocaleString()} can be recovered — ` +
+          `$${line.valueLostToCeiling.toLocaleString()} of it pushes past what the street supports.`
+        : `Costs $${line.cost.toLocaleString()} and returns $${line.valueAdded.toLocaleString()} — a net loss of ` +
+          `$${Math.abs(line.netGain).toLocaleString()} even before risk.`,
+    })
+  }
+
+  const recommendedSpend = recommended.reduce((s, l) => s + l.cost + l.holdingCost, 0)
+  const recommendedNetGain = recommended.reduce((s, l) => s + l.netGain, 0)
+  const fullPlanNetGain = lines.reduce((s, l) => s + l.netGain, 0)
+
+  const guidance = cuts.length === 0
+    ? `Every item in this plan pays for itself. Budget about $${recommendedSpend.toLocaleString()}, and do not exceed ` +
+      `$${Math.round(headroom).toLocaleString()} in total — beyond that the street cannot support the price.`
+    : recommendedSpend === 0
+      ? `Nothing in this plan returns more than it costs on this property. The binding constraint is the ceiling: ` +
+        `there is only $${Math.round(headroom).toLocaleString()} of headroom to work with.`
+      : `Spend about $${recommendedSpend.toLocaleString()}, not the full $${lines.reduce((s, l) => s + l.cost, 0).toLocaleString()} ` +
+        `proposed. Dropping ${cuts.length} item${cuts.length === 1 ? "" : "s"} improves the net result by ` +
+        `$${Math.round(recommendedNetGain - fullPlanNetGain).toLocaleString()} — the cut work costs more than the ` +
+        `street will pay for it.`
+
+  return {
+    maxRecoverableSpend: Math.round(headroom),
+    recommendedSpend: Math.round(recommendedSpend),
+    recommendedItems: recommended.map(l => l.label),
+    cutItems: cuts,
+    recommendedNetGain: Math.round(recommendedNetGain),
+    fullPlanNetGain: Math.round(fullPlanNetGain),
+    guidance,
+  }
 }
 
 // When a broader and a narrower entry both match the same words, the narrower
@@ -457,6 +532,11 @@ export function analyzeRenovationRoi(input: RoiInput): RoiReport {
     warnings.push("As scoped, this plan costs more than it returns. The individual lines below show which items are dragging it down.")
   }
 
+  const tableStakesKeys = new Set(
+    RENOVATION_CATALOG.filter(r => r.tableStakes).map(r => r.key)
+  )
+  const budget = buildBudget(lines, headroom, tableStakesKeys)
+
   const best = lines.find(l => l.verdict === "do_first" || l.verdict === "worth_doing")
   const summary = totalNetGain >= 0
     ? `Projected value $${Math.round(projectedValue).toLocaleString()} against a ceiling of ` +
@@ -475,7 +555,7 @@ export function analyzeRenovationRoi(input: RoiInput): RoiReport {
     lines, totalCost, totalValueAdded: Math.round(totalValueAdded),
     totalNetGain: Math.round(totalNetGain),
     projectedValue: Math.round(projectedValue),
-    exceedsCeiling, summary, warnings,
+    exceedsCeiling, budget, summary, warnings,
   }
 }
 
@@ -483,7 +563,12 @@ function emptyReport(error: string): RoiReport {
   return {
     ok: false, error, asIsValue: 0, neighborhoodCeiling: 0, headroom: 0, headroomPct: 0,
     lines: [], totalCost: 0, totalValueAdded: 0, totalNetGain: 0, projectedValue: 0,
-    exceedsCeiling: false, summary: "", warnings: [],
+    exceedsCeiling: false,
+    budget: {
+      maxRecoverableSpend: 0, recommendedSpend: 0, recommendedItems: [], cutItems: [],
+      recommendedNetGain: 0, fullPlanNetGain: 0, guidance: "",
+    },
+    summary: "", warnings: [],
   }
 }
 

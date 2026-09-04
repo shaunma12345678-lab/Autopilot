@@ -218,3 +218,50 @@ describe("specificity — a broader entry must not double-count a narrower one",
     expect(r.lines.length).toBe(3)
   })
 })
+
+describe("budget guidance — how much to actually put in", () => {
+  it("caps recoverable spend at the headroom", () => {
+    const r = analyzeRenovationRoi(base({ asIsValue: 420_000, neighborhoodCeiling: 450_000 }))
+    expect(r.budget.maxRecoverableSpend).toBe(30_000)
+  })
+
+  it("cuts items that cost more than they return, and says why", () => {
+    const r = analyzeRenovationRoi(base({
+      description: "full kitchen gut and bathroom",
+      asIsValue: 440_000, neighborhoodCeiling: 450_000, condition: "good",
+    }))
+    expect(r.budget.cutItems.length).toBeGreaterThan(0)
+    expect(r.budget.cutItems[0].reason).toMatch(/net loss|cannot be recovered|pushes past/i)
+  })
+
+  it("recommends spending less than proposed when items don't pay", () => {
+    const r = analyzeRenovationRoi(base({
+      description: "full kitchen gut and bathroom and flooring",
+      asIsValue: 440_000, neighborhoodCeiling: 450_000, condition: "good",
+    }))
+    expect(r.budget.recommendedSpend).toBeLessThan(r.totalCost)
+    expect(r.budget.recommendedNetGain).toBeGreaterThan(r.budget.fullPlanNetGain)
+  })
+
+  it("keeps table stakes in the budget even when their own return is negative", () => {
+    const r = analyzeRenovationRoi(base({ description: "roof replacement", condition: "good" }))
+    expect(r.budget.recommendedItems.some(l => /roof/i.test(l))).toBe(true)
+    expect(r.budget.cutItems.some(c => /roof/i.test(c.label))).toBe(false)
+  })
+
+  it("keeps everything when every item pays", () => {
+    const r = analyzeRenovationRoi(base({
+      description: "interior paint", asIsValue: 250_000, neighborhoodCeiling: 500_000, condition: "poor",
+    }))
+    expect(r.budget.cutItems).toHaveLength(0)
+    expect(r.budget.guidance).toMatch(/pays for itself/i)
+  })
+
+  it("says so plainly when nothing in the plan is worth doing", () => {
+    const r = analyzeRenovationRoi(base({
+      description: "full kitchen gut", asIsValue: 449_000, neighborhoodCeiling: 450_000, condition: "good",
+    }))
+    expect(r.budget.recommendedSpend).toBe(0)
+    expect(r.budget.guidance).toMatch(/nothing in this plan/i)
+  })
+})
