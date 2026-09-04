@@ -95,6 +95,10 @@ export interface CryptoConvictionInput {
   liquidityGrade: string | null
   fdvToMcapRatio: number | null
   protocolRevenue30dUsd: number | null
+  /** Capital locked in the protocol. Paired with revenue because some real
+   *  protocols (lending, staking) hold enormous deposits while charging very
+   *  little — judging those on fee income alone fails them unfairly. */
+  tvlUsd?: number | null
   devActivityScore: number | null
   dataConfidence: string
 }
@@ -119,8 +123,19 @@ export function assessCryptoConviction(i: CryptoConvictionInput): ConvictionResu
     gate("Limited dilution overhang", i.fdvToMcapRatio === null ? null : i.fdvToMcapRatio <= 1.5,
       `FDV ${i.fdvToMcapRatio?.toFixed(2) ?? "—"}x market cap — needs 1.5x or below`),
 
-    gate("Generates real revenue", i.protocolRevenue30dUsd === null ? null : i.protocolRevenue30dUsd > 0,
-      i.protocolRevenue30dUsd ? `$${Math.round(i.protocolRevenue30dUsd).toLocaleString()} of protocol revenue in 30d` : "No protocol revenue reported"),
+    // Economic substance: fee income OR capital entrusted to the protocol.
+    // Either one is evidence that something real is happening; requiring both
+    // would fail sound protocols, and requiring neither is how a memecoin
+    // outranks a working one.
+    gate("Has real economic substance",
+      (i.protocolRevenue30dUsd === null && (i.tvlUsd === null || i.tvlUsd === undefined))
+        ? null
+        : ((i.protocolRevenue30dUsd ?? 0) > 0 || (i.tvlUsd ?? 0) > 0),
+      (i.protocolRevenue30dUsd ?? 0) > 0
+        ? `$${Math.round(i.protocolRevenue30dUsd!).toLocaleString()} of protocol revenue in 30d`
+        : (i.tvlUsd ?? 0) > 0
+          ? `$${Math.round(i.tvlUsd!).toLocaleString()} of capital locked in the protocol`
+          : "Neither protocol revenue nor locked capital"),
 
     gate("Actively built", i.devActivityScore === null ? null : i.devActivityScore >= 50,
       `Developer activity ${i.devActivityScore ?? "—"}/100 — needs 50+`),

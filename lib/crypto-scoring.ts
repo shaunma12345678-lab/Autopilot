@@ -45,6 +45,13 @@ export interface CryptoScoreInput {
    *  reporter floor yet — the fixed formula is the fallback in that case. */
   revenueYieldPercentile?: number | null
   revenueYieldPeerCount?: number | null
+  /** Capital actually deposited in the protocol (lib/defillama-client.ts).
+   *  Null means DefiLlama does not track this as a protocol at all, which is
+   *  itself informative — it is scored as "no TVL", not as missing data. */
+  tvlUsd?: number | null
+  /** True when the asset resolved to a DefiLlama protocol, so an absent
+   *  revenue or TVL figure means genuinely zero rather than unfetched. */
+  protocolResolved?: boolean
 }
 
 export type StrengthTier = "strong" | "mixed" | "weak"
@@ -143,6 +150,19 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     scored.push({ label, weight: 14, points })
   }
 
+  // Total value locked — capital users have actually committed. Volume can be
+  // wash-traded and social metrics botted; TVL is money in contracts that
+  // anyone can verify. TVL relative to market cap is the sharper form: it asks
+  // whether the market is paying more for the token than users have entrusted
+  // to the protocol behind it.
+  const tvlUsd = input.tvlUsd ?? null
+  const tvlToMcap = tvlUsd !== null && market.marketCapUsd && market.marketCapUsd > 0
+    ? tvlUsd / market.marketCapUsd : null
+  if (tvlToMcap !== null) {
+    scored.push({ label: "Capital locked vs. market cap (TVL)", weight: 13,
+      points: clamp(tvlToMcap * 120, 0, 100) })
+  }
+
   // Supply already circulating — low means heavy future dilution ahead.
   const circulatingSupplyPct = market.maxSupply && market.maxSupply > 0 && market.circulatingSupply
     ? (market.circulatingSupply / market.maxSupply) * 100 : null
@@ -223,6 +243,48 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   if (breadth < 0.75) {
     // Blend toward 50 — a thin read shouldn't be able to reach the extremes.
     qualityScore = Math.round(50 + (qualityScore - 50) * (0.4 + breadth * 0.8))
+  }
+
+  // ── SUBSTANCE GATE ────────────────────────────────────────────────────────
+  //
+  // The bug this fixes, found by inspecting the live rankings: PEPE was the
+  // highest-scoring asset in the system at 92/100, with FARTCOIN at 87 and WIF
+  // at 86 — above Ethereum. Every one of them had no protocol revenue, no
+  // developer activity and no on-chain read.
+  //
+  // Weight renormalization caused it. Dropping a criterion and redistributing
+  // its weight is the right behaviour on the stock side, where a missing figure
+  // means the filing could not be fetched. In crypto it is exactly wrong: a
+  // token with no protocol revenue usually HAS no protocol revenue, and a token
+  // with no GitHub HAS no public development. Renormalizing away the criteria a
+  // memecoin fails leaves it scored purely on the ones it aces — fully
+  // circulating supply, no dilution overhang, a clean trivial contract, decent
+  // exchange liquidity — and it ends up outranking a working protocol.
+  //
+  // So absence of fundamentals is treated as a FACT about the asset rather than
+  // a gap in the data. An asset with none of revenue, TVL or development is a
+  // purely speculative instrument. It may still trade well and it is not
+  // labelled a scam — but it cannot be ranked as a sound one, because there is
+  // nothing underneath it to be sound.
+  const hasRevenue = (protocolRevenue30dUsd ?? 0) > 0
+  const hasTvl = (tvlUsd ?? 0) > 0
+  const hasDev = (devActivity?.devActivityScore ?? 0) > 0
+  const fundamentalsPresent = [hasRevenue, hasTvl, hasDev].filter(Boolean).length
+
+  const SPECULATIVE_CAP = 45
+  const THIN_CAP = 68
+  let substanceNote: string | null = null
+
+  if (fundamentalsPresent === 0) {
+    substanceNote =
+      "No protocol revenue, no capital locked, and no public developer activity. Nothing measurable underpins " +
+      "this token's value, so it is priced purely on demand for the token itself. That is not automatically a " +
+      "scam — but it cannot be ranked alongside assets with working economics, and its score is capped here " +
+      "rather than being flattered by the criteria it happens to pass."
+  } else if (fundamentalsPresent === 1) {
+    substanceNote =
+      `Only one of the three fundamentals (revenue, capital locked, development) is present, so the economic ` +
+      `case rests on a single measure.`
   }
 
   // ── Risk axis ─────────────────────────────────────────────────────────────
@@ -340,6 +402,13 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
     reasons.push(...(input.onChainNotes ?? []).slice(0, 2))
   }
 
+  if (substanceNote) reasons.unshift(`⚠ ${substanceNote}`)
+  if (tvlToMcap !== null) {
+    reasons.push(tvlToMcap >= 0.5
+      ? `✓ Users have locked capital worth ${(tvlToMcap * 100).toFixed(0)}% of the token's market cap — real money committed, not just traded.`
+      : `Capital locked is ${(tvlToMcap * 100).toFixed(0)}% of market cap.`)
+  }
+
   const ranked = [...scored].sort((a, b) => b.points - a.points)
   for (const top of ranked.slice(0, 2)) {
     if (top.points >= 75 && !reasons.some(r => r.includes(top.label))) reasons.push(`✓ ${top.label} is strong.`)
@@ -347,6 +416,12 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   for (const bottom of ranked.slice(-2)) {
     if (bottom.points <= 30 && !reasons.some(r => r.includes(bottom.label))) reasons.push(`⚠ ${bottom.label} is weak.`)
   }
+
+  // Substance caps, applied with the other hard caps: no combination of
+  // liquidity and clean tokenomics should outrank a protocol that actually
+  // does something.
+  if (fundamentalsPresent === 0) qualityScore = Math.min(qualityScore, SPECULATIVE_CAP)
+  else if (fundamentalsPresent === 1) qualityScore = Math.min(qualityScore, THIN_CAP)
 
   qualityScore = clamp(qualityScore, 0, 100)
 

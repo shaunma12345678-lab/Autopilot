@@ -935,6 +935,9 @@ model CryptoAsset {
 
   // "Dividend equivalent" + tokenomics
   protocolRevenue30dUsd  Float?
+  // Capital actually deposited in the protocol (lib/defillama-client.ts) — the
+  // adoption metric that separates a working protocol from a token with a chart.
+  tvlUsd                 Float?
   stakingYieldPct        Float?
   nextUnlockDate         DateTime?
   nextUnlockPctSupply    Float?

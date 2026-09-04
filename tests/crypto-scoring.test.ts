@@ -107,3 +107,68 @@ describe("scoreCrypto — breadth gate pulls thin reads toward neutral", () => {
     expect(result.qualityScore!).toBeLessThan(90)
   })
 })
+
+describe("substance gate — the memecoin problem", () => {
+  // Found in the live rankings: PEPE scored 92/100, above Ethereum, with no
+  // revenue, no TVL and no developers. Weight renormalization dropped every
+  // criterion it failed and redistributed that weight onto the ones it aced.
+  function memecoinLike(overrides: Partial<CryptoScoreInput> = {}) {
+    return baseInput({
+      protocolRevenue30dUsd: null,   // genuinely none
+      tvlUsd: null,                  // genuinely none
+      devActivity: null,             // no public development
+      onChainPercentile: null,
+      market: baseMarket({ maxSupply: 1e9, circulatingSupply: 1e9, fdvUsd: 1e9, marketCapUsd: 1e9 }),
+      ...overrides,
+    })
+  }
+
+  it("caps an asset with no revenue, no TVL and no development", () => {
+    const r = scoreCrypto(memecoinLike())
+    expect(r.qualityScore!).toBeLessThanOrEqual(45)
+  })
+
+  it("explains WHY it was capped rather than just scoring it low", () => {
+    const r = scoreCrypto(memecoinLike())
+    expect(r.qualityReasons[0]).toMatch(/nothing measurable underpins/i)
+    expect(r.qualityReasons[0]).toMatch(/not automatically a scam/i)
+  })
+
+  it("ranks a real protocol above a memecoin with identical tokenomics", () => {
+    const meme = scoreCrypto(memecoinLike())
+    const protocol = scoreCrypto(memecoinLike({
+      protocolRevenue30dUsd: 5_000_000,
+      tvlUsd: 800_000_000,
+      devActivity: { devActivityScore: 80, commitsLast12Weeks: 300 } as never,
+    }))
+    expect(protocol.qualityScore!).toBeGreaterThan(meme.qualityScore!)
+  })
+
+  it("applies a softer cap when exactly one fundamental is present", () => {
+    const one = scoreCrypto(memecoinLike({ tvlUsd: 500_000_000 }))
+    expect(one.qualityScore!).toBeLessThanOrEqual(68)
+    expect(one.qualityScore!).toBeGreaterThan(45)
+  })
+
+  it("does not cap an asset with all three fundamentals", () => {
+    const full = scoreCrypto(memecoinLike({
+      protocolRevenue30dUsd: 5_000_000,
+      tvlUsd: 800_000_000,
+      devActivity: { devActivityScore: 80, commitsLast12Weeks: 300 } as never,
+    }))
+    expect(full.qualityScore!).toBeGreaterThan(68)
+  })
+})
+
+describe("TVL scoring", () => {
+  it("rewards capital locked relative to market cap", () => {
+    const low = scoreCrypto(baseInput({ tvlUsd: 1e7, market: baseMarket({ marketCapUsd: 1e9 }) }))
+    const high = scoreCrypto(baseInput({ tvlUsd: 8e8, market: baseMarket({ marketCapUsd: 1e9 }) }))
+    expect(high.qualityScore!).toBeGreaterThan(low.qualityScore!)
+  })
+
+  it("calls out strong locked capital in the reasons", () => {
+    const r = scoreCrypto(baseInput({ tvlUsd: 9e8, market: baseMarket({ marketCapUsd: 1e9 }) }))
+    expect(r.qualityReasons.some(x => /locked capital|real money committed/i.test(x))).toBe(true)
+  })
+})

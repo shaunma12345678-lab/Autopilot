@@ -9,7 +9,7 @@
 import { prisma } from "@/lib/prisma"
 import { searchCoin, getCoinMarketData, getCoinPriceHistory, getBtcHistory } from "@/lib/coingecko-client"
 import { getDevActivity } from "@/lib/github-activity"
-import { resolveProtocolSlug, getProtocolRevenue30d, getNextUnlock } from "@/lib/defillama-client"
+import { resolveProtocolSlug, getProtocolRevenue30d, getNextUnlock, getProtocolTvl } from "@/lib/defillama-client"
 import { resolveChain, fetchTokenSecurity, notApplicableSecurity } from "@/lib/token-security"
 import { fetchOrderbookDepth } from "@/lib/orderbook-depth"
 import { getConsensusQuote, listingQualityScore } from "@/lib/exchange-aggregator"
@@ -86,9 +86,10 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   // batch of cheap Blockchair calls, gated behind the symbol actually being
   // on the supported list rather than running on every token.
   const onChainEligible = isOnChainSupported(resolvedSymbol)
-  const [revenue30d, nextUnlock, devActivity, security, depth, exchange, priceHistory, btcHistory, onChain] = await Promise.all([
+  const [revenue30d, nextUnlock, tvlUsd, devActivity, security, depth, exchange, priceHistory, btcHistory, onChain] = await Promise.all([
     slug ? getProtocolRevenue30d(slug).catch(() => null) : Promise.resolve(null),
     slug ? getNextUnlock(slug).catch(() => null) : Promise.resolve(null),
+    slug ? getProtocolTvl(slug).catch(() => null) : Promise.resolve(null),
     getDevActivity(market.githubRepoUrl).catch(() => null),
     chain ? fetchTokenSecurity(chain.chainId, chain.address).catch(() => null) : Promise.resolve(notApplicableSecurity()),
     fetchOrderbookDepth(resolvedSymbol).catch(() => null),
@@ -138,6 +139,8 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     exchange,
     onChainPercentile,
     onChainNotes: onChainRead?.notes ?? [],
+    tvlUsd,
+    protocolResolved: !!slug,
     revenueYieldPercentile: revenueYieldPercentile?.percentile ?? null,
     revenueYieldPeerCount: revenueYieldPercentile?.peerCount ?? null,
     deterioration: deterioration ? { shouldSell: deterioration.shouldSell, reasons: deterioration.reasons } : null,
@@ -153,6 +156,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     liquidityGrade: exchange?.liquidityGrade ?? null,
     fdvToMcapRatio: result.fdvToMcapRatio,
     protocolRevenue30dUsd: revenue30d,
+    tvlUsd,
     devActivityScore: devActivity?.devActivityScore ?? null,
     dataConfidence: result.dataConfidence,
   })
@@ -201,6 +205,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     fdvToMcapRatio: result.fdvToMcapRatio,
 
     protocolRevenue30dUsd: revenue30d,
+    tvlUsd,
     devActivityScore: devActivity?.devActivityScore ?? null,
     nextUnlockDate: nextUnlock?.date ? new Date(nextUnlock.date).toISOString() : null,
     nextUnlockPctSupply: nextUnlock?.pctOfSupply ?? null,

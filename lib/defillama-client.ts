@@ -60,6 +60,31 @@ export async function getProtocolRevenue30d(slug: string): Promise<number | null
   }
 }
 
+/**
+ * Total Value Locked — capital users have actually deposited into the protocol.
+ *
+ * The single best adoption metric in DeFi and the one that most cleanly
+ * separates a working protocol from a token with a chart. Trading volume can be
+ * wash-traded and social metrics can be botted; TVL is money sitting in
+ * contracts that anyone can verify on-chain.
+ *
+ * Returns null for assets DefiLlama does not track as a protocol at all —
+ * which is itself informative, and is treated as "no TVL" rather than
+ * "unmeasured" by the scorer.
+ */
+export async function getProtocolTvl(slug: string): Promise<number | null> {
+  try {
+    const res = await fetch(`${BASE}/tvl/${encodeURIComponent(slug)}`, {
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) return null
+    const value = await res.json()
+    return typeof value === "number" && isFinite(value) && value >= 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
 export interface UpcomingUnlock {
   date: string
   pctOfSupply: number
