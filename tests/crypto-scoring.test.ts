@@ -225,3 +225,37 @@ describe("on-chain settlement counts as economic substance", () => {
     expect(meme.qualityScore!).toBeLessThanOrEqual(45)
   })
 })
+
+describe("fundamentals must be material, not merely nonzero", () => {
+  it("does not let trivial TVL clear the substance bar", () => {
+    const trivial = scoreCrypto(baseInput({
+      protocolRevenue30dUsd: null, devActivity: null, onChainPercentile: null,
+      tvlUsd: 50_000,             // a rounding error in DeFi terms
+    }))
+    expect(trivial.qualityScore!).toBeLessThanOrEqual(45)
+  })
+
+  it("counts genuinely material TVL", () => {
+    const real = scoreCrypto(baseInput({
+      protocolRevenue30dUsd: null, devActivity: null, onChainPercentile: null,
+      tvlUsd: 800_000_000,
+    }))
+    expect(real.qualityScore!).toBeGreaterThan(45)
+  })
+
+  it("does not let a single stale commit count as active development", () => {
+    const stale = scoreCrypto(baseInput({
+      protocolRevenue30dUsd: null, tvlUsd: null, onChainPercentile: null,
+      devActivity: { devActivityScore: 5, commitsLast12Weeks: 1 } as never,
+    }))
+    expect(stale.qualityScore!).toBeLessThanOrEqual(45)
+  })
+
+  it("does not let negligible fee income count as real revenue", () => {
+    const dust = scoreCrypto(baseInput({
+      tvlUsd: null, devActivity: null, onChainPercentile: null,
+      protocolRevenue30dUsd: 400,
+    }))
+    expect(dust.qualityScore!).toBeLessThanOrEqual(45)
+  })
+})

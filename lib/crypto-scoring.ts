@@ -278,9 +278,19 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   // purely speculative instrument. It may still trade well and it is not
   // labelled a scam — but it cannot be ranked as a sound one, because there is
   // nothing underneath it to be sound.
-  const hasRevenue = (protocolRevenue30dUsd ?? 0) > 0
-  const hasTvl = (tvlUsd ?? 0) > 0
-  const hasDev = (devActivity?.devActivityScore ?? 0) > 0
+  // MATERIALITY. A fundamental has to be big enough to mean something. Any
+  // nonzero figure counting as a full fundamental let a chain with a few
+  // thousand dollars of locked capital clear the same bar as one holding
+  // billions, and a single stale commit count as active development. The
+  // thresholds are deliberately low — this is a floor for "real at all",
+  // not a bar for "impressive".
+  const MIN_MATERIAL_REVENUE_30D = 25_000     // ~$300k/yr of genuine fee income
+  const MIN_MATERIAL_TVL = 5_000_000          // below this is a rounding error in DeFi
+  const MIN_MATERIAL_DEV = 20                 // sustained commits, not one push
+
+  const hasRevenue = (protocolRevenue30dUsd ?? 0) >= MIN_MATERIAL_REVENUE_30D
+  const hasTvl = (tvlUsd ?? 0) >= MIN_MATERIAL_TVL
+  const hasDev = (devActivity?.devActivityScore ?? 0) >= MIN_MATERIAL_DEV
   // Verified on-chain settlement is substance too. A payments or settlement
   // chain earns no protocol fees this system captures and locks no DeFi
   // capital, yet it is plainly not a token with a chart — its ledger records
