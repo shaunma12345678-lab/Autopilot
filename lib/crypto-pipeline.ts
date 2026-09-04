@@ -9,7 +9,7 @@
 import { prisma } from "@/lib/prisma"
 import { searchCoin, getCoinMarketData, getCoinPriceHistory, getBtcHistory } from "@/lib/coingecko-client"
 import { getDevActivity } from "@/lib/github-activity"
-import { resolveProtocolSlug, getProtocolRevenue30d, getNextUnlock, getProtocolTvl } from "@/lib/defillama-client"
+import { resolveProtocolSlug, getProtocolRevenue30d, getNextUnlock, getAnyTvl } from "@/lib/defillama-client"
 import { resolveChain, fetchTokenSecurity, notApplicableSecurity } from "@/lib/token-security"
 import { fetchOrderbookDepth } from "@/lib/orderbook-depth"
 import { getConsensusQuote, listingQualityScore } from "@/lib/exchange-aggregator"
@@ -89,7 +89,7 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   const [revenue30d, nextUnlock, tvlUsd, devActivity, security, depth, exchange, priceHistory, btcHistory, onChain] = await Promise.all([
     slug ? getProtocolRevenue30d(slug).catch(() => null) : Promise.resolve(null),
     slug ? getNextUnlock(slug).catch(() => null) : Promise.resolve(null),
-    slug ? getProtocolTvl(slug).catch(() => null) : Promise.resolve(null),
+    getAnyTvl(slug, resolvedName, resolvedSymbol).catch(() => null),
     getDevActivity(market.githubRepoUrl).catch(() => null),
     chain ? fetchTokenSecurity(chain.chainId, chain.address).catch(() => null) : Promise.resolve(notApplicableSecurity()),
     fetchOrderbookDepth(resolvedSymbol).catch(() => null),

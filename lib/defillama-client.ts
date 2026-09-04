@@ -85,6 +85,45 @@ export async function getProtocolTvl(slug: string): Promise<number | null> {
   }
 }
 
+/**
+ * Chain-level TVL. Layer 1s are not "protocols" in DefiLlama's model — asking
+ * /tvl/polkadot returns "Protocol not found" — so every L1 was being recorded
+ * as having no locked capital while Ethereum alone holds tens of billions.
+ * Chains live on a separate endpoint entirely.
+ */
+let _chainCache: { at: number; map: Map<string, number> } | null = null
+const CHAIN_TTL_MS = 15 * 60 * 1000
+
+export async function getChainTvl(nameOrSymbol: string): Promise<number | null> {
+  try {
+    if (!_chainCache || Date.now() - _chainCache.at > CHAIN_TTL_MS) {
+      const res = await fetch(`${BASE}/v2/chains`, { signal: AbortSignal.timeout(12000) })
+      if (!res.ok) return null
+      const rows = await res.json() as Array<{ name?: string; tokenSymbol?: string; tvl?: number }>
+      const map = new Map<string, number>()
+      for (const r of rows) {
+        if (typeof r.tvl !== "number") continue
+        if (r.name) map.set(r.name.toLowerCase(), r.tvl)
+        if (r.tokenSymbol) map.set(r.tokenSymbol.toLowerCase(), r.tvl)
+      }
+      _chainCache = { at: Date.now(), map }
+    }
+    return _chainCache.map.get(nameOrSymbol.toLowerCase()) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Protocol TVL first, then chain TVL — an asset is one or the other, and
+ *  which one is not knowable in advance from the ticker alone. */
+export async function getAnyTvl(slug: string | null, name: string, symbol: string): Promise<number | null> {
+  if (slug) {
+    const protocolTvl = await getProtocolTvl(slug)
+    if (protocolTvl !== null && protocolTvl > 0) return protocolTvl
+  }
+  return (await getChainTvl(name)) ?? (await getChainTvl(symbol))
+}
+
 export interface UpcomingUnlock {
   date: string
   pctOfSupply: number

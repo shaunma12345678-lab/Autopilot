@@ -129,7 +129,19 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   type Scored = { label: string; weight: number; points: number }
   const scored: Scored[] = []
 
-  if (liquidityPct !== null) scored.push({ label: "Liquidity depth", weight: 12, points: clamp(liquidityPct * 10, 0, 100) })
+  // Turnover (24h volume as a share of market cap). Scored as a BAND, not a
+  // slope. Healthy assets turn over a few percent of their cap daily; a token
+  // reporting volume near or above its entire market cap is not more liquid,
+  // it is reporting volume that is unlikely to be real. The old scoring gave
+  // full marks at 10% and kept them all the way up, so the exact wash-trading
+  // signature — tiny cap, enormous reported volume — scored as perfect liquidity.
+  if (liquidityPct !== null) {
+    const turnoverPoints = liquidityPct <= 0.5 ? clamp(liquidityPct * 60, 0, 30)      // near-dead
+      : liquidityPct <= 25 ? clamp(30 + (liquidityPct - 0.5) * 2.9, 30, 100)          // healthy band
+      : liquidityPct <= 60 ? clamp(100 - (liquidityPct - 25) * 1.7, 40, 100)          // unusually hot
+      : clamp(40 - (liquidityPct - 60) * 0.4, 0, 40)                                  // implausible
+    scored.push({ label: "Turnover vs. market cap", weight: 12, points: turnoverPoints })
+  }
   if (market.marketCapRank !== null) scored.push({ label: "Market cap rank", weight: 5, points: clamp(100 - market.marketCapRank / 20, 0, 100) })
   if (market.priceChange7dPct !== null) scored.push({ label: "7-day momentum", weight: 5, points: clamp(50 + market.priceChange7dPct, 0, 100) })
 
@@ -269,7 +281,13 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
   const hasRevenue = (protocolRevenue30dUsd ?? 0) > 0
   const hasTvl = (tvlUsd ?? 0) > 0
   const hasDev = (devActivity?.devActivityScore ?? 0) > 0
-  const fundamentalsPresent = [hasRevenue, hasTvl, hasDev].filter(Boolean).length
+  // Verified on-chain settlement is substance too. A payments or settlement
+  // chain earns no protocol fees this system captures and locks no DeFi
+  // capital, yet it is plainly not a token with a chart — its ledger records
+  // real economic activity that nobody can fake. Omitting this would cap
+  // Bitcoin at the speculative ceiling and discredit the gate entirely.
+  const hasOnChain = (input.onChainPercentile ?? null) !== null
+  const fundamentalsPresent = [hasRevenue, hasTvl, hasDev, hasOnChain].filter(Boolean).length
 
   const SPECULATIVE_CAP = 45
   const THIN_CAP = 68
@@ -303,6 +321,33 @@ export function scoreCrypto(input: CryptoScoreInput): CryptoScoreResult {
       if (security.securityScore < 50) qualityScore = Math.min(qualityScore, 40)
       if (security.isMintable === true) qualityScore = Math.min(qualityScore, 55)
       if (security.lpLocked === false) qualityScore = Math.min(qualityScore, 50)
+    }
+  }
+
+  // WASH-TRADE DETECTION. Reported volume is aggregated across every venue,
+  // including unregulated ones with an incentive to inflate it. Our own
+  // regulated-venue volume is measured directly from Coinbase and Kraken order
+  // books. When the reported figure dwarfs what the regulated venues actually
+  // clear, the difference is volume happening somewhere nobody can verify —
+  // the exact signature of manufactured turnover. Both numbers were already
+  // being collected and never compared to each other.
+  if (market.volume24hUsd !== null && ex?.volume24hUsd && ex.volume24hUsd > 0) {
+    const offVenueRatio = market.volume24hUsd / ex.volume24hUsd
+    if (offVenueRatio > 50) {
+      riskScore += 18
+      qualityScore = Math.min(qualityScore, 40)
+      riskFlags.push(
+        `⚠ Reported 24h volume is ${Math.round(offVenueRatio)}x what regulated venues actually clear ` +
+        `($${Math.round(market.volume24hUsd).toLocaleString()} vs $${Math.round(ex.volume24hUsd).toLocaleString()}). ` +
+        `Almost all of this token's apparent trading happens where it cannot be verified — the standard ` +
+        `signature of wash trading.`
+      )
+    } else if (offVenueRatio > 15) {
+      riskScore += 8
+      riskFlags.push(
+        `⚠ Reported volume is ${Math.round(offVenueRatio)}x regulated-venue volume, so most turnover is on ` +
+        `exchanges whose reporting cannot be independently checked.`
+      )
     }
   }
 

@@ -172,3 +172,56 @@ describe("TVL scoring", () => {
     expect(r.qualityReasons.some(x => /locked capital|real money committed/i.test(x))).toBe(true)
   })
 })
+
+describe("wash-trade detection — reported vs regulated volume", () => {
+  it("flags a token whose reported volume dwarfs what regulated venues clear", () => {
+    const r = scoreCrypto(baseInput({
+      market: baseMarket({ volume24hUsd: 500_000_000, marketCapUsd: 50_000_000 }),
+      exchange: { venueCount: 2, divergencePct: 0.1, spreadPct: 0.1, liquidityGrade: "adequate",
+                  volume24hUsd: 2_000_000, consensusPrice: 100, notes: [] } as never,
+    }))
+    expect(r.riskFlags.some(f => /wash trading/i.test(f))).toBe(true)
+    expect(r.qualityScore!).toBeLessThanOrEqual(40)
+  })
+
+  it("does not flag an asset whose reported and regulated volume broadly agree", () => {
+    const r = scoreCrypto(baseInput({
+      market: baseMarket({ volume24hUsd: 50_000_000 }),
+      exchange: { venueCount: 2, divergencePct: 0.1, spreadPct: 0.1, liquidityGrade: "deep",
+                  volume24hUsd: 40_000_000, consensusPrice: 100, notes: [] } as never,
+    }))
+    expect(r.riskFlags.some(f => /wash trading/i.test(f))).toBe(false)
+  })
+})
+
+describe("turnover is scored as a band, not a slope", () => {
+  it("does not award full marks for implausible turnover", () => {
+    const healthy = scoreCrypto(baseInput({ market: baseMarket({ volume24hUsd: 5e7, marketCapUsd: 1e9 }) }))   // 5%
+    const absurd  = scoreCrypto(baseInput({ market: baseMarket({ volume24hUsd: 2e9, marketCapUsd: 1e9 }) }))   // 200%
+    expect(absurd.qualityScore!).toBeLessThan(healthy.qualityScore!)
+  })
+
+  it("still penalises a near-dead market", () => {
+    const dead    = scoreCrypto(baseInput({ market: baseMarket({ volume24hUsd: 1e5, marketCapUsd: 1e9 }) }))   // 0.01%
+    const healthy = scoreCrypto(baseInput({ market: baseMarket({ volume24hUsd: 5e7, marketCapUsd: 1e9 }) }))
+    expect(dead.qualityScore!).toBeLessThan(healthy.qualityScore!)
+  })
+})
+
+describe("on-chain settlement counts as economic substance", () => {
+  it("does not cap a settlement chain with real on-chain activity as speculative", () => {
+    // A payments chain: no DeFi TVL, no protocol fees we capture, but a real ledger.
+    const chain = scoreCrypto(baseInput({
+      protocolRevenue30dUsd: null, tvlUsd: null, devActivity: null,
+      onChainPercentile: 70,
+    }))
+    expect(chain.qualityScore!).toBeGreaterThan(45)
+  })
+
+  it("still caps a token with no on-chain read and nothing else", () => {
+    const meme = scoreCrypto(baseInput({
+      protocolRevenue30dUsd: null, tvlUsd: null, devActivity: null, onChainPercentile: null,
+    }))
+    expect(meme.qualityScore!).toBeLessThanOrEqual(45)
+  })
+})
