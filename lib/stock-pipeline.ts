@@ -40,6 +40,7 @@ import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { assessStockConviction } from "@/lib/conviction"
 import { computeCapitalAllocation } from "@/lib/capital-allocation"
 import { readProxyGovernance } from "@/lib/governance"
+import { readLeadership, type LeadershipRead } from "@/lib/leadership"
 import { detectConcentrationRisk, type ConcentrationRead } from "@/lib/concentration-risk"
 import { checkLitigation, type LitigationRead } from "@/lib/litigation-check"
 import { buildFalsificationSet, checkFalsified, type FalsificationCondition } from "@/lib/falsification"
@@ -272,14 +273,25 @@ export async function analyzeAndUpsertTicker(
   let riskDiff: Awaited<ReturnType<typeof diffRiskFactors>> | null = null
   let concentration: ConcentrationRead | null = null
   let litigation: LitigationRead | null = null
+  let leadership: LeadershipRead | null = null
 
   if (opts.includeNarrative || opts.includeNews) {
     const proxy = effectiveSubmissions?.recentForms?.find(f => f.form === "DEF 14A")
     const latest10K = effectiveSubmissions?.recentForms?.find(f => f.form === "10-K")
 
-    const [gov, narrRes, nws, rdiff, litig] = await Promise.all([
+    const [gov, lead, narrRes, nws, rdiff, litig] = await Promise.all([
       opts.includeNarrative && proxy
         ? readProxyGovernance(cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate).catch(() => null)
+        : Promise.resolve(null),
+
+      // Who actually runs the company (lib/leadership.ts). Reads the same
+      // proxy governance already fetches, but for the PEOPLE rather than the
+      // rules — tenure, founder status, skin in the game, board independence.
+      opts.includeNarrative && proxy
+        ? readLeadership(cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate,
+            insider ? { buyCount90d: insider.buyCount90d, sellCount90d: insider.sellCount90d, clusterBuy: !!insider.clusterBuy } : null,
+            liveEvents.execChangeCount,
+          ).catch(() => null)
         : Promise.resolve(null),
 
       opts.includeNarrative && latest10K
@@ -323,6 +335,7 @@ export async function analyzeAndUpsertTicker(
     ])
 
     governance = gov
+    leadership = lead
     narrative = narrRes.narrative
     concentration = narrRes.concentration
     litigation = litig
@@ -363,7 +376,7 @@ export async function analyzeAndUpsertTicker(
       liveEvents.riskPenalty + (news?.riskPenalty ?? 0) +
       balanceSheet.riskPenalty + (governance?.riskPenalty ?? 0) + accounting.riskPenalty +
       (riskDiff?.riskPenalty ?? 0) + contradiction.riskPenalty + (concentration?.riskPenalty ?? 0) +
-      (litigation?.riskPenalty ?? 0),
+      (litigation?.riskPenalty ?? 0) + (leadership?.riskPenalty ?? 0),
     externalRiskFlags: [
       ...liveEvents.flags,
       ...balanceSheet.flags,
@@ -378,6 +391,7 @@ export async function analyzeAndUpsertTicker(
       ...contradiction.flags,
       ...(concentration?.flags ?? []),
       ...(litigation?.flags ?? []),
+      ...(leadership?.flags ?? []),
     ],
     hasRestatement: liveEvents.hasRestatement,
     forwardScore: forward.forwardScore,
@@ -489,6 +503,15 @@ export async function analyzeAndUpsertTicker(
         credibilityScore: contradiction.credibilityScore,
         contradictionFlags: contradiction.flags,
         governanceSummary: governance?.summary ?? null,
+        ceoName: leadership?.ceoName ?? null,
+        ceoTenureYears: leadership?.ceoTenureYears ?? null,
+        ceoIsFounder: leadership?.ceoIsFounder ?? null,
+        insiderOwnershipPct: leadership?.insiderOwnershipPct ?? null,
+        boardSize: leadership?.boardSize ?? null,
+        independentDirectors: leadership?.independentDirectors ?? null,
+        leadershipScore: leadership?.leadershipScore ?? null,
+        leadershipStrengths: leadership?.strengths ?? [],
+        leadershipConcerns: leadership?.concerns ?? [],
         payAlignment: governance?.payAlignment ?? null,
         relatedPartyTransactions: governance?.relatedPartyTransactions ?? [],
         auditorConcerns: governance?.auditorConcerns ?? [],
@@ -615,6 +638,18 @@ export async function analyzeAndUpsertTicker(
     bearKillShot: bear?.killShot ?? null,
     bearConviction: bear?.bearConviction ?? null,
     bearWhatMustGoRight: bear?.whatWouldHaveToGoRight ?? null,
+
+    ceoName: leadership?.ceoName ?? null,
+    ceoTenureYears: leadership?.ceoTenureYears ?? null,
+    ceoIsFounder: leadership?.ceoIsFounder ?? null,
+    insiderOwnershipPct: leadership?.insiderOwnershipPct ?? null,
+    boardSize: leadership?.boardSize ?? null,
+    independentDirectors: leadership?.independentDirectors ?? null,
+    leadershipScore: leadership?.leadershipScore ?? null,
+    leadershipSummary: leadership?.summary ?? null,
+    leadershipStrengths: leadership?.strengths ?? null,
+    leadershipConcerns: leadership?.concerns ?? null,
+    executives: leadership?.executives ?? null,
 
     verdictSummary: verdict?.verdict ?? null,
     verdictManagementQuality: verdict?.managementQuality ?? null,

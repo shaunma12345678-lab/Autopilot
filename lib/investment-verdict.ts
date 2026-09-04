@@ -45,6 +45,7 @@ const VERDICT_SYSTEM = `You synthesize an equity research file for an investor i
 HARD RULES:
 - Argue ONLY from the facts you are given. Never invent a strength, concern, or conflict not evidenced in the input.
 - This system's own backtest found quality/fundamental strength has ~zero measured forward-return edge on its own — valuation versus the company's OWN trading history is the one axis with real evidence. A sound business that is not currently cheap relative to its own history is a good BUSINESS, not necessarily a good LEAD. Reason accordingly: leadQuality must weigh the valuation evidence, not just quality.
+- Weigh WHO RUNS THE COMPANY as part of managementQuality, not just the pay structure. Insider ownership is the most informative single number there: it is what management personally loses by destroying value. Very short CEO tenure means the company's historical record was produced by someone else and says little about current leadership.
 - If ANY conflict-of-interest fact is present in the input (related-party transactions, dual-class structure, pay misaligned with per-share/ROIC outcomes, auditor independence concerns), you MUST include it in conflictsOfInterest. Never omit a disclosed conflict because other things look good — that is exactly the failure mode this exists to prevent.
 - Never output a price target, a price direction, a probability of price movement, or personalized advice to buy or sell. Describe what is true and why it matters; do not instruct.
 - If the falsification set shows a condition has already triggered, or the bear case has a kill shot, that is disqualifying for "strong_lead" regardless of how good everything else looks.
@@ -69,6 +70,15 @@ export interface VerdictInput {
   credibilityScore: number | null
   contradictionFlags: string[]
   governanceSummary: string | null
+  ceoName: string | null
+  ceoTenureYears: number | null
+  ceoIsFounder: boolean | null
+  insiderOwnershipPct: number | null
+  boardSize: number | null
+  independentDirectors: number | null
+  leadershipScore: number | null
+  leadershipStrengths: string[]
+  leadershipConcerns: string[]
   payAlignment: string | null
   relatedPartyTransactions: string[]
   auditorConcerns: string[]
@@ -117,6 +127,16 @@ NARRATIVE CREDIBILITY (management's claims vs. the audited numbers):
 - Credibility score: ${n(input.credibilityScore, "/100")}
 - Contradictions found:
 ${list(input.contradictionFlags)}
+
+WHO RUNS THE COMPANY (from the DEF 14A proxy):
+- CEO: ${input.ceoName ?? "not identified"}${input.ceoTenureYears !== null ? `, ${input.ceoTenureYears} years in the role` : ""}${input.ceoIsFounder ? " (founder)" : ""}
+- Leadership score: ${n(input.leadershipScore, "/100")}
+- Insider ownership (officers and directors as a group): ${n(input.insiderOwnershipPct, "%")}
+- Board: ${input.boardSize ?? "?"} directors, ${input.independentDirectors ?? "?"} independent
+- Strengths:
+${list(input.leadershipStrengths)}
+- Concerns:
+${list(input.leadershipConcerns)}
 
 GOVERNANCE AND CONFLICTS OF INTEREST (from the DEF 14A proxy):
 - Summary: ${input.governanceSummary ?? "not yet read"}

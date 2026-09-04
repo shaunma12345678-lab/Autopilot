@@ -775,6 +775,21 @@ model Ticker {
   bearWhatMustGoRight      Json?
   execChangeCount          Int?
 
+  // Who runs the company (lib/leadership.ts) — the PEOPLE, as distinct from
+  // the governance STRUCTURE above. Tenure, founder status, skin in the game,
+  // board independence: all disclosed in the proxy and previously unread.
+  ceoName                   String?
+  ceoTenureYears            Float?
+  ceoIsFounder              Boolean?
+  insiderOwnershipPct       Float?
+  boardSize                 Int?
+  independentDirectors      Int?
+  leadershipScore           Int?
+  leadershipSummary         String?
+  leadershipStrengths       Json?
+  leadershipConcerns        Json?
+  executives                Json?
+
   // Investment verdict (lib/investment-verdict.ts) — synthesizes every
   // signal above into one governing answer: is this well-run, and is it a
   // good lead right now. The headline of the asset detail page.
