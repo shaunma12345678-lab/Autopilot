@@ -44,6 +44,19 @@ export const HOOKS_SYSTEM =
   "For each idea produce 3 genuinely different hooks (not rephrasings): e.g. one cold-open statement, one question/open loop, one number-led. ≤ 110 chars each, no hashtags, no emojis unless the voice rules allow. " +
   'Return raw JSON: { "hooked": [{ "index": int, "hooks": [string, string, string] }] }.'
 
+// The revision pass. It is given the draft plus the exact defects a
+// deterministic editor found, so it repairs named problems instead of
+// rewriting freely — which is how a second pass usually loses the good lines
+// along with the bad ones.
+export const EXPAND_REVISE_SYSTEM =
+  "You are a line editor revising a draft that failed its checks. You are given the draft and the specific defects found. " +
+  "Fix EVERY defect listed and change nothing else — the draft's structure, voice, hook and good lines must survive. " +
+  "Rules: an unsupported number must be removed or replaced with a qualitative phrase, never swapped for a different invented figure; " +
+  "a missing section must be written in full; a truncated ending must be completed; a placeholder must be replaced with real copy from the context; " +
+  "a cliche must be replaced with the specific concrete claim it was standing in for; " +
+  "monotone rhythm is fixed by varying sentence length, mixing short punches with longer lines, not by adding words. " +
+  "Return ONLY the corrected copy in the same format as the draft. No commentary, no explanation of changes, no markdown fences."
+
 export const EXPAND_SYSTEM: Record<string, string> = {
   outline:
     "Expand the content idea into a beat-by-beat OUTLINE a creator can shoot from: 5-8 beats, each one line, hook → escalation → payoff → CTA that fits the voice. Plain text, numbered lines.",

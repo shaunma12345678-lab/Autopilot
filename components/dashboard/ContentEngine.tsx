@@ -32,6 +32,52 @@ const DIM_LABEL: Record<string, string> = {
 }
 const scoreCls = (s: number) => (s >= 70 ? "bg-emerald-600 text-white" : s >= 55 ? "bg-amber-600 text-white" : "bg-gray-700 text-gray-200")
 
+interface ExpansionReport {
+  score: number
+  passed: boolean
+  revised: boolean
+  issues: Array<{ code: string; severity: "fatal" | "major" | "minor"; message: string }>
+  stats: { words: number; sentences: number; avgSentenceWords: number; sentenceVariation: number; readingSeconds: number }
+}
+
+const SEVERITY_STYLE: Record<string, string> = {
+  fatal: "text-rose-300 border-rose-700/50 bg-rose-950/40",
+  major: "text-amber-300 border-amber-700/50 bg-amber-950/40",
+  minor: "text-gray-400 border-gray-700/50 bg-gray-900/40",
+}
+
+/**
+ * What the editor found.
+ *
+ * Copy that failed its checks must never look the same as copy that passed —
+ * that is the whole reason the check exists, so the outcome is stated rather
+ * than left for the operator to infer from the text.
+ */
+function ProseReportBadge({ report }: { report: ExpansionReport }) {
+  return (
+    <div className="mt-1.5 space-y-1">
+      <div className="flex flex-wrap items-center gap-2 text-[10px]">
+        <span className={`font-black px-2 py-0.5 rounded border uppercase tracking-wide ${
+          report.passed ? "text-emerald-300 border-emerald-700/50 bg-emerald-950/40"
+                        : "text-rose-300 border-rose-700/50 bg-rose-950/40"}`}>
+          {report.passed ? "✓ passed checks" : "✕ failed checks"}
+        </span>
+        <span className="text-gray-500">editorial score {report.score}/100</span>
+        {report.revised && <span className="text-indigo-300">· auto-revised once</span>}
+        <span className="text-gray-600">
+          · {report.stats.words} words · ~{Math.round(report.stats.readingSeconds)}s spoken
+          · rhythm {report.stats.sentenceVariation}
+        </span>
+      </div>
+      {report.issues.slice(0, 5).map((issue, i) => (
+        <p key={i} className={`text-[10px] px-2 py-1 rounded border ${SEVERITY_STYLE[issue.severity] ?? SEVERITY_STYLE.minor}`}>
+          {issue.message}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 export default function ContentEngine({ password }: { password?: string }) {
   const headers = useMemo(() => ({ "Content-Type": "application/json", ...(password ? { "x-admin-password": password } : {}) }), [password])
   const [profiles, setProfiles] = useState<Profile[]>([])
@@ -59,6 +105,9 @@ export default function ContentEngine({ password }: { password?: string }) {
   const [open, setOpen] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [expansions, setExpansions] = useState<Record<string, string>>({})
+  // The editorial report is kept beside the copy so the operator can see what
+  // was checked and what was repaired, rather than being handed unexamined text.
+  const [reports, setReports] = useState<Record<string, ExpansionReport | null>>({})
   const [logFor, setLogFor] = useState<string | null>(null)
   const [logForm, setLogForm] = useState({ views: "", likes: "", shares: "", saves: "", url: "", hookUsed: "", redemptions: "", revenue: "" })
   const [insights, setInsights] = useState<Insights | null>(null)
@@ -164,11 +213,13 @@ export default function ContentEngine({ password }: { password?: string }) {
   }
 
   const expand = async (id: string, kind: string) => {
-    setExpansions((e) => ({ ...e, [id]: "…writing…" }))
+    setExpansions((e) => ({ ...e, [id]: "…writing, checking, revising…" }))
+    setReports((r) => ({ ...r, [id]: null }))
     try {
       const r = await fetch("/api/content/expand", { method: "POST", headers, body: JSON.stringify({ ideaId: id, kind }) })
       const d = await r.json()
       setExpansions((e) => ({ ...e, [id]: d.body ?? d.error ?? "failed" }))
+      setReports((rep) => ({ ...rep, [id]: d.report ?? null }))
     } catch { setExpansions((e) => ({ ...e, [id]: "failed — try again" })) }
   }
 
@@ -394,6 +445,7 @@ export default function ContentEngine({ password }: { password?: string }) {
                     <button onClick={() => triage(idea.id, "killed")} className="bg-rose-900/60 hover:bg-rose-800 text-rose-100 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg">✕ Kill</button>
                   </div>
                   {expansions[idea.id] && <pre className="text-[11px] text-gray-300 whitespace-pre-wrap bg-gray-950/60 border border-gray-800 rounded-lg p-3 font-sans max-h-72 overflow-y-auto">{expansions[idea.id]}</pre>}
+                  {reports[idea.id] && <ProseReportBadge report={reports[idea.id]!} />}
                   {logFor === idea.id && (
                     <div className="space-y-1.5 bg-gray-950/60 border border-sky-800/40 rounded-lg p-2">
                       <div className="flex flex-wrap items-center gap-1.5">

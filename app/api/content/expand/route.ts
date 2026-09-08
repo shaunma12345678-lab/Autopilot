@@ -14,6 +14,8 @@ export async function POST(request: NextRequest) {
   if (!body.ideaId || !body.kind) return Response.json({ error: "ideaId and kind are required" }, { status: 400 })
   const result = await expandIdea(body.ideaId, body.kind)
   if (!result) return Response.json({ error: "Expansion failed — try again." }, { status: 200 })
+  // The editorial report rides along so the operator can see what was checked
+  // and what was repaired, rather than being handed unexamined copy.
   return Response.json({ ok: true, ...result })
 }
 
