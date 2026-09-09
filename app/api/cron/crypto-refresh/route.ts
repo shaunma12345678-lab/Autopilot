@@ -11,6 +11,8 @@ import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { analyzeAndUpsertCrypto } from "@/lib/crypto-pipeline"
 import { nextCryptoToEnrich } from "@/lib/crypto-universe"
+import { aggregate, coverageAlarms, type CoverageLog } from "@/lib/source-coverage"
+import { recordCoverage } from "@/lib/coverage-store"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
 // Raised sharply now that the aggregator is optional. Core market data comes
@@ -50,19 +52,32 @@ export async function GET(request: NextRequest) {
     }
 
     const results: Record<string, string> = {}
+    const logs: CoverageLog[] = []
+
     for (const query of queriesToProcess) {
       try {
         const r = await analyzeAndUpsertCrypto(query)
         results[query] = r.ok ? "ok" : (r.error ?? "failed")
+        if (r.coverageLog) logs.push(r.coverageLog)
       } catch (err) {
         results[query] = err instanceof Error ? err.message : "failed"
       }
     }
 
+    // A source failing on one asset is ordinary. Failing on the whole batch is
+    // an outage, and that distinction only exists across a run — which is why
+    // it is drawn here rather than inside the pipeline.
+    const health = aggregate(logs)
+    const alarms = coverageAlarms(health)
+    if (alarms.length) console.warn("[cron/crypto-refresh] source problems:", alarms.join(" | "))
+    await recordCoverage("crypto", health, logs.length)
+
     return Response.json({
       ok: true,
       processed: queriesToProcess.length,
       results,
+      sourceHealth: health,
+      alarms,
       duration: Date.now() - startedAt.getTime(),
     })
   } catch (err) {

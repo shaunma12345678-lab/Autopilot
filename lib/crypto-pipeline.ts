@@ -9,7 +9,7 @@
 import { prisma } from "@/lib/prisma"
 import { searchCoin, getCoinMarketData, getCoinPriceHistory, getBtcHistory } from "@/lib/coingecko-client"
 import { getDevActivity } from "@/lib/github-activity"
-import { resolveProtocolSlug, getProtocolRevenue30d, getNextUnlock, getAnyTvl } from "@/lib/defillama-client"
+import { resolveProtocolSlug, resolveProtocolFamily, getFamilyRevenue30d, getNextUnlock, getAnyTvl } from "@/lib/defillama-client"
 import { resolveChain, fetchTokenSecurity, notApplicableSecurity } from "@/lib/token-security"
 import { fetchOrderbookDepth } from "@/lib/orderbook-depth"
 import { getConsensusQuote, listingQualityScore } from "@/lib/exchange-aggregator"
@@ -20,11 +20,17 @@ import { scoreCrypto } from "@/lib/crypto-scoring"
 import { captureSnapshot, detectDeterioration } from "@/lib/score-history"
 import { assessCryptoConviction } from "@/lib/conviction"
 import { stampFields, type ProvenanceMap } from "@/lib/data-integrity"
+import { newCoverage, summarize, track, type CoverageLog, type CoverageSummary } from "@/lib/source-coverage"
 
 export interface AnalyzeCryptoResult {
   ok: boolean
   error?: string
   asset?: Record<string, unknown>
+  /** Which sources answered for this asset. Aggregated across a run to tell a
+   *  broken source from an asset that genuinely has no data. */
+  coverage?: CoverageSummary
+  /** The raw attempts, so a caller can aggregate across many assets. */
+  coverageLog?: CoverageLog
 }
 
 export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeCryptoResult> {
@@ -40,19 +46,29 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   // supply, market cap rank and token contract addresses. If it's unavailable,
   // the asset still scores on our own price, spread, divergence and depth, at
   // correspondingly lower data completeness.
-  const found = await searchCoin(query).catch(() => null)
+  // Every external call is recorded. The `.catch(() => null)` behaviour is
+  // unchanged — one flaky provider must not take down an analysis — but the
+  // failure is now written down instead of vanishing.
+  const coverage = newCoverage(query)
+
+  const found = await track(coverage, "coingecko:search", () => searchCoin(query))
 
   // Resolve a tradeable symbol even when the aggregator can't be reached.
   const fallbackSymbol = query.toUpperCase().replace(/[^A-Z0-9]/g, "")
   const symbolForExchange = found?.symbol ?? fallbackSymbol
 
   const [marketRaw, exchangeEarly] = await Promise.all([
-    found ? getCoinMarketData(found.coingeckoId).catch(() => null) : Promise.resolve(null),
-    getConsensusQuote(symbolForExchange).catch(() => null),
+    track(coverage, "coingecko:market", () => getCoinMarketData(found!.coingeckoId), { skip: !found }),
+    track(coverage, "exchange:consensus-quote", () => getConsensusQuote(symbolForExchange)),
   ])
 
   if (!marketRaw && !exchangeEarly) {
-    return { ok: false, error: `Could not resolve "${query}" on any regulated exchange, and aggregator metadata is unavailable. Either it isn't listed on a venue we track, or both sources are temporarily rate-limiting.` }
+    return {
+      ok: false,
+      error: `Could not resolve "${query}" on any regulated exchange, and aggregator metadata is unavailable. Either it isn't listed on a venue we track, or both sources are temporarily rate-limiting.`,
+      coverage: summarize(coverage),
+      coverageLog: coverage,
+    }
   }
 
   // Synthesize a market record from our own data when the aggregator is down.
@@ -77,7 +93,12 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
 
   const chain = resolveChain(market.platforms)
 
-  const slug = await resolveProtocolSlug(resolvedName).catch(() => null)
+  const slug = await track(coverage, "defillama:slug", () => resolveProtocolSlug(resolvedName))
+  // DefiLlama lists protocols by version, so a project's real revenue is the sum
+  // across its versions — Uniswap V2 + V3 + V4, not whichever one matched.
+  const family = slug
+    ? (await track(coverage, "defillama:family", () => resolveProtocolFamily(resolvedName))) ?? [slug]
+    : []
   // On-chain read only applies to the base-layer chains lib/onchain.ts can
   // read directly (ERC-20 tokens live in Ethereum contract calls, not their
   // own chain, so they're correctly out of scope rather than mismeasured).
@@ -87,16 +108,18 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   // on the supported list rather than running on every token.
   const onChainEligible = isOnChainSupported(resolvedSymbol)
   const [revenue30d, nextUnlock, tvlUsd, devActivity, security, depth, exchange, priceHistory, btcHistory, onChain] = await Promise.all([
-    slug ? getProtocolRevenue30d(slug).catch(() => null) : Promise.resolve(null),
-    slug ? getNextUnlock(slug).catch(() => null) : Promise.resolve(null),
-    getAnyTvl(slug, resolvedName, resolvedSymbol).catch(() => null),
-    getDevActivity(market.githubRepoUrl).catch(() => null),
-    chain ? fetchTokenSecurity(chain.chainId, chain.address).catch(() => null) : Promise.resolve(notApplicableSecurity()),
-    fetchOrderbookDepth(resolvedSymbol).catch(() => null),
+    track(coverage, "defillama:revenue-30d", () => getFamilyRevenue30d(family), { skip: family.length === 0 }),
+    track(coverage, "defillama:next-unlock", () => getNextUnlock(slug!), { skip: !slug }),
+    track(coverage, "defillama:tvl", () => getAnyTvl(slug, resolvedName, resolvedSymbol)),
+    track(coverage, "github:dev-activity", () => getDevActivity(market.githubRepoUrl)),
+    chain
+      ? track(coverage, "goplus:token-security", () => fetchTokenSecurity(chain.chainId, chain.address))
+      : Promise.resolve(notApplicableSecurity()),
+    track(coverage, "exchange:orderbook-depth", () => fetchOrderbookDepth(resolvedSymbol)),
     Promise.resolve(exchangeEarly),
-    getCoinPriceHistory(resolvedId).catch(() => [] as number[]),
-    getBtcHistory().catch(() => [] as number[]),
-    onChainEligible ? compareOnChain(ONCHAIN_SUPPORTED_SYMBOLS).catch(() => null) : Promise.resolve(null),
+    track(coverage, "coingecko:price-history", () => getCoinPriceHistory(resolvedId)).then(v => v ?? []),
+    track(coverage, "coingecko:btc-history", () => getBtcHistory()).then(v => v ?? []),
+    track(coverage, "onchain:compare", () => compareOnChain(ONCHAIN_SUPPORTED_SYMBOLS), { skip: !onChainEligible }),
   ])
 
   const onChainRead = onChain?.reads.find(r => r.symbol === resolvedSymbol.toUpperCase()) ?? null
@@ -112,7 +135,8 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
   const revenueYieldPct = revenue30d !== null && market.marketCapUsd && market.marketCapUsd > 0
     ? ((revenue30d * 12) / market.marketCapUsd) * 100 : null
   const revenueYieldPercentile = revenueYieldPct !== null
-    ? await getRevenueYieldPercentile(revenueYieldPct).catch(() => null)
+    ? await track(coverage, "internal:revenue-yield-percentile",
+                  () => getRevenueYieldPercentile(revenueYieldPct))
     : null
 
   const deterioration = await detectDeterioration({
@@ -275,5 +299,5 @@ export async function analyzeAndUpsertCrypto(queryRaw: string): Promise<AnalyzeC
     top10HolderPct: security?.top10HolderPct ?? null,
   })
 
-  return { ok: true, asset: saved }
+  return { ok: true, asset: saved, coverage: summarize(coverage), coverageLog: coverage }
 }

@@ -131,13 +131,35 @@ export async function runHealthChecks(): Promise<HealthReport> {
     }),
 
     // DefiLlama — protocol revenue and discovery.
+    //
+    // Asserts RESOLUTION, not just that the list is long. The previous check
+    // required more than 100 protocols; the list held 8,207 and passed happily
+    // while resolveProtocolSlug returned null for Uniswap, Curve, Optimism and
+    // Arbitrum, because DefiLlama lists protocols by version and nothing matched
+    // a bare project name. Revenue and unlock schedules were missing for four of
+    // the largest protocols in DeFi and the health check said everything was
+    // fine — the exact shape of failure this file exists to catch.
     check("defillama", false, async () => {
       const res = await fetch("https://api.llama.fi/protocols", { signal: AbortSignal.timeout(20000) })
       if (!res.ok) return { ok: false, detail: `HTTP ${res.status}` }
       const d = await res.json()
-      return Array.isArray(d) && d.length > 100
-        ? { ok: true, detail: `${d.length} protocols` }
-        : { ok: false, detail: "unexpected shape" }
+      if (!Array.isArray(d) || d.length <= 100) return { ok: false, detail: "unexpected shape" }
+
+      const { selectProtocolFamily } = await import("./defillama-client")
+      const list = d.map((p: { slug?: string; name?: string; symbol?: string; parentProtocol?: string; tvl?: number | null }) => ({
+        slug: p.slug ?? "", name: p.name ?? "", symbol: p.symbol,
+        parent: p.parentProtocol ?? null, tvl: typeof p.tvl === "number" ? p.tvl : null,
+      })).filter((p: { slug: string }) => p.slug)
+
+      // Names chosen because each resolves by a different route: a versioned
+      // family, a differently-named project, and a plain exact match.
+      const canaries = ["Uniswap", "Curve DAO", "Lido"]
+      const unresolved = canaries.filter(name => selectProtocolFamily(list, name).primary === null)
+
+      return unresolved.length === 0
+        ? { ok: true, detail: `${d.length} protocols; ${canaries.length} canary projects resolve` }
+        : { ok: false, detail: `${d.length} protocols but ${unresolved.join(", ")} did not resolve — ` +
+                               `revenue and unlocks will be silently missing for them` }
     }),
 
     // The not-null bug class: assert a real query returns real rows.

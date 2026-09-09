@@ -7,6 +7,9 @@ export const maxDuration = 120
 import { NextRequest } from "next/server"
 import { isMarketsAuthorized } from "@/lib/markets-auth"
 import { runHealthChecks } from "@/lib/data-health"
+import { latestCoverage } from "@/lib/coverage-store"
+import { brokenSources } from "@/lib/source-coverage"
+import { readFreshness } from "@/lib/market-freshness"
 
 export async function GET(request: NextRequest) {
   const isCron = process.env.CRON_SECRET
@@ -14,6 +17,33 @@ export async function GET(request: NextRequest) {
   if (!isCron && !(await isMarketsAuthorized(request))) {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
-  const report = await runHealthChecks()
-  return Response.json(report, { status: report.healthy ? 200 : 503 })
+  // Three different questions, which fail independently:
+  //   probes     — can each source be reached and does it return usable data
+  //   coverage   — did the sources actually answer during real pipeline runs
+  //   freshness  — is what we already hold still current
+  // A source can pass its probe and still have returned nothing all week.
+  const [report, stockCoverage, cryptoCoverage, stockFreshness, cryptoFreshness] = await Promise.all([
+    runHealthChecks(),
+    latestCoverage("stocks"),
+    latestCoverage("crypto"),
+    readFreshness("stocks"),
+    readFreshness("crypto"),
+  ])
+
+  const staleDomains = [stockFreshness, cryptoFreshness]
+    .filter(f => f.status === "falling-behind" || f.status === "stalled")
+
+  const problems = [
+    ...report.checks.filter(c => !c.ok).map(c => `probe · ${c.source}: ${c.detail}`),
+    ...brokenSources(stockCoverage?.health ?? []).map(h => `stocks · ${h.source}: ${h.note}`),
+    ...brokenSources(cryptoCoverage?.health ?? []).map(h => `crypto · ${h.source}: ${h.note}`),
+    ...staleDomains.map(f => `${f.domain} · freshness: ${f.note}`),
+  ]
+
+  return Response.json({
+    ...report,
+    problems,
+    coverage: { stocks: stockCoverage, crypto: cryptoCoverage },
+    freshness: { stocks: stockFreshness, crypto: cryptoFreshness },
+  }, { status: report.healthy ? 200 : 503 })
 }

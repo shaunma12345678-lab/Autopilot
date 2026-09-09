@@ -16,6 +16,7 @@ import { getSectorBenchmark, scoreAgainstSector } from "@/lib/sector-benchmarks"
 import { scoreStock } from "@/lib/stock-scoring"
 import { logStockUnderwriteCall } from "@/lib/underwrite-tracker"
 import { stampFields, type ProvenanceMap } from "@/lib/data-integrity"
+import { newCoverage, summarize, track, trackStrict, type CoverageLog, type CoverageSummary } from "@/lib/source-coverage"
 import { computeForwardSignals } from "@/lib/forward-signals"
 import { computePositionContext, describeSituation } from "@/lib/position-context"
 import { fetchFilingSections, readFilingNarrative } from "@/lib/edgar-narrative"
@@ -52,6 +53,10 @@ export interface AnalyzeStockResult {
   ok: boolean
   error?: string
   ticker?: Record<string, unknown>
+  /** Which sources answered for this company. */
+  coverage?: CoverageSummary
+  /** The raw attempts, aggregated across a run to spot a broken source. */
+  coverageLog?: CoverageLog
 }
 
 function makeCuid(): string {
@@ -71,12 +76,17 @@ export async function analyzeAndUpsertTicker(
 
   // One provider call returns both the daily series and the live quote, so
   // there's no separate price request to pay for.
+  // Every external source is recorded. The catch-and-continue behaviour is
+  // unchanged; the difference is that a provider being down is now visible
+  // instead of looking like a company that simply has no data.
+  const coverage = newCoverage(symbol)
+
   const [submissions, facts, goingConcern, history, benchmark] = await Promise.all([
-    getSubmissions(resolved.cik),
-    getCompanyFacts(resolved.cik),
-    searchGoingConcern(resolved.cik),
-    fetchHistory(symbol),
-    getBenchmarkHistory(),
+    trackStrict(coverage, "sec-edgar:submissions", () => getSubmissions(resolved.cik)),
+    trackStrict(coverage, "sec-edgar:company-facts", () => getCompanyFacts(resolved.cik)),
+    trackStrict(coverage, "sec-edgar:going-concern", () => searchGoingConcern(resolved.cik)),
+    trackStrict(coverage, "price:history", () => fetchHistory(symbol)),
+    trackStrict(coverage, "price:benchmark", () => getBenchmarkHistory()),
   ])
 
   if (!facts) return { ok: false, error: `No SEC XBRL filing data found for ${symbol}` }
@@ -87,7 +97,8 @@ export async function analyzeAndUpsertTicker(
   let effectiveFacts = facts
   let effectiveSubmissions = submissions
   if (countGaapConcepts(facts) < 150) {
-    const operatingCik = await findOperatingCik(submissions?.name ?? resolved.name).catch(() => null)
+    const operatingCik = await track(coverage, "sec-edgar:operating-cik",
+      () => findOperatingCik(submissions?.name ?? resolved.name))
     if (operatingCik && operatingCik !== resolved.cik) {
       const [betterFacts, betterSubs] = await Promise.all([
         getCompanyFacts(operatingCik),
@@ -139,7 +150,7 @@ export async function analyzeAndUpsertTicker(
   // ships a weaker valuation score than the one that was backtested, since the
   // own-history percentile carries 70% of the composite and is the component
   // with measured signal.
-  const deepBars = await fetchDeepHistory(symbol).catch(() => [])
+  const deepBars = (await track(coverage, "price:deep-history", () => fetchDeepHistory(symbol))) ?? []
   const valuationBars = deepBars.length > history.bars.length ? deepBars : history.bars
   const sharesByEnd = new Map((series.sharesOutstanding ?? []).map(o => [o.end, o.value]))
   const closeOnDate = (iso: string): number | null => {
@@ -178,8 +189,9 @@ export async function analyzeAndUpsertTicker(
     operatingMarginPct: fundamentals.operatingMarginPct,
   }).catch(() => ({ percentiles: [], reasons: [], netMarginPercentile: null, netMarginPeerCount: null }))
 
-  const shortInterest = await getShortInterest(symbol).catch(() => null)
-  const federal = await getFederalRevenue(effectiveSubmissions?.name ?? resolved.name).catch(() => null)
+  const shortInterest = await track(coverage, "short-interest", () => getShortInterest(symbol))
+  const federal = await track(coverage, "federal-revenue",
+    () => getFederalRevenue(effectiveSubmissions?.name ?? resolved.name))
 
   const sectorBenchmark = await getSectorBenchmark(sicCode)
   const sectorRelative = scoreAgainstSector({
@@ -303,7 +315,8 @@ export async function analyzeAndUpsertTicker(
 
     const [gov, lead, narrRes, nws, rdiff, litig] = await Promise.all([
       opts.includeNarrative && proxy
-        ? readProxyGovernance(cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate).catch(() => null)
+        ? track(coverage, "sec-edgar:proxy-governance",
+            () => readProxyGovernance(cik, proxy.accessionNumber, proxy.primaryDocument, proxy.filingDate))
         : Promise.resolve(null),
 
       // Who actually runs the company (lib/leadership.ts). Reads the same
@@ -339,20 +352,20 @@ export async function analyzeAndUpsertTicker(
         : Promise.resolve({ narrative: null, concentration: null }),
 
       opts.includeNews
-        ? readCompanyNews(effectiveSubmissions?.name ?? resolved.name, symbol).catch(() => null)
+        ? track(coverage, "news-feed", () => readCompanyNews(effectiveSubmissions?.name ?? resolved.name, symbol))
         : Promise.resolve(null),
 
       // Year-over-year risk-factor diff — runs alongside the others since it's
       // another independent filing fetch.
       opts.includeNarrative
-        ? diffRiskFactors(cik, effectiveSubmissions?.recentForms ?? []).catch(() => null)
+        ? track(coverage, "sec-edgar:risk-factor-diff", () => diffRiskFactors(cik, effectiveSubmissions?.recentForms ?? []))
         : Promise.resolve(null),
 
       // Federal court litigation (lib/litigation-check.ts) — an external API
       // with its own rate budget, independent of every SEC fetch above.
       // Returns null instantly when COURTLISTENER_API_TOKEN isn't set.
       opts.includeNarrative
-        ? checkLitigation(effectiveSubmissions?.name ?? resolved.name).catch(() => null)
+        ? track(coverage, "litigation", () => checkLitigation(effectiveSubmissions?.name ?? resolved.name))
         : Promise.resolve(null),
     ])
 
@@ -847,5 +860,5 @@ export async function analyzeAndUpsertTicker(
 
   await logStockUnderwriteCall(saved).catch(() => {})
 
-  return { ok: true, ticker: saved }
+  return { ok: true, ticker: saved, coverage: summarize(coverage), coverageLog: coverage }
 }

@@ -13,6 +13,8 @@ export const maxDuration = 300
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { analyzeAndUpsertTicker } from "@/lib/stock-pipeline"
+import { aggregate, coverageAlarms, type CoverageLog } from "@/lib/source-coverage"
+import { recordCoverage } from "@/lib/coverage-store"
 
 const CRON_SECRET = process.env.CRON_SECRET ?? ""
 // Sized against measured throughput, not guesswork. After the benchmark-cache
@@ -116,6 +118,8 @@ export async function GET(request: NextRequest) {
 
     // Fixed-size worker pool. Each worker pulls the next symbol, so a slow
     // company delays only its own worker rather than stalling a whole batch.
+    const logs: CoverageLog[] = []
+
     const worker = async () => {
       for (;;) {
         if (Date.now() - startedAt.getTime() > WALL_CLOCK_BUDGET_MS) {
@@ -127,6 +131,7 @@ export async function GET(request: NextRequest) {
         try {
           const r = await analyzeAndUpsertTicker(symbol)
           results[symbol] = r.ok ? "ok" : (r.error ?? "failed")
+          if (r.coverageLog) logs.push(r.coverageLog)
         } catch (err) {
           results[symbol] = err instanceof Error ? err.message : "failed"
         }
@@ -135,12 +140,21 @@ export async function GET(request: NextRequest) {
 
     await Promise.all(Array.from({ length: CONCURRENCY }, worker))
 
+    // A source failing on one company is ordinary; failing on the whole batch
+    // is an outage. That distinction only exists across a run.
+    const health = aggregate(logs)
+    const alarms = coverageAlarms(health)
+    if (alarms.length) console.warn("[cron/stocks-refresh] source problems:", alarms.join(" | "))
+    await recordCoverage("stocks", health, logs.length)
+
     return Response.json({
       ok: true,
       processed: Object.keys(results).length,
       deferred: queue.length,
       budgetExhausted,
       results,
+      sourceHealth: health,
+      alarms,
       duration: Date.now() - startedAt.getTime(),
     })
   } catch (err) {
