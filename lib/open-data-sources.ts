@@ -232,7 +232,15 @@ async function queryHub(box: GeoBox, kw: Category, state: string): Promise<FreeL
             defaultAmount: askingPrice,
             lender: null,
             auctionDate: null,
-            estimatedValue: assessed ?? askingPrice,
+            // ONLY the assessed value, never the asking price.
+            //
+            // estimatedValue feeds ARV in analyzeDeal, and ARV is what the offer
+            // is computed from. Letting a $617 tax-deed asking price become the
+            // after-repair value would produce an ARV equal to the purchase
+            // price and an offer of nothing — a confidently wrong number, which
+            // is worse than no number. The acquisition cost lives in
+            // defaultAmount, where it belongs.
+            estimatedValue: assessed,
             sourceUrl: serviceUrl,
             rawSignals: signals,
             occupancy: kw.vacant ? "vacant" : null,
