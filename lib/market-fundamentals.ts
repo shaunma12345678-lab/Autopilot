@@ -14,6 +14,8 @@
 // Best-effort: any source failing returns null for that metric and the scores
 // normalize over what we actually have. Never throws.
 
+import { placeGeoid } from "@/lib/market-criteria-inputs"
+
 export interface Fundamentals {
   population:       number | null
   popGrowth5yr:    number | null   // % growth, normalized to a 5-year-equivalent from the census time-series
@@ -72,6 +74,13 @@ interface CensusMetrics {
 }
 
 async function resolveGeoid(city: string, state: string): Promise<string | null> {
+  // The shipped table first. Census Reporter's geo/search endpoint answers
+  // {"error":"block"} to every user agent, so relying on it meant every ACS
+  // figure came back null — and because this module swallows failures, that
+  // looked like a city with no census data rather than a blocked lookup.
+  const known = placeGeoid(city, state)
+  if (known) return known
+
   const st = (state || "").toLowerCase().trim()
   const target = city.toLowerCase().trim()
   const url = `https://api.censusreporter.org/1.0/geo/search?q=${encodeURIComponent(city)}&sumlevel=160`
