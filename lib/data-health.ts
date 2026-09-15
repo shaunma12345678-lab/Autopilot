@@ -162,6 +162,19 @@ export async function runHealthChecks(): Promise<HealthReport> {
                                `revenue and unlocks will be silently missing for them` }
     }),
 
+    // Our own house-price index. Asserts the service DOES ITS JOB, not that a
+    // request returned 200: the wrong FHFA filename serves a full HTML error
+    // page and another serves an XLSX, and either would parse to an empty map
+    // that reads downstream as a country where no house has changed price.
+    check("fhfa-hpi", false, async () => {
+      const { selfCheck } = await import("./hpi-service")
+      const h = await selfCheck()
+      const failed = h.checks.filter(c => !c.ok).map(c => `${c.name}: ${c.detail}`)
+      return h.ok
+        ? { ok: true, detail: `${h.metroCount} metros, newest ${h.latestQuarter} (${h.quartersBehind}q behind)` }
+        : { ok: false, detail: failed.join(" | ") || "self-check failed" }
+    }),
+
     // The not-null bug class: assert a real query returns real rows.
     check("db-query-integrity", true, async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

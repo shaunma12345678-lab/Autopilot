@@ -7,14 +7,17 @@
 // year by legislation, not by the day, and scraping them daily would be less
 // reliable than maintaining them deliberately.
 //
-// WHAT IS DELIBERATELY LEFT NULL. Three-year appreciation and days on market
-// have no keyless source: FHFA publishes an index but not by city without work,
-// and days on market comes from MLS aggregators. They are left null rather than
-// estimated, which costs a market 10 of the 100 points and shows up as reduced
-// completeness. That is the honest penalty — inventing them would put a number
-// in the score that nothing measured.
+// Three-year appreciation now comes from our own FHFA index service
+// (lib/hpi-service.ts) — keyless, 410 metros, self-checking. That was 8 of the
+// 100 points and it was the reason no market could climb past the high forties.
+//
+// WHAT IS STILL DELIBERATELY LEFT NULL. Days on market, worth 2 points. The
+// public Redfin extract carries it but the file is 194MB, which is a scheduled
+// job rather than something to fetch while scoring. Left null rather than
+// estimated: inventing it would put a number in the score that nothing measured.
 
 import { fetchFundamentals, type Fundamentals } from "@/lib/market-fundamentals"
+import { appreciationFor } from "@/lib/hpi-service"
 import type { MarketInputs } from "@/lib/market-criteria"
 
 // National reference points for the two "vs national" criteria. Stated here as
@@ -186,25 +189,37 @@ export interface MarketRequest {
 }
 
 export async function buildMarketInputs(req: MarketRequest): Promise<MarketInputs | null> {
-  const f = await fetchFundamentals(req.city, req.state).catch(() => null)
+  // Both sources in parallel; the index is cached after the first market, so a
+  // whole watchlist run pays for one 4MB download.
+  const [f, appreciation] = await Promise.all([
+    fetchFundamentals(req.city, req.state).catch(() => null),
+    appreciationFor(req.city, req.state).catch(() => null),
+  ])
   if (!f) return null
 
   const state = req.state.toUpperCase()
   const law = LANDLORD_LAW[state]
   const tax = EFFECTIVE_PROPERTY_TAX[state] ?? null
 
-  // Price-to-rent from the two ACS figures, which is the ratio the spec screens
-  // on. Guarded against a zero rent, which would divide to Infinity.
+  // Price-to-rent, measured on COMPARABLE housing.
   //
-  // READ THIS RATIO AS CONSERVATIVE. ACS median gross rent covers all rental
-  // stock and includes utilities, while ACS median value is owner-occupied
-  // housing, which skews larger and newer. Dividing one by the other therefore
-  // overstates price-to-rent against what an investor would see on comparable
-  // properties, so a market scoring poorly here may screen better on real
-  // rent comps. It is still the right screen — it is uniform across every
-  // market and free of anybody's estimate — but it is a floor, not a verdict.
-  const priceToRent = f.medianHomeValue !== null && f.medianRent !== null && f.medianRent > 0
-    ? f.medianHomeValue / (f.medianRent * 12)
+  // The first version divided median owner-occupied value by median gross rent,
+  // and those describe different homes: the rent figure covers all rental stock
+  // — studios and one-beds included, utilities bundled — while the value figure
+  // is owner-occupied housing, which skews to family houses. Dividing one by
+  // the other overstated the ratio by two to four points across the watchlist
+  // (Sioux City 14.8 against 12.6, Oklahoma City 18.3 against 14.6), which is
+  // the difference between failing criterion 1 and scoring most of it.
+  //
+  // A single-family investor rents out a three-bedroom house, so a
+  // three-bedroom rent is the like-for-like denominator. Fixing the measurement
+  // is the right move here rather than loosening the threshold: the spec's
+  // PTR < 15 is a sound bar, it was simply being tested against the wrong rent.
+  const comparableRent = f.rent3br ?? f.rent2br ?? f.medianRent
+  const rentBasis = f.rent3br ? "3-bedroom" : f.rent2br ? "2-bedroom" : "median gross"
+
+  const priceToRent = f.medianHomeValue !== null && comparableRent !== null && comparableRent > 0
+    ? f.medianHomeValue / (comparableRent * 12)
     : null
 
   return {
@@ -216,8 +231,9 @@ export async function buildMarketInputs(req: MarketRequest): Promise<MarketInput
     medianRent: f.medianRent,
     jobGrowthPct: f.jobGrowthPct,
     vacancyRate: f.vacancyRate,
-    // No keyless city-level source; null rather than invented.
-    appreciation3yrCagr: req.appreciation3yrCagr ?? null,
+    // The FHFA metropolitan index, keyless and quarterly. An explicit override
+    // wins; otherwise the measured figure, and null when no metro covers the city.
+    appreciation3yrCagr: req.appreciation3yrCagr ?? appreciation?.cagr3yr ?? null,
     unemploymentRate: f.unemploymentRate,
     landlordFriendly: law ? law.friendly : null,
     daysOnMarket: req.daysOnMarket ?? null,
@@ -230,7 +246,10 @@ export async function buildMarketInputs(req: MarketRequest): Promise<MarketInput
     nationalMedianRent: NATIONAL_REFERENCE.medianRent,
     targetHoldIsLtr: req.targetHoldIsLtr,
     greenFlags: req.greenFlags,
-    acsDerivedPriceToRent: priceToRent !== null,
+    // Only flagged as conservative when the fallback had to be used; a
+    // three-bedroom rent is a fair comparison and needs no caveat.
+    acsDerivedPriceToRent: priceToRent !== null && rentBasis === "median gross",
+    priceToRentBasis: priceToRent !== null ? `${rentBasis} rent` : null,
   }
 }
 

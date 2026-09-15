@@ -57,6 +57,8 @@ export interface MarketInputs {
 
   /** True when price-to-rent came from ACS medians, which run conservative. */
   acsDerivedPriceToRent?: boolean
+  /** Which rent the ratio was measured against, shown on the card. */
+  priceToRentBasis?: string | null
 }
 
 export interface CriterionScore {
@@ -196,7 +198,9 @@ export function scoreCriteria(input: MarketInputs): CriterionScore[] {
   else {
     const p = round(band(input.priceToRent, 18, 12, 18))
     out.push({ id: "ptr", label: "Price-to-rent ratio", points: p, maxPoints: 18, measured: true,
-      basis: `PTR ${input.priceToRent.toFixed(1)} — under 12 earns full marks, 18 and above earns none.` })
+      basis: `PTR ${input.priceToRent.toFixed(1)}` +
+             (input.priceToRentBasis ? ` (against ${input.priceToRentBasis})` : "") +
+             ` — under 12 earns full marks, 18 and above earns none.` })
   }
 
   // 2 — Population growth, 14 pts. Over 2% is full; declining already failed above.
