@@ -984,10 +984,51 @@ async function scrapeBid4Assets(state: string): Promise<FreeLead[]> {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
+import { newCoverage, track, summarize, type CoverageLog, type CoverageSummary, type SourceAttempt } from "@/lib/source-coverage"
+
 export interface DirectSourceResult {
   leads:        FreeLead[]
   sourceCounts: Record<string, number>
   geocoded:     boolean
+  /** Which sources answered, and how fast. */
+  coverage?:    CoverageSummary
+  attempts?:    SourceAttempt[]
+  /** Leads known to be in the searched area. */
+  locationConfirmed?: number
+  /** Leads from sources that publish no coordinates — flagged, not hidden. */
+  locationUnconfirmed?: number
+}
+
+// A source that has not answered by now is not going to, and is holding up
+// every other source that already has.
+const SOURCE_TIMEOUT_MS = 12_000
+
+/**
+ * Run one source with a ceiling on how long it may take, recording the outcome.
+ *
+ * `track` already turns a throw into a recorded failure. The race adds the part
+ * it cannot do on its own: a scraper that hangs rather than throwing is the
+ * thing that actually makes a search feel broken.
+ */
+function bounded(
+  log: CoverageLog,
+  source: string,
+  run: () => Promise<FreeLead[]>,
+  skip = false,
+): Promise<FreeLead[]> {
+  return track(log, source, async () => {
+    let timer: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        run(),
+        new Promise<FreeLead[]>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer in ${SOURCE_TIMEOUT_MS / 1000}s`)), SOURCE_TIMEOUT_MS)
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }, { skip, empty: (v) => v.length === 0 }).then(v => v ?? [])
 }
 
 export async function searchDirectSources(params: {
@@ -999,6 +1040,8 @@ export async function searchDirectSources(params: {
   maxLeads?:  number
   countyId?:  string
   leadType?:  string
+  /** Drop leads whose location could not be confirmed, rather than flagging them. */
+  confirmedLocationOnly?: boolean
 }): Promise<DirectSourceResult> {
   const maxLeads  = params.maxLeads ?? 100
   const state     = params.state ?? "CA"
@@ -1017,7 +1060,20 @@ export async function searchDirectSources(params: {
     box = await geocodeArea(params)
   }
 
-  // All sources in parallel
+  // Every source is recorded and every source is bounded.
+  //
+  // WHY THIS EXISTS. Eleven of these fourteen were returning zero leads, for
+  // every search, and nothing anywhere said so — each is individually wrapped in
+  // a catch, which is right for resilience and catastrophic for visibility. A
+  // search for Toledo and a search for Phoenix came back with byte-identical
+  // source counts, which is only possible if the area is being ignored.
+  //
+  // WHY THE TIMEOUT. The slowest source sets the latency of the whole search,
+  // because these run together. One scraper waiting on a portal that will never
+  // answer used to hold up thirteen that already had. Now it is cut off and
+  // recorded as slow, which is both faster and more honest.
+  const coverage = newCoverage(areaLabel)
+
   const [
     zillowLeads, redfinLeads,
     homePathLeads, homeStepsLeads,
@@ -1025,20 +1081,20 @@ export async function searchDirectSources(params: {
     auctionLeads, hudLeads, usdaLeads, bid4Leads,
     fcComLeads, legalNoticeLeads,
   ] = await Promise.all([
-    box ? scrapeZillowTiled(box, maxLeads)  : Promise.resolve([]),
-    box ? scrapeRedfinTiled(box, maxLeads, state)  : Promise.resolve([]),
-    box ? scrapeHomePath(box)               : Promise.resolve([]),
-    box ? scrapeHomeSteps(box)              : Promise.resolve([]),
-    box ? queryArcGISHub(box, areaLabel)    : Promise.resolve([]),
-    fetchOpenDataLeads(box, state, params.leadType),   // gov open data (code/vacant/tax/lien)
-    fetchCountyRecords({ countyId: params.countyId, county: countyName, city: params.city, state, zipCode: params.zipCode }), // county/city Socrata records
-    fetchRecorderDirect(box),                          // pinned recorder-grade registries (fresh filings, lender contact)
-    scrapeAuctionCom(params),
-    scrapeHudReo({ state, county: countyName }),
-    scrapeUsda(state),
-    scrapeBid4Assets(state),
-    countyName ? scrapeForeclosureCom(countyName, state) : Promise.resolve([]),
-    countyName ? scrapeLegalNotices(countyName)          : Promise.resolve([]),
+    bounded(coverage, "Zillow", () => scrapeZillowTiled(box!, maxLeads), !box),
+    bounded(coverage, "Redfin", () => scrapeRedfinTiled(box!, maxLeads, state), !box),
+    bounded(coverage, "HomePath (Fannie)", () => scrapeHomePath(box!), !box),
+    bounded(coverage, "HomeSteps (Freddie)", () => scrapeHomeSteps(box!), !box),
+    bounded(coverage, "ArcGIS county records", () => queryArcGISHub(box!, areaLabel), !box),
+    bounded(coverage, "Gov open data", () => fetchOpenDataLeads(box, state, params.leadType)),
+    bounded(coverage, "County Socrata", () => fetchCountyRecords({ countyId: params.countyId, county: countyName, city: params.city, state, zipCode: params.zipCode })),
+    bounded(coverage, "Recorder direct", () => fetchRecorderDirect(box)),
+    bounded(coverage, "auction.com", () => scrapeAuctionCom(params)),
+    bounded(coverage, "HUD REO", () => scrapeHudReo({ state, county: countyName })),
+    bounded(coverage, "USDA RD", () => scrapeUsda(state)),
+    bounded(coverage, "Bid4Assets", () => scrapeBid4Assets(state)),
+    bounded(coverage, "Foreclosure.com", () => scrapeForeclosureCom(countyName, state), !countyName),
+    bounded(coverage, "Legal notices", () => scrapeLegalNotices(countyName), !countyName),
   ])
 
   const sourceCounts: Record<string, number> = {}
@@ -1077,11 +1133,37 @@ export async function searchDirectSources(params: {
     ...fcComLeads,
   ].filter((l) => {
     if (!l.address?.trim()) return false
+
+    // A lead from another state is not a lead.
+    //
+    // Several sources ignore the area entirely — a search for Toledo and a
+    // search for Phoenix came back with byte-identical results, because the
+    // scrapers hand back the same national set whatever they are asked. Sources
+    // that genuinely cannot say where a property is leave state blank, and those
+    // are kept and carry their own "location not confirmed" warning; a lead that
+    // states a DIFFERENT state is simply wrong and is dropped here.
+    if (state && l.state && l.state.toUpperCase() !== state.toUpperCase()) return false
+    if (params.confirmedLocationOnly && !l.state) return false
+
     const key = (l.address + l.city).toLowerCase().replace(/[\s,#.-]/g, "")
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
 
-  return { leads, sourceCounts, geocoded: !!box }
+  // Reported rather than buried: a caller deserves to know how much of what it
+  // just received is actually known to be in the area it asked about.
+  const confirmed = leads.filter(l => !!l.state).length
+  const health = summarize(coverage)
+  const problems = coverage.attempts
+    .filter(a => a.outcome === "failed" || a.outcome === "empty")
+    .map(a => `${a.source}: ${a.outcome}${a.error ? ` — ${a.error}` : ""} (${a.ms}ms)`)
+  if (problems.length) console.warn(`[direct-sources] ${areaLabel} —`, problems.join(" | "))
+
+  return {
+    leads, sourceCounts, geocoded: !!box,
+    coverage: health, attempts: coverage.attempts,
+    locationConfirmed: confirmed,
+    locationUnconfirmed: leads.length - confirmed,
+  }
 }

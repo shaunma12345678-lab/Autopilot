@@ -57,6 +57,7 @@ const CHEAP = [CATEGORY.landbank, CATEGORY.taxdeed, CATEGORY.surplus, CATEGORY.s
 const ADDR_FIELDS = ["SITE_ADDR", "SITUS_ADDR", "situs_address", "PropertyAddress", "PROPERTY_ADDRESS", "StreetAddress", "STREET_ADDR", "ADDRESS", "Address", "address", "FULL_ADDR", "ADDR"]
 const CITY_FIELDS = ["CITY", "SITUS_CITY", "PropertyCity", "city", "City", "CITY_TWP_V", "TOWNSHIP"]
 const ZIP_FIELDS  = ["ZIP", "ZIP_CODE", "SITUS_ZIP", "PropertyZip", "zip", "Zip"]
+const STATE_FIELDS = ["STATE", "State", "state", "SITUS_STATE", "PropertyState", "ST", "STATE_ABBR"]
 const OWNER_FIELDS = ["OWNER_NAME", "OwnerName", "OWNER", "owner", "Owner", "GRANTEE", "TAXPAYER", "OWNER1"]
 
 // The field that makes "cheap" findable at all.
@@ -221,7 +222,16 @@ async function queryHub(box: GeoBox, kw: Category, state: string): Promise<FreeL
           out.push({
             address,
             city:  pick(a, CITY_FIELDS),
-            state: state || "CA",
+            // The lead's OWN state, not the one that was searched.
+            //
+            // This used to stamp the searched state onto every row, so the same
+            // national dataset came back labelled "OH" for a Toledo search and
+            // "AZ" for a Phoenix one — the identical property, asserted to be in
+            // two different states, and impossible for any downstream filter to
+            // catch. The searched state is only assumed when the feature's
+            // coordinates were actually confirmed inside the search box.
+            state: pick(a, STATE_FIELDS).slice(0, 2).toUpperCase()
+                   || (placement === "inside" ? state : ""),
             zip:   pick(a, ZIP_FIELDS),
             ownerName: pick(a, OWNER_FIELDS),
             foreclosureStage: "PRE_FORECLOSURE",

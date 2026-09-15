@@ -31,8 +31,92 @@ function monthsAgoIso(months: number): string {
 
 // Greater LA (city feeds; generous box so LA County searches catch them).
 const LA_REGION = { south: 33.60, north: 34.90, west: -119.00, east: -117.55 }
+// Prince George's County, Maryland — the DC eastern suburbs.
+const PG_REGION = { south: 38.53, north: 39.05, west: -77.10, east: -76.65 }
 
 const FEEDS: PinnedFeed[] = [
+  {
+    // LAHD's CURRENT registration year. The older 2qnc-kq4g feed below still
+    // carries history, but this is where a filing lands first — and it publishes
+    // the servicer's name AND contact, which is the difference between a lead
+    // and a lead you can act on today.
+    //
+    // Verified live 2026-09: newest registration 2026-01-06.
+    id: "la-foreclosure-registry-2026",
+    label: "LA foreclosure registry 2026 (LAHD)",
+    url: (limit) =>
+      `https://data.lacity.org/resource/5nzp-isg9.json?$order=registered_date DESC&$limit=${limit}` +
+      `&$where=registered_date > '${monthsAgoIso(18)}'`,
+    region: LA_REGION,
+    map: (r) => {
+      const address = str(r.propertyaddress)
+      if (!address || !/^\d/.test(address)) return null
+      const lender = str(r.lender)
+      const contact = str(r.lendercontact)
+      return {
+        address,
+        city: str(r.propertycity) || "Los Angeles",
+        state: str(r.propertystate) || "CA",
+        zip: str(r.propertyzip).slice(0, 5),
+        ownerName: "",
+        foreclosureStage: "NOTICE_OF_DEFAULT",
+        recordingDate: str(r.registered_date).slice(0, 10),
+        defaultAmount: null,
+        lender: lender || null,
+        auctionDate: null,
+        estimatedValue: null,
+        sourceUrl: "https://data.lacity.org/d/5nzp-isg9",
+        rawSignals: [
+          "Registered foreclosure — lender filed a notice of default (LAMC 164.00)",
+          ...(contact ? [`Lender contact: ${contact}`] : []),
+          ...(str(r.property_type) ? [str(r.property_type)] : []),
+        ],
+        occupancy: null,
+      }
+    },
+  },
+  {
+    // Prince George's County, MD publishes foreclosure filings with a full
+    // street address. Verified live 2026-09: newest filing 2026-07-28.
+    //
+    // The sort matters more than it looks: unsorted, this dataset hands back
+    // 2009 records first, which is how it reads as a dead archive.
+    id: "pg-county-foreclosures",
+    label: "Prince George's County MD foreclosures",
+    url: (limit) =>
+      `https://data.princegeorgescountymd.gov/resource/mnie-hrv7.json?$order=submitteddate DESC` +
+      `&$limit=${limit}&$where=submitteddate > '${monthsAgoIso(18)}'`,
+    region: PG_REGION,
+    map: (r) => {
+      const address = str(r.street_address)
+      if (!address || !/^\d/.test(address)) return null
+      const occupied = str(r.addressoccupied).toLowerCase()
+      return {
+        address,
+        city: str(r.city),
+        state: str(r.state) || "MD",
+        zip: str(r.zip_code).slice(0, 5),
+        ownerName: "",
+        foreclosureStage: "PRE_FORECLOSURE",
+        recordingDate: str(r.submitteddate).slice(0, 10),
+        defaultAmount: null,
+        lender: null,
+        auctionDate: null,
+        estimatedValue: null,
+        sourceUrl: "https://data.princegeorgescountymd.gov/d/mnie-hrv7",
+        rawSignals: [
+          "County foreclosure filing (Prince George's County MD)",
+          ...(str(r.propertydescription) && str(r.propertydescription) !== "Unavailable"
+            ? [str(r.propertydescription)] : []),
+        ],
+        // The county records occupancy, which is the single most useful field
+        // on a distressed lead and is usually missing entirely.
+        occupancy: occupied.includes("vacant") || occupied === "no" ? "vacant"
+                 : occupied === "yes" || occupied.includes("occupied") ? "occupied"
+                 : null,
+      }
+    },
+  },
   {
     // LAHD Registered Foreclosure Properties — lenders MUST register properties
     // when a notice of default records (LAMC 164.00). Fresh NODs with the
