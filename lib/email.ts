@@ -33,7 +33,7 @@ export async function sendContentReadyEmail(to: string, businessName: string, co
       <p>We've generated <strong>${count} new content pieces</strong> for ${businessName}.</p>
       <p>Log in to review, approve, or edit them before they go live.</p>
       <a href="${process.env.NEXT_PUBLIC_APP_URL}/content" style="background:#6366f1;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;margin-top:16px;">Review Content</a>
-      <p style="color:#6b7280;font-size:14px;margin-top:32px;">AutoPilot — AI Business Operating System</p>
+      <p style="color:#6b7280;font-size:14px;margin-top:32px;">AutoPilot — Distressed property intelligence</p>
     `,
   })
 }

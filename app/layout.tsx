@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AutoPilot — AI Business Operating System",
-  description: "AI-powered platform that handles content creation, reputation management, lead generation, and more — so you can run your business.",
+  title: "AutoPilot — Distressed Property Leads, Before They Hit Any List",
+  description: "Pre-foreclosure, tax-delinquent, vacant and probate leads built from county records — forecast before they are filed, graded in public, and never sold per record.",
 };
 
 export default function RootLayout({
