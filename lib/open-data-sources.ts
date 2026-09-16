@@ -135,7 +135,10 @@ function pick(attrs: Record<string, unknown>, fields: string[]): string {
   return ""
 }
 
-async function queryHub(box: GeoBox, kw: Category, state: string): Promise<FreeLead[]> {
+/** What the user actually searched for, so a confirmed lead can be labelled. */
+export interface SearchPlace { city?: string; zip?: string }
+
+async function queryHub(box: GeoBox, kw: Category, state: string, place: SearchPlace = {}): Promise<FreeLead[]> {
   const bbox = `${box.west},${box.south},${box.east},${box.north}`
   try {
     // THE BUG THIS FIXES. The search carried `filter[bbox]`, which the Hub API
@@ -219,9 +222,18 @@ async function queryHub(box: GeoBox, kw: Category, state: string): Promise<FreeL
           if (askingPrice !== null) signals.push(`Asking $${Math.round(askingPrice).toLocaleString()}`)
           else if (assessed !== null) signals.push(`Assessed $${Math.round(assessed).toLocaleString()}`)
 
+          // A dataset's own city and ZIP win. Where it publishes neither but the
+          // feature's COORDINATES were confirmed inside the searched box, the
+          // searched place is stamped on — that is derived from geometry, not
+          // guessed, and without it every open-data lead arrives with a blank
+          // city and ZIP and cannot be filtered to the area at all.
+          const datasetCity = pick(a, CITY_FIELDS)
+          const datasetZip = pick(a, ZIP_FIELDS)
+          const confirmedHere = placement === "inside"
+
           out.push({
             address,
-            city:  pick(a, CITY_FIELDS),
+            city:  datasetCity || (confirmedHere ? (place.city ?? "") : ""),
             // The lead's OWN state, not the one that was searched.
             //
             // This used to stamp the searched state onto every row, so the same
@@ -232,7 +244,7 @@ async function queryHub(box: GeoBox, kw: Category, state: string): Promise<FreeL
             // coordinates were actually confirmed inside the search box.
             state: pick(a, STATE_FIELDS).slice(0, 2).toUpperCase()
                    || (placement === "inside" ? state : ""),
-            zip:   pick(a, ZIP_FIELDS),
+            zip:   datasetZip || (confirmedHere ? (place.zip ?? "") : ""),
             ownerName: pick(a, OWNER_FIELDS),
             foreclosureStage: "PRE_FORECLOSURE",
             recordingDate: "",
@@ -270,13 +282,13 @@ export async function fetchOpenDataLeads(
   box: GeoBox | null,
   state: string,
   leadType?: string,
-  options: { maxPrice?: number } = {},
+  options: { maxPrice?: number; place?: SearchPlace } = {},
 ): Promise<FreeLead[]> {
   if (!box) return []
   const targets = leadType === "cheap"
     ? CHEAP
     : leadType && CATEGORY[leadType] ? [CATEGORY[leadType]] : BROAD
-  const batches = await Promise.all(targets.map((t) => queryHub(box, t, state)))
+  const batches = await Promise.all(targets.map((t) => queryHub(box, t, state, options.place ?? {})))
   // Dedupe by address+city.
   const seen = new Set<string>()
   const out: FreeLead[] = []

@@ -1003,6 +1003,54 @@ export interface DirectSourceResult {
 // every other source that already has.
 const SOURCE_TIMEOUT_MS = 12_000
 
+// An ordinary listing is not distress.
+//
+// Everything else here — a notice of default, a tax delinquency, a code
+// violation, a vacancy, a land-bank parcel — describes an owner with a problem.
+// "Active listing" describes a house for sale, which is the one category where
+// there is no motivated seller to find and no discount to win.
+const PLAIN_LISTING = /active listing|for sale by agent|mls listing/i
+
+function hasDistressSignal(lead: FreeLead): boolean {
+  const signals = lead.rawSignals ?? []
+  const meaningful = signals.filter(s =>
+    s && !PLAIN_LISTING.test(s) && !/location (not confirmed|from the search area)/i.test(s))
+  if (meaningful.length > 0) return true
+
+  // A stage beyond the default placeholder is itself the signal.
+  const stage = (lead.foreclosureStage ?? "").toUpperCase()
+  if (stage && stage !== "PRE_FORECLOSURE") return true
+
+  return !!lead.auctionDate || (lead.occupancy ?? "").toLowerCase() === "vacant"
+}
+
+// Page copy is not an address.
+//
+// Bid4Assets was contributing rows like "1 No Reserve Auctions, car auctions,"
+// and "000 properties and grossed over a billion dollars in auction sales" —
+// marketing text from the page, scraped into the address field because it
+// happened to begin with a digit. Those reached the user as leads. A street
+// address has a number, a name, and does not run on like a sentence.
+const ADDRESS_NOISE = /auction|properties and|no reserve|click here|learn more|sign up|terms of|all rights|copyright|billion|million dollars/i
+
+export function looksLikeAddress(value: string | null | undefined): boolean {
+  const address = (value ?? "").trim()
+  if (address.length < 6 || address.length > 90) return false
+
+  // Must start with a street number.
+  if (!/^\d/.test(address)) return false
+
+  // Must contain at least one word of street name beyond the number.
+  if (!/^\d[\w-]*\s+[A-Za-z]/.test(address)) return false
+
+  if (ADDRESS_NOISE.test(address)) return false
+
+  // A real address is a handful of words, not a sentence.
+  if (address.split(/\s+/).length > 9) return false
+
+  return true
+}
+
 /**
  * Run one source with a ceiling on how long it may take, recording the outcome.
  *
@@ -1040,12 +1088,31 @@ export async function searchDirectSources(params: {
   maxLeads?:  number
   countyId?:  string
   leadType?:  string
-  /** Drop leads whose location could not be confirmed, rather than flagging them. */
+  /**
+   * Drop leads whose location could not be confirmed.
+   *
+   * Defaults to TRUE for a zip or city search. Someone who typed a ZIP code
+   * wants that ZIP code — returning several hundred nationwide records whose
+   * location we cannot vouch for is not a lenient answer, it is a wrong one.
+   * A county or state search is broader by nature and keeps the old behaviour.
+   */
   confirmedLocationOnly?: boolean
+  /**
+   * Keep only leads carrying an actual distress signal.
+   *
+   * A pre-foreclosure screen showing ordinary MLS listings is the wrong
+   * content: a ZIP search returned 349 leads of which 346 were plain active
+   * listings and 3 were foreclosures. An active listing is a property for
+   * sale, not a motivated seller, and burying three real leads under three
+   * hundred irrelevant ones is the same as not finding them.
+   */
+  distressedOnly?: boolean
 }): Promise<DirectSourceResult> {
   const maxLeads  = params.maxLeads ?? 100
   const state     = params.state ?? "CA"
   const countyName = params.county ?? ""
+  const searchingOnePlace = params.searchType === "zip" || params.searchType === "city"
+  const confirmedOnly = params.confirmedLocationOnly ?? searchingOnePlace
 
   const areaLabel =
     params.searchType === "zip"    ? `ZIP ${params.zipCode}` :
@@ -1086,7 +1153,9 @@ export async function searchDirectSources(params: {
     bounded(coverage, "HomePath (Fannie)", () => scrapeHomePath(box!), !box),
     bounded(coverage, "HomeSteps (Freddie)", () => scrapeHomeSteps(box!), !box),
     bounded(coverage, "ArcGIS county records", () => queryArcGISHub(box!, areaLabel), !box),
-    bounded(coverage, "Gov open data", () => fetchOpenDataLeads(box, state, params.leadType)),
+    bounded(coverage, "Gov open data", () => fetchOpenDataLeads(box, state, params.leadType, {
+      place: { city: params.city, zip: params.zipCode },
+    })),
     bounded(coverage, "County Socrata", () => fetchCountyRecords({ countyId: params.countyId, county: countyName, city: params.city, state, zipCode: params.zipCode })),
     bounded(coverage, "Recorder direct", () => fetchRecorderDirect(box)),
     bounded(coverage, "auction.com", () => scrapeAuctionCom(params)),
@@ -1113,6 +1182,42 @@ export async function searchDirectSources(params: {
   if (fcComLeads.length)        sourceCounts["Foreclosure.com"]  = fcComLeads.length
   if (legalNoticeLeads.length)  sourceCounts["Legal notices"]    = legalNoticeLeads.length
 
+  // Label the leads whose location we DO know.
+  //
+  // Most sources here are queried by bounding box, so their results are inside
+  // the searched area by construction — but several publish no city or ZIP
+  // field, and the leads arrived blank. That made a ZIP search return one
+  // result out of hundreds of perfectly good local properties, because there
+  // was nothing to filter on.
+  //
+  // The exception is the handful of datasets that ignore the box entirely and
+  // publish no coordinates; those already carry an explicit warning, and they
+  // are the ones that must NOT be stamped, because for them the location really
+  // is unknown.
+  const UNCONFIRMED = /location not confirmed/i
+  const stamp = (l: FreeLead) => {
+    if ((l.rawSignals ?? []).some(s => UNCONFIRMED.test(s))) return l
+
+    const inferredCity = !l.city && !!params.city
+    const inferredZip = !l.zip && !!params.zipCode
+    // An inferred location must never read like a published one. The lead is
+    // inside the searched box, which is what lets it be labelled at all — but
+    // a box is not a ZIP polygon, so the label says where we searched rather
+    // than claiming the source told us.
+    const note = inferredCity || inferredZip
+      ? [`Location from the search area (within ${box?.radiusMiles ?? "?"} miles of ` +
+         `${params.zipCode ?? params.city ?? "the search centre"}), not published by the source`]
+      : []
+
+    return {
+      ...l,
+      city: l.city || params.city || "",
+      zip: l.zip || params.zipCode || "",
+      state: l.state || state,
+      rawSignals: [...(l.rawSignals ?? []), ...note],
+    }
+  }
+
   // Merge and deduplicate by normalized address+city
   const seen = new Set<string>()
   const leads = [
@@ -1131,8 +1236,9 @@ export async function searchDirectSources(params: {
     ...auctionLeads,
     ...bid4Leads,
     ...fcComLeads,
-  ].filter((l) => {
-    if (!l.address?.trim()) return false
+  ].map(stamp).filter((l) => {
+    if (!looksLikeAddress(l.address)) return false
+    if (params.distressedOnly && !hasDistressSignal(l)) return false
 
     // A lead from another state is not a lead.
     //
@@ -1143,7 +1249,20 @@ export async function searchDirectSources(params: {
     // are kept and carry their own "location not confirmed" warning; a lead that
     // states a DIFFERENT state is simply wrong and is dropped here.
     if (state && l.state && l.state.toUpperCase() !== state.toUpperCase()) return false
-    if (params.confirmedLocationOnly && !l.state) return false
+    if (confirmedOnly && !l.state) return false
+
+    // A ZIP search means that ZIP. Leads carrying a different one are wrong,
+    // and on a ZIP search a lead carrying none is unverifiable — both go.
+    if (params.searchType === "zip" && params.zipCode) {
+      const want = params.zipCode.slice(0, 5)
+      if ((l.zip ?? "").slice(0, 5) !== want) return false
+    }
+
+    // A city search tolerates a blank city only when the coordinates already
+    // placed the lead inside the searched box.
+    if (params.searchType === "city" && params.city && l.city) {
+      if (l.city.toLowerCase().trim() !== params.city.toLowerCase().trim()) return false
+    }
 
     const key = (l.address + l.city).toLowerCase().replace(/[\s,#.-]/g, "")
     if (seen.has(key)) return false

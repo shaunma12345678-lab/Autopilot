@@ -12,6 +12,9 @@ export interface GeoBox {
   radiusMiles: number
 }
 
+// A ZIP is a small place and the search should behave like it.
+export const ZIP_RADIUS_MILES = 3
+
 function expandBox(lat: number, lng: number, radiusMiles: number): GeoBox {
   const latDelta = radiusMiles / 69
   const lngDelta = radiusMiles / (69 * Math.cos((lat * Math.PI) / 180))
@@ -35,7 +38,15 @@ export async function geocodeZip(zip: string): Promise<GeoBox | null> {
     const data = await res.json()
     const place = data.places?.[0]
     if (!place) return null
-    return expandBox(parseFloat(place.latitude), parseFloat(place.longitude), 8)
+    // Three miles, not eight.
+    //
+    // Eight gave a sixteen-mile-square box around the ZIP's centroid, which
+    // covers dozens of neighbouring ZIP codes — so searching 85003 in downtown
+    // Phoenix returned properties eight miles out in other postcodes entirely.
+    // Someone who types a ZIP means that ZIP. A US ZIP is typically one to
+    // three miles across, and three miles covers it plus the streets that back
+    // onto it without wandering into the next town.
+    return expandBox(parseFloat(place.latitude), parseFloat(place.longitude), ZIP_RADIUS_MILES)
   } catch {
     return null
   }
