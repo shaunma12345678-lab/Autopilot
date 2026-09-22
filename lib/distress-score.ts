@@ -145,6 +145,21 @@ export function scoreDistress(detected: DetectedSignal[], now: Date = new Date()
   const live: ScoredSignal[] = []
   const expired: ScoredSignal[] = []
 
+  // ONE EVENT MUST NOT SCORE TWICE.
+  //
+  // A scheduled sheriff sale arrives as foreclosureStage NOTICE_OF_SALE *and*
+  // as the text "Sheriff sale scheduled", so it matched both NOTS (50) and
+  // SHERIFF_SALE (40) and scored 90 — CRITICAL — off a single filing. They are
+  // two names for the same courthouse date, and the same is true of a trustee
+  // sale notice. Within each group only the strongest survives, so stacking
+  // still means independent evidence rather than a lead that was described
+  // twice.
+  const EXCLUSIVE_GROUPS: SignalType[][] = [
+    ["NOTS", "SHERIFF_SALE"],
+    ["TAX_DELINQUENT_4YR", "TAX_DELINQUENT_2YR", "TAX_DEED_SALE"],
+    ["VACANT", "UTILITY_SHUTOFF"],
+  ]
+
   // The same signal from two sources is one piece of evidence, not two. Keeping
   // the freshest instance means corroboration improves the DATE rather than
   // doubling the points — which is what would let one event reported by three
@@ -158,6 +173,14 @@ export function scoreDistress(detected: DetectedSignal[], now: Date = new Date()
     const b = ageInDays(existing.date, now)
     if (b === null && a !== null) best.set(signal.type, signal)
     else if (a !== null && b !== null && a < b) best.set(signal.type, signal)
+  }
+
+  for (const group of EXCLUSIVE_GROUPS) {
+    const present = group.filter(t => best.has(t))
+    if (present.length < 2) continue
+    // Keep whichever carries the most weight; drop the rest.
+    const strongest = present.reduce((a, b) => (SIGNAL_RULES[a].points >= SIGNAL_RULES[b].points ? a : b))
+    for (const t of present) if (t !== strongest) best.delete(t)
   }
 
   for (const signal of best.values()) {
@@ -200,7 +223,12 @@ export function scoreDistress(detected: DetectedSignal[], now: Date = new Date()
     : null
 
   const summary = live.length === 0
-    ? "No live distress signals — nothing here points to a motivated seller."
+    ? expired.length > 0
+      // "No signals" and "signals that have gone stale" are different facts,
+      // and the second is worth knowing: it says this WAS a lead once.
+      ? `No live distress signals — ${expired.length} decayed below the floor ` +
+        `(oldest ${Math.max(...expired.map(e => e.ageDays ?? 0))} days). This was a lead once; it is not now.`
+      : "No live distress signals — nothing here points to a motivated seller."
     : `${score}/100 (${band.tier}) from ${live.length} live signal(s): ` +
       live.slice(0, 4).map(s => `${s.label} ${s.points}`).join(", ") +
       (raw > 100 ? ` — raw total ${Math.round(raw)}, capped at 100.` : ".") +
