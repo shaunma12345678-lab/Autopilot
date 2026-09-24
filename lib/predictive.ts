@@ -16,6 +16,24 @@ export interface Prediction {
   timeframe:   string             // human window
   confidence:  "high" | "medium" | "low"
   factors:     string[]           // explainable drivers (what we detected)
+  /**
+   * The property is advertised for sale right now.
+   *
+   * It matters because the signals that fire hardest here — "price reduced",
+   * "must sell", "as-is", "cash only" — only EXIST in a listing description, so
+   * an actively marketed house scores as motivated while an identical
+   * off-market one scores nothing. That is the right read for a motivated-seller
+   * hunt and the wrong one for finding owners nobody else has reached, which is
+   * the harder and more valuable half of this business. Surfaced so a caller can
+   * choose; not subtracted, because a listed house can still be a deal.
+   */
+  onMarket:    boolean
+  /**
+   * Age of the newest dated signal, in days, or null when nothing is dated.
+   * A four-year-old code violation and one filed last week are not the same
+   * evidence, and without this they scored identically.
+   */
+  signalAgeDays: number | null
 }
 
 // Is this property already in the foreclosure pipeline (pre-foreclosure through
@@ -39,8 +57,14 @@ export function isConfirmedForeclosure(lead: ForeclosureLead): boolean {
 // Weighted early-warning signals. Tuned so 3 independent signals ⇒ high
 // probability, and interactions (e.g. vacant + tax delinquent) compound.
 export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
+  const onMarket = isOnMarket(lead)
+  const signalAgeDays = newestSignalAgeDays(lead)
+
   if (isConfirmedForeclosure(lead)) {
-    return { predicted: false, confirmed: true, probability: 100, timeframe: "in foreclosure now", confidence: "high", factors: [] }
+    return {
+      predicted: false, confirmed: true, probability: 100, timeframe: "in foreclosure now",
+      confidence: "high", factors: [], onMarket, signalAgeDays,
+    }
   }
 
   const text = [lead.distressSignals?.join(" "), lead.scoreReason, lead.foreclosureType, lead.ownerName].filter(Boolean).join(" ").toLowerCase()
@@ -98,5 +122,40 @@ export function predictPreForeclosure(lead: ForeclosureLead): Prediction {
   const timeframe = probability >= 60 ? "~1–3 months" : probability >= 38 ? "~3–6 months" : "~6–12 months"
   const confidence = factors.length >= 3 ? "high" : factors.length === 2 ? "medium" : "low"
 
-  return { predicted: factors.length > 0, confirmed: false, probability, timeframe, confidence, factors }
+  return { predicted: factors.length > 0, confirmed: false, probability, timeframe, confidence, factors, onMarket, signalAgeDays }
+}
+
+/** Advertised for sale right now — listed, priced, and already being shopped. */
+export function isOnMarket(lead: ForeclosureLead): boolean {
+  const l = lead as unknown as Record<string, unknown>
+  if (typeof l.daysOnMarket === "number" && l.daysOnMarket >= 0) return true
+  if (typeof l.listPrice === "number" && l.listPrice > 0) return true
+  const text = [lead.distressSignals?.join(" "), lead.scoreReason, lead.foreclosureType]
+    .filter(Boolean).join(" ").toLowerCase()
+  // An expired listing is explicitly NOT on the market — it is the opposite,
+  // and it is one of the better signals there is.
+  if (/expired listing|listing expired/.test(text)) return false
+  return /active listing|for sale|mls|listed at|list price|days on market/.test(text)
+}
+
+/**
+ * Days since the freshest dated evidence, or null when nothing carries a date.
+ *
+ * Pulled out rather than folded into the probability: this engine has no decay
+ * at all, so a filing from 2021 and one from last week produce the same
+ * forecast. Exposing the age lets a caller sort and filter on it now, and is
+ * the measurement any future decay would be built on.
+ */
+export function newestSignalAgeDays(lead: ForeclosureLead, now: Date = new Date()): number | null {
+  const l = lead as unknown as Record<string, unknown>
+  const candidates = [l.recordingDate, l.auctionDate, l.filingDate, l.lastSeenAt]
+  let newest: number | null = null
+  for (const c of candidates) {
+    if (typeof c !== "string" && !(c instanceof Date)) continue
+    const t = c instanceof Date ? c.getTime() : Date.parse(c)
+    if (!Number.isFinite(t)) continue
+    if (newest === null || t > newest) newest = t
+  }
+  if (newest === null) return null
+  return Math.max(0, Math.round((now.getTime() - newest) / 86_400_000))
 }

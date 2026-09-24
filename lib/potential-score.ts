@@ -31,6 +31,10 @@ export interface Potential {
   version: string
   tier: "prime" | "strong" | "watch" | "pass"
   parts: PotentialPart[]
+  /** How much of the 100-point model could be measured at all. */
+  completeness: number
+  /** What it would score if the missing context were filled in. */
+  potentialIfEnriched: number
 }
 
 export interface PotentialContext {
@@ -96,11 +100,33 @@ export function potentialScore(lead: ForeclosureLead, ctx?: PotentialContext): P
   add("competition", "Low competition", comp.earlyScore, 10,
     comp.reasons[0] ?? (opp.offMarket ? "Off-market — few investors have seen it" : "Marketed — expect other offers"))
 
-  // Composite over the parts we actually have (missing context renormalizes).
+  // MISSING CONTEXT IS NOT NEUTRAL, AND IT USED TO BE REWARDED.
+  //
+  // This divided by the weight of the parts it happened to have. Distress (30),
+  // deal (25) and competition (10) are always present; market tailwind (15),
+  // ZIP density (10) and exit liquidity (10) need enrichment. So an un-enriched
+  // lead divided by 65 and had the result scaled up to 100 — thirty-five points
+  // of the model silently vanished and the rest was inflated to cover the gap.
+  //
+  // The consequence was backwards: enriching a lead can only ever ADD parts,
+  // and a part scoring below the existing average drags the renormalised number
+  // DOWN. So the leads we knew least about floated to the top of the ranking,
+  // and doing the work to understand one was punished.
+  //
+  // The score is now out of the full 100. A missing part contributes zero and
+  // the weight is NOT redistributed, exactly as the market rubric does it.
+  // `potentialIfEnriched` keeps the old figure, which is the genuinely useful
+  // version of it: what this lead could reach once the missing context is
+  // filled in — so the value of enriching is visible rather than assumed.
   const totalW = parts.reduce((s, p) => s + p.weight, 0)
-  const score = totalW > 0 ? clamp(parts.reduce((s, p) => s + p.score * p.weight, 0) / totalW) : 0
+  const earned = parts.reduce((s, p) => s + p.score * p.weight, 0)
+
+  const score = clamp(earned / 100)
+  const potentialIfEnriched = totalW > 0 ? clamp(earned / totalW) : 0
+  const completeness = Math.round(totalW)
+
   const tier: Potential["tier"] = score >= 75 ? "prime" : score >= 58 ? "strong" : score >= 40 ? "watch" : "pass"
-  return { score, version: POTENTIAL_VERSION, tier, parts }
+  return { score, version: POTENTIAL_VERSION, tier, parts, completeness, potentialIfEnriched }
 }
 
 // ZIP distress density (0-100) for each ZIP within one result set — pure helper
